@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<job nProcesses="400">
+
+    <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
+
+    <command>
+
+        stardev
+
+        ln -s starsim_herwig6_filter.C starsim.C
+
+        #--------------------------------------------
+        # Random seed
+        #--------------------------------------------
+        set seed_temp=`od -vAn -N4 -tu4 &lt; /dev/urandom`
+        set myseed=`expr ${seed_temp} % 100000`
+
+        #--------------------------------------------
+        # pTHatMin scan -- herwig6, unmodified Herwig 6 defaults
+        # 40 jobs for each of 10 pT values (400 total, 500 events/job = 200k events)
+        #--------------------------------------------
+        set ptlist = (62 64 66 68 70 72 74 76 78 80)
+
+        @ pt_group = ${JOBINDEX} / 40
+        @ run_number = ${JOBINDEX} % 40
+        @ list_index = ${pt_group} + 1
+
+        set ptcut = ${ptlist[$list_index]}
+
+        echo "========================================"
+        echo "Tune        = herwig6_default"
+        echo "JOBINDEX    = ${JOBINDEX}"
+        echo "Run number  = ${run_number}"
+        echo "Random seed = ${myseed}"
+        echo "ptHatMin    = ${ptcut} GeV"
+        echo "========================================"
+
+        mkdir -p /star/data01/pwg/seanp/tunes/herwig6_default
+
+        echo "Starting detector simulation..."
+
+        root4star -q -b starsim.C\(500,${myseed},${ptcut}\)
+
+        echo "Finished detector simulation."
+        echo ""
+        echo "Starting reconstruction..."
+
+        root4star -b -q 'runSimBfc.C(500,1,"herwig6")'
+        root4star -b -q 'readMudst.C(0,1,"herwig6.MuDst.root")'
+
+        echo "Finished reconstruction."
+
+        mv SimpleTree_mudst.root /star/data01/pwg/seanp/tunes/herwig6_default/SimpleTree_pt${ptcut}_${run_number}.root
+
+    </command>
+
+    <SandBox installer="ZIP">
+        <Package>
+            <File>file:./starsim_herwig6_filter.C</File>
+            <File>file:./runSimBfc.C</File>
+            <File>file:./readMudst.C</File>
+            <File>file:./.sl73_x8664_gcc485</File>
+        </Package>
+    </SandBox>
+
+    <stdout URL="file:./log/$JOBID.out"/>
+    <stderr URL="file:./log/$JOBID.err"/>
+
+</job>

@@ -1,0 +1,17 @@
+# Which HCAL retroactive-gain-correction file covers which real-event
+# date range. Read top to bottom at runtime; the first matching row wins.
+#
+# Columns: startDate endDate filename
+#   startDate/endDate: YYYYMMDD, startDate inclusive / endDate exclusive
+#   (same [begin,end) convention St_db_Maker/StDbLib uses elsewhere in
+#   this project). filename is relative to this folder.
+#
+# Currently a single placeholder period spanning all of Run 22 with a
+# deliberately generous margin (the real data-taking window is ~2021-12-21
+# through ~2022-04-18, see GeometryPlayground/README.md and
+# SpinPlayground/README.md) -- harmless to over-cover since every factor
+# in the placeholder file is 1.0 (a no-op). Once real per-tower HCAL gain
+# corrections are measured for specific sub-periods, replace this single
+# row with multiple narrower ones, each pointing at its own real
+# correction-factor file (see this folder's README.md).
+20211201 20220701 hcal_gain_corr_run22_placeholder.txt

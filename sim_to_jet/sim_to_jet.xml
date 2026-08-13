@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+    Sim-to-jet pipeline: starsim -> BFC/MuDst reconstruction -> jet
+    finding, all in one SUMS job, on a single generated SimpleTree file
+    (a single job, not a batch campaign). Jet energy scale calibration
+    is deliberately out of scope here; this only produces uncalibrated
+    jet_output_*.root files (reco_pt/eta/phi/E, truth_*, x_F, side, etc, same schema
+    JetMatcher.cpp always produces).
+
+    Configurable per submission:
+      {{GENERATOR}}       "pythia8" or "pythia6"
+      {{TUNE_PARAM}}       pythia8: PDF:pSet integer (8=CTEQ6L1, 5=MSTW2008LO,
+                            3=MRST LO*, 21=NNPDF3.1sx+LHCb NLO+NLLx LUXQED,
+                            <=0 = Pythia8 default PDF).
+                            pythia6: PyTune integer (325=Perugia STAR; 0 =
+                            skip PyTune, use Pythia6 defaults).
+      PTCUT_BLOCK           either a flat "set ptcut = N" line (submit_sim_to_jet.sh's
+                            -p flag), or, if -w and a json file are given
+                            instead, a per-job scaled_index/threshold
+                            chain generated from that JSON's relative
+                            ptHatMin proportions,
+                            same technique as the round-based scale
+                            campaign's *_optimized_round_template.xml
+                            (see sim_to_jet/pthat_distribution_optimized.json
+                            for the format and the table currently in use
+                            campaign-wide).
+      {{NEVENTS}}           events to generate per job.
+      {{SAVE_SIMPLETREE}}   1 = keep the intermediate SimpleTree_*.root
+                            (reco-only flat ntuple, pre-jet-finding),
+                            0 = discard it after jet finding runs.
+      {{TRIGGER_FILTER}}    comma-separated FCS trigger flag names (see
+                            FcsTriggerDefs.h); an event only gets a
+                            jetTree entry if at least one of them fired.
+                            Empty = keep every event (default, unchanged
+                            behavior). The SimpleTree itself is never
+                            filtered, only jetTree entries are skipped.
+                            Simulated events have no real trigger
+                            decision, so readMudst.C computes these
+                            flags itself with fcs_trg_base (the same
+                            engine data_to_jet's runMudst.C would read a
+                            real decision from); see
+                            StSimpleReaderMaker::SetTriggerSim().
+      {{CALIB_RUN}}         a real Run 22 run number (e.g. 23101043) whose
+                            FCS gain/gainCorrection calibration era should
+                            be used for the simulated detector response,
+                            instead of BFC's own nominal "y2023" chain-flag
+                            date. 0 (default) = don't override. See
+                            RunNumberToDate() in runSimBfc.C for the run
+                            number -> calendar date conversion (verified
+                            empirically; the run number's year code is
+                            NOT the real calendar year).
+      {{OUTDIR}}            absolute output directory (created if missing).
+      {{STDOUT_URL}}        where SUMS copies each job's captured stdout.
+      {{STDERR_URL}}        where SUMS copies each job's captured stderr.
+                            submit_sim_to_jet.sh's -k flag controls both
+                            (0 = discard to /dev/null, default; 1 = save
+                            under {{OUTDIR}}/log/, auto-created).
+
+    To generate and submit a concrete job, use submit_sim_to_jet.sh (see
+    its -h for usage), which fills in every {{PLACEHOLDER}} above,
+    including the PTCUT_BLOCK csh snippet (either a flat "set ptcut = N"
+    line from -p, or one generated from a JSON proportion table via -w;
+    that substitution is multi-line, so it's done in python rather than
+    sed), then calls star-submit from the pipeline root (one level up
+    from sim_to_jet/), required since the SandBox <File> paths below
+    are relative to that directory (SUMS packages each <File> preserving
+    that relative path, e.g. sim_to_jet/runSimBfc.C (confirmed directly
+    from a real job's .package.zip); an absolute path would repackage
+    everything under the wrong subpath and break the `cp sim_to_jet/* .`
+    step below. The sched*/*.package/*.csh/*.list/*.condor files
+    star-submit drops in the pipeline root are swept into ../submit/ (a
+    dedicated folder) right after submission instead.
+
+    nProcesses defaults to 1 (one job = one file all the way through the
+    chain). Raise nProcesses in the generated XML for N parallel,
+    independent jobs; each JOBINDEX gets its own random seed and its own
+    output filename (run_number=JOBINDEX), so they never collide.
+
+    ../shared/JetParameters.h is shared with data_to_jet/data_to_jet.xml
+    (the production-data companion pipeline); editing it changes the
+    physics constants/cuts used by both.
+
+    ../StRoot/ contains the actual source for the two makers this pipeline
+    locally compiles against (StSimpleReaderMaker, StSimpleTreeMaker;
+    everything else readMudst.C/runSimBfc.C load, e.g. StFcsDbMaker,
+    StFcsFastSimulatorMaker, FcsJetFilter, comes from the standard STAR
+    framework distribution via stardev, not a local checkout, so it isn't
+    duplicated here). ../.sl73_x8664_gcc485/ is the already-built binary
+    cache for that same StRoot/ source, shipped alongside it so jobs run
+    at full speed rather than rebuilding from source every time; if
+    StRoot/ is ever edited, rebuild that cache (cons or stardev's normal
+    build flow) before resubmitting.
+-->
+
+<job nProcesses="1">
+
+    <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
+
+    <command>
+
+        stardev
+
+        #--------------------------------------------
+        # SUMS preserves the sim_to_jet/ subfolder when packaging the
+        # SandBox, but everything below expects it flat in the job's
+        # working directory (StRoot/ and .sl73_x8664_gcc485/ are left
+        # alone -- the STAR build system expects those names/locations
+        # as-is).
+        #--------------------------------------------
+        cp sim_to_jet/* .
+        cp shared/* .
+
+        if ( "{{GENERATOR}}" == "pythia8" ) then
+            ln -sf starsim_pythia8_filter.C starsim.C
+            set pid = "pythia8"
+        else
+            ln -sf starsim_pythia6_filter.C starsim.C
+            set pid = "pythia6"
+        endif
+
+        #--------------------------------------------
+        # Random seed
+        #--------------------------------------------
+        set seed_temp=`od -vAn -N4 -tu4 &lt; /dev/urandom`
+        set myseed=`expr ${seed_temp} % 100000`
+        set run_number = ${JOBINDEX}
+
+        #--------------------------------------------
+        # ptHatMin for this job: either a flat value, or one drawn from a
+        # JSON-defined relative-proportion table (see header comment).
+        #--------------------------------------------
+{{PTCUT_BLOCK}}
+
+        echo "========================================"
+        echo "Generator      = {{GENERATOR}} (tune/PDF param={{TUNE_PARAM}})"
+        echo "ptHatMin       = ${ptcut} GeV"
+        echo "nevents        = {{NEVENTS}}"
+        echo "Save SimpleTree = {{SAVE_SIMPLETREE}}"
+        echo "JOBINDEX       = ${JOBINDEX}"
+        echo "Random seed    = ${myseed}"
+        echo "========================================"
+
+        mkdir -p {{OUTDIR}}
+
+        echo "Starting detector simulation..."
+
+        root4star -q -b starsim.C\({{NEVENTS}},${myseed},${ptcut},{{TUNE_PARAM}}\)
+
+        echo "Finished detector simulation."
+        echo ""
+        echo "Starting reconstruction..."
+
+        # Full positional argument list (not just the first 3) so
+        # {{CALIB_RUN}}, the last parameter, can be set -- CINT can't skip
+        # over earlier positional args, so the rest are runSimBfc.C's own
+        # documented defaults (202207,0,0,1.5,0.0,"0.0100",0,0) plus its
+        # global default TStrings (input_dir,output_dir,input_chain).
+        root4star -b -q runSimBfc.C\({{NEVENTS}},1,\"${pid}\",202207,0,0,1.5,0.0,\"0.0100\",0,0,input_dir,output_dir,input_chain,0,{{CALIB_RUN}}\)
+        root4star -b -q readMudst.C\(0,1,\"${pid}.MuDst.root\"\)
+
+        echo "Finished reconstruction."
+
+        #--------------------------------------------
+        # Jet finding on this single SimpleTree file (JetMatcher takes a
+        # list-file argument, so we write a one-line list rather than
+        # modify JetMatcher.cpp -- functionally it's a single file in,
+        # single file out).
+        #--------------------------------------------
+
+        module purge
+        module load fastjet-3.3.4
+        module load root-5.34.38
+
+        echo "Compiling JetMatcher..."
+        g++ -m64 JetMatcher.cpp VectorDict.cxx -o JetMatcher \
+            `root-config --cflags --libs` -lEG \
+            `fastjet-config --cxxflags --libs` -std=c++11
+
+        set TRIGGER_FILTER = "{{TRIGGER_FILTER}}"
+
+        echo "SimpleTree_mudst.root" > single_file.list
+
+        ./JetMatcher single_file.list "${TRIGGER_FILTER}"
+        mv jet_output.root jet_output_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
+
+        #--------------------------------------------
+        # Keep or discard the intermediate SimpleTree
+        #--------------------------------------------
+        if ( {{SAVE_SIMPLETREE}} == 1 ) then
+            mv SimpleTree_mudst.root SimpleTree_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
+        else
+            rm -f SimpleTree_mudst.root
+        endif
+
+        # Temporary, job-local only; never meant to leave scratch.
+        rm -f single_file.list
+
+        echo "Files in scratch:"
+        ls -l
+
+    </command>
+
+    <SandBox installer="ZIP">
+        <Package>
+            <File>file:./sim_to_jet/starsim_pythia8_filter.C</File>
+            <File>file:./sim_to_jet/starsim_pythia6_filter.C</File>
+            <File>file:./sim_to_jet/runSimBfc.C</File>
+            <File>file:./sim_to_jet/readMudst.C</File>
+            <File>file:./sim_to_jet/JetMatcher.cpp</File>
+            <File>file:./sim_to_jet/FcsTriggerDefs.h</File>
+            <File>file:./sim_to_jet/stage_params.txt</File>
+            <File>file:./shared/VectorDict.cxx</File>
+            <File>file:./shared/VectorDict.h</File>
+            <File>file:./shared/VectorDictClass.h</File>
+            <File>file:./shared/VectorDictLinkDef.h</File>
+            <File>file:./.sl73_x8664_gcc485</File>
+            <File>file:./StRoot</File>
+            <File>file:./shared/JetParameters.h</File>
+        </Package>
+    </SandBox>
+
+    <stdout URL="{{STDOUT_URL}}"/>
+    <stderr URL="{{STDERR_URL}}"/>
+
+    <output fromScratch="jet_output_*.root" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="SimpleTree_*.root" toURL="file:{{OUTDIR}}/" />
+
+</job>

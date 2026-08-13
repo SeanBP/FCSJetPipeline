@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+    PicoDst analysis utility: reads a list of PicoDst files (Run 22 pp500
+    forward tracking production is primarily distributed in this format)
+    and runs one of two diagnostic macros over the whole list as a single
+    job. This is NOT part of the sim_to_jet/data_to_jet jet-finding chain;
+    neither mode produces a JetMatcher/RecoJets-compatible SimpleTree,
+    so its output cannot feed jet_scale or jet_calibration. It's included
+    here as a ready-to-run utility for future PicoDst-based analyses, kept
+    alongside the jet pipelines rather than folded into them.
+
+    Configurable per submission:
+      {{MODE}}       "mip" or "hits".
+                     mip  -> mip_ana.C: projects tracks onto the FCS
+                             ECal/HCal to search for minimum-ionizing-
+                             particle peaks, writes diagnostic plots to
+                             mip_ana.pdf.
+                     hits -> pico_to_root.C: flattens every event's FCS
+                             hits (energy, position, detector ID) plus
+                             vertex position into a simple TTree,
+                             pico_output.root. Hit-level only, no
+                             clustering, no jets.
+      {{LISTFILE}}   absolute path to a text file listing PicoDst files
+                     (one per line), e.g.:
+                       ls -1 /gpfs01/star/pwg_tasks/FwdCalib/PROD/forwardCrossSection_2022/27082025/*.root > mylist.list
+      {{OUTDIR}}     absolute output directory (created if missing).
+      {{STDOUT_URL}} where SUMS copies the job's captured stdout.
+      {{STDERR_URL}} where SUMS copies the job's captured stderr.
+                     submit_pico_analysis.sh's -k flag controls both
+                     (0 = discard to /dev/null, default; 1 = save under
+                     {{OUTDIR}}/log/, auto-created).
+
+    To generate and submit, use submit_pico_analysis.sh (see its -h),
+    which wraps the sed substitution + star-submit shown below. The
+    SandBox <File> paths below are relative to the pipeline root (SUMS
+    packages each <File> preserving that relative path, confirmed
+    directly from a real job's .package.zip), so star-submit MUST run
+    from there, not from a dedicated submit folder.
+    submit_pico_analysis.sh sweeps the sched*/*.package/*.csh/*.list/
+    *.condor files star-submit generates into ../submit/ (a dedicated
+    folder) right after submission instead:
+
+        cd ..   # pipeline root, if not already there
+        sed -e 's/{{MODE}}/mip/g' \
+            -e 's#{{LISTFILE}}#/path/to/mylist.list#g' \
+            -e 's#{{OUTDIR}}#/path/to/output#g' \
+            pico_analysis/pico_analysis.xml > pico_analysis/pico_analysis_myrun.xml
+        star-submit pico_analysis/pico_analysis_myrun.xml
+        mkdir -p submit && mv sched* submit/ 2>/dev/null
+
+    Always a single job (nProcesses=1): both macros process their entire
+    input list as one aggregate analysis (mip_ana.C in particular writes
+    one combined PDF, not a per-file one), so there is no -j here.
+
+    No local compilation needed; the stardev environment already
+    includes the PicoDst/Forward-detector classes these macros use, and
+    root4star's ACLiC ("+") compiles each macro inline at runtime.
+-->
+
+<job nProcesses="1">
+
+    <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
+
+    <command>
+
+        stardev
+
+        #--------------------------------------------
+        # SUMS preserves the pico_analysis/ subfolder when packaging the
+        # SandBox; both macros expect to be run flat in the job's working
+        # directory.
+        #--------------------------------------------
+        cp pico_analysis/* .
+
+        echo "========================================"
+        echo "Mode     = {{MODE}}"
+        echo "Listfile = {{LISTFILE}}"
+        echo "========================================"
+
+        if ( "{{MODE}}" == "mip" ) then
+            mkdir -p plots
+            echo "Running MIP peak analysis..."
+            root4star -l -b -q 'mip_ana.C+("{{LISTFILE}}")'
+            mv plots/mip_ana.pdf mip_ana.pdf
+        else
+            echo "Running PicoDst hit-level flat-tree conversion..."
+            root4star -l -b -q 'pico_to_root.C+("{{LISTFILE}}","pico_output.root")'
+        endif
+
+        echo "Files in scratch:"
+        ls -l
+
+    </command>
+
+    <SandBox installer="ZIP">
+        <Package>
+            <File>file:./pico_analysis/mip_ana.C</File>
+            <File>file:./pico_analysis/pico_to_root.C</File>
+        </Package>
+    </SandBox>
+
+    <stdout URL="{{STDOUT_URL}}"/>
+    <stderr URL="{{STDERR_URL}}"/>
+
+    <output fromScratch="mip_ana.pdf" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="pico_output.root" toURL="file:{{OUTDIR}}/" />
+
+</job>

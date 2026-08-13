@@ -1,0 +1,273 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+    Data-to-jet pipeline: MuDst -> SimpleTree (runMudst.C, reco-only; the
+    MuDst already went through official offline production, so this does
+    not rerun BFC/clustering, just reads it) -> jet finding, for real
+    STAR MuDst files. No intermediate multi-file list-building step (like
+    the old make_prod_lists.sh) is needed: every line of the raw file list
+    produced by MakeRunList.pl is split evenly across {{NPROCESSES}} jobs
+    (contiguous, non-overlapping ranges). A job handling several files
+    still runs RecoJets once per SimpleTree file rather than combining
+    them, so every jet_output file keeps a matching SimpleTree_mudst file
+    with the same run/segment filename suffix, and the two can be linked
+    back together to look up the same event later.
+
+    Companion to ../sim_to_jet/sim_to_jet.xml; both compile against the
+    same shared ../shared/JetParameters.h, so editing that one file
+    updates the physics constants/cuts used by simulation and production
+    jet-finding together.
+
+    Configurable per submission:
+      {{LISTFILE}}       absolute path to a file catalog list (one file
+                          per line, in the "path,filename,events" format
+                          MakeRunList.pl writes: an xrootd URL or local
+                          path, with the event count appended as a
+                          trailing event-count number).
+      {{NPROCESSES}}      number of parallel jobs to evenly split the
+                          list's lines across.
+      {{SAVE_SIMPLETREE}} 1 = keep every intermediate SimpleTree_mudst_*.root,
+                          0 = discard them after jet finding runs.
+      {{TRIGGER_FILTER}}  comma-separated FCS trigger flag names (see
+                          FcsTriggerDefs.h); an event only gets a
+                          jetTree entry if at least one of them fired.
+                          Empty = keep every event (default, unchanged
+                          behavior). The SimpleTree itself is never
+                          filtered, only jetTree entries are skipped.
+      {{OUTDIR}}          absolute output directory (created if missing).
+      {{STDOUT_URL}}      where SUMS copies each job's captured stdout.
+      {{STDERR_URL}}      where SUMS copies each job's captured stderr.
+                          submit_data_to_jet.sh's -k flag controls both
+                          (0 = discard to /dev/null, default; 1 = save
+                          under {{OUTDIR}}/log/, auto-created).
+
+    To generate and submit, use submit_data_to_jet.sh (see its -h), which
+    wraps the sed substitution + star-submit shown below. The SandBox
+    <File> paths below are relative to the pipeline root, so star-submit
+    must actually run from there (SUMS packages each <File> preserving
+    that relative path, e.g. data_to_jet/runMudst.C (confirmed directly
+    from a real job's .package.zip; an absolute path would repackage
+    everything under the wrong subpath and break the `cp data_to_jet/* .`
+    step below). submit_data_to_jet.sh runs star-submit from the pipeline
+    root as required, then immediately moves the sched*/*.package/*.csh/
+    *.list/*.condor files it generates into ../submit/ (a dedicated
+    scratch folder) so they don't clutter the pipeline root:
+
+        cd ..   # pipeline root, if not already there
+        sed -e 's#{{LISTFILE}}#/path/to/my.list#g' \
+            -e 's/{{NPROCESSES}}/50/g' \
+            -e 's/{{SAVE_SIMPLETREE}}/0/g' \
+            -e 's#{{OUTDIR}}#/path/to/output#g' \
+            data_to_jet/data_to_jet.xml > data_to_jet/data_to_jet_myrun.xml
+        star-submit data_to_jet/data_to_jet_myrun.xml
+        mkdir -p submit && mv sched* submit/ 2>/dev/null
+
+    Runs inside the same singularity container as sim_to_jet.xml;
+    root4star only reliably resolves that way under SUMS in this setup
+    (confirmed empirically; the original prodjets.xml/RunMuDst.csh this
+    was ported from never actually called root4star without one, since
+    RecoJets is a standalone compiled binary, so their lack of a shell
+    wrapper was never actually validated for this step).
+-->
+
+<job nProcesses="{{NPROCESSES}}">
+
+    <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
+
+    <command>
+
+        stardev
+
+        #--------------------------------------------
+        # SUMS preserves the data_to_jet/ subfolder when packaging the
+        # SandBox; runMudst.C and RecoJets expect their dependencies flat
+        # in the job's working directory.
+        #--------------------------------------------
+        cp data_to_jet/* .
+        cp shared/* .
+        # cp (not -r above) skips subdirectories -- hcal_gain_corrections/
+        # needs its own recursive copy so it lands flat as ./hcal_gain_corrections/,
+        # the same relative path runMudst.C's SetHcalRetroactiveGainCorr()
+        # call uses (also matches running runMudst.C by hand from within
+        # data_to_jet/, where the folder is already a flat sibling).
+        cp -r data_to_jet/hcal_gain_corrections .
+
+        #--------------------------------------------
+        # Evenly split every line of {{LISTFILE}} across NPROCESSES jobs:
+        # contiguous, non-overlapping ranges (first "remainder" jobs get
+        # one extra line).
+        #--------------------------------------------
+        set NTOTAL = `wc -l &lt; {{LISTFILE}}`
+        set NJOBS = {{NPROCESSES}}
+
+        @ base = ${NTOTAL} / ${NJOBS}
+        @ rem = ${NTOTAL} % ${NJOBS}
+
+        if ( ${JOBINDEX} &lt; ${rem} ) then
+            @ mycount = ${base} + 1
+            @ mystart = ${JOBINDEX} * ${mycount}
+        else
+            @ mycount = ${base}
+            @ mystart = ( ${rem} * ( ${base} + 1 ) ) + ( ( ${JOBINDEX} - ${rem} ) * ${base} )
+        endif
+
+        @ line_start = ${mystart} + 1
+        @ line_end = ${mystart} + ${mycount}
+
+        echo "========================================"
+        echo "JOBINDEX = ${JOBINDEX}"
+        echo "Total files = ${NTOTAL}, total jobs = ${NJOBS}"
+        echo "This job's files: lines ${line_start}-${line_end} (${mycount} files)"
+        echo "========================================"
+
+        if ( ${mycount} == 0 ) then
+            echo "No files assigned to this job (nProcesses exceeds file count); nothing to do."
+            exit 0
+        endif
+
+        sed -n "${line_start},${line_end}p" {{LISTFILE}} > my_lines.list
+
+        #--------------------------------------------
+        # Fetch and convert every assigned file: xrdcp if it's an xrootd
+        # URL (matches RunMuDst.csh's detection), plain cp otherwise.
+        # MakeRunList.pl's default keys are path,filename,events; each
+        # line is a file URL/path with the event count appended as a
+        # trailing number, so strip that last path component to recover
+        # the real file location.
+        #--------------------------------------------
+        set xrdname = "root://xrdstar.rcf.bnl.gov:1095"
+        set xrdnchar = `echo $xrdname | awk '{print length($0)}'`
+
+        rm -f simpletree_files.list
+        touch simpletree_files.list
+
+        set i = 1
+        while ( ${i} &lt;= ${mycount} )
+            set RAWLINE = `sed -n "${i}p" my_lines.list`
+            set FILEURL = `echo ${RAWLINE} | rev | cut -d'/' -f2- | rev`
+            set LOCALFILE = `basename ${FILEURL}`
+
+            echo "----------------------------------------"
+            echo "File ${i}/${mycount}: ${FILEURL}"
+            echo "----------------------------------------"
+
+            set urlprefix = `echo ${FILEURL} | awk -v l="$xrdnchar" '{print substr($0,0,l)}'`
+
+            if ( "$xrdname" == "$urlprefix" ) then
+                xrdcp --retry 3 ${FILEURL} ${LOCALFILE}
+            else
+                cp ${FILEURL} ${LOCALFILE}
+            endif
+
+            if ( ! -f ${LOCALFILE} ) then
+                echo "ERROR: could not obtain input file ${FILEURL}, skipping"
+                @ i++
+                continue
+            endif
+            if ( -z ${LOCALFILE} ) then
+                echo "ERROR: input file ${LOCALFILE} has zero size, skipping"
+                rm -f ${LOCALFILE}
+                @ i++
+                continue
+            endif
+
+            echo "Running runMudst.C..."
+            root4star -b -q runMudst.C\(\"${LOCALFILE}\",-1,-2,\".\",1,0\)
+
+            rm -f ${LOCALFILE}
+
+            set SIMPLETREE = `ls -t SimpleTree_mudst_*.root | head -1`
+            if ( "${SIMPLETREE}" == "" ) then
+                echo "ERROR: runMudst.C produced no output for ${FILEURL}, skipping"
+                @ i++
+                continue
+            endif
+            echo "Produced: ${SIMPLETREE}"
+            echo "${SIMPLETREE}" >> simpletree_files.list
+
+            @ i++
+        end
+
+        set NPRODUCED = `wc -l &lt; simpletree_files.list`
+        echo "Produced ${NPRODUCED}/${mycount} SimpleTree files for this job"
+
+        if ( ${NPRODUCED} == 0 ) then
+            echo "ERROR: no SimpleTree files produced; nothing to jet-find"
+            exit 1
+        endif
+
+        #--------------------------------------------
+        # Jet finding, one RecoJets call per SimpleTree file (not a single
+        # combined multi-file call): each jet_output file is named with
+        # the same run/segment suffix as the SimpleTree file it came from,
+        # so the two can be linked back together later to look at the
+        # same events in both.
+        #--------------------------------------------
+
+        module purge
+        module load fastjet-3.3.4
+        module load root-5.34.38
+
+        echo "Compiling RecoJets..."
+        g++ -m64 RecoJets.cpp VectorDict.cxx -o RecoJets \
+            `root-config --cflags --libs` \
+            `fastjet-config --cxxflags --libs` -std=c++11
+
+        set TRIGGER_FILTER = "{{TRIGGER_FILTER}}"
+
+        set j = 1
+        while ( ${j} &lt;= ${NPRODUCED} )
+            set STFILE = `sed -n "${j}p" simpletree_files.list`
+            set SUFFIX = `echo ${STFILE} | sed -e 's/^SimpleTree_mudst_//' -e 's/\.root$//'`
+
+            echo "----------------------------------------"
+            echo "Jet finding ${j}/${NPRODUCED}: ${STFILE} -> jet_output_${SUFFIX}.root"
+            echo "----------------------------------------"
+
+            echo "${STFILE}" > single_file.list
+            ./RecoJets single_file.list "${TRIGGER_FILTER}"
+            mv jet_output.root jet_output_${SUFFIX}.root
+
+            @ j++
+        end
+
+        #--------------------------------------------
+        # Keep or discard the intermediate SimpleTree files
+        #--------------------------------------------
+        if ( {{SAVE_SIMPLETREE}} == 0 ) then
+            foreach f ( `cat simpletree_files.list` )
+                rm -f ${f}
+            end
+        endif
+
+        # Temporary, job-local only; never meant to leave scratch.
+        rm -f my_lines.list simpletree_files.list single_file.list
+
+        echo "Files in scratch:"
+        ls -l
+
+    </command>
+
+    <SandBox installer="ZIP">
+        <Package>
+            <File>file:./data_to_jet/runMudst.C</File>
+            <File>file:./data_to_jet/RecoJets.cpp</File>
+            <File>file:./data_to_jet/FcsTriggerDefs.h</File>
+            <File>file:./data_to_jet/hcal_gain_corrections</File>
+            <File>file:./shared/VectorDict.cxx</File>
+            <File>file:./shared/VectorDict.h</File>
+            <File>file:./shared/VectorDictClass.h</File>
+            <File>file:./shared/VectorDictLinkDef.h</File>
+            <File>file:./.sl73_x8664_gcc485</File>
+            <File>file:./StRoot</File>
+            <File>file:./shared/JetParameters.h</File>
+        </Package>
+    </SandBox>
+
+    <stdout URL="{{STDOUT_URL}}"/>
+    <stderr URL="{{STDERR_URL}}"/>
+
+    <output fromScratch="jet_output_*.root" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="SimpleTree_mudst_*.root" toURL="file:{{OUTDIR}}/" />
+
+</job>

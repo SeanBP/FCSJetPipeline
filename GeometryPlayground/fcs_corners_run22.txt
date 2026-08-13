@@ -1,0 +1,31 @@
+# FCS detector corner positions (StarXYZ, cm) for the geometry Run 22 mostly
+# covers: the real, final survey-based detector position, constant from
+# 2021-12-21 (when the survey was finalized in the DB, see
+# show_detector_offset_symmetry.C / README.md) through essentially the rest
+# of Run 22 (checked through the y2023 nominal BFC date -- no change found).
+#
+# Produced via: get_fcs_geometry.C(22359013) -- run 22359013 (2021-12-25) is
+# an arbitrary representative run inside that stable window, not special
+# in any other way. Regenerate with a different run number via
+# run_number_to_fiducial.sh <run> or get_fcs_geometry.C(<run>) directly if
+# you have reason to think the geometry changed for some later run period.
+#
+# Columns: det x_cm y_cm z_cm
+# det: 0=ECAL north, 1=ECAL south, 2=HCAL north, 3=HCAL south
+# 4 corners per det, in col1row1 -> colMax,row1 -> colMax,rowMax -> col1,rowMax order
+0 -20.6366 86.678 725.073
+0 -137.595 86.678 721.54
+0 -137.595 -97.198 721.54
+0 -20.6366 -97.198 725.073
+1 20.6366 86.678 725.073
+1 137.595 86.678 721.54
+1 137.595 -97.198 721.54
+1 20.6366 -97.198 725.073
+2 -27.0327 96.705 807.47
+2 -146.858 96.705 803.851
+2 -146.858 -93.105 803.851
+2 -27.0327 -93.105 807.47
+3 27.0327 96.705 807.47
+3 146.858 96.705 803.851
+3 146.858 -93.105 803.851
+3 27.0327 -93.105 807.47

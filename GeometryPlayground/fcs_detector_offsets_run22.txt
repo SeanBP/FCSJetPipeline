@@ -1,0 +1,19 @@
+# FCS per-detector offset (StFcsDb::getDetectorOffset(det), full double
+# precision) for the geometry Run 22 mostly covers: the real, final
+# survey-based detector position, constant from 2021-12-21 (survey
+# finalized in the DB) through essentially the rest of Run 22 -- see
+# fcs_corners_run22.txt and README.md for the same finding re: corners.
+#
+# Produced via: get_fcs_geometry.C(22359013) -- run 22359013 (2021-12-25) is
+# an arbitrary representative run inside that stable window, same run used
+# for fcs_corners_run22.txt. Full double precision (17 sig figs) is used
+# deliberately: north/south were investigated for asymmetry (see README.md)
+# and found bit-identical in magnitude at this precision -- x is mirrored
+# (opposite sign, same magnitude) between north/south, y is identical
+# (same sign and magnitude) between north/south, for both ECAL and HCAL.
+#
+# Columns: det name xoff_cm yoff_cm
+0 ECAL_north -17.39900016784668 -5.2600002288818359
+1 ECAL_south 17.39900016784668 -5.2600002288818359
+2 HCAL_north -21.285200119018555 1.7999999523162842
+3 HCAL_south 21.285200119018555 1.7999999523162842

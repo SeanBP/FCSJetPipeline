@@ -1,0 +1,19 @@
+# Precompiled StRoot build cache -- regenerate via stardev/cons, not tracked
+.sl73_x8664_gcc485/
+.sl73_gcc485/
+.al96_x8664_gcc11/
+*.o
+*.so
+*.d
+*.pcm
+
+# Job submission scratch (sched/package/csh/list/condor files, swept here by submit_*.sh)
+submit/
+
+# Default scratch output/log directories -- auto-created by submit_*.sh
+output/
+log/
+
+# Editor/OS cruft
+*~
+.DS_Store

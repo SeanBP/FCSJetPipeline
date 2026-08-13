@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+    Jet-energy-scale calibration pipeline: takes a folder of jet_output_*.root
+    (JetTrees) files from the sim_to_jet pipeline and produces the JSON
+    lookup table used to correct reco jet energies. Two steps, one job:
+
+      1. JetEnergyScaleFineGrid: scans every .root file in the input
+         folder, matches reco/truth jets, and fits a scale/response
+         Gaussian on a fine (E, x, y) grid, writing jet_calibration.root
+         (a "bins" tree). References the shared ../shared/JetParameters.h
+         for the fiducial-cut geometry the grid is built over.
+      2. CalibrationMap: fits a smooth log-quadratic-plus-Gaussian-bump
+         model per (x,y) position bin from that tree, then writes the
+         final JSON lookup. Does not reference JetParameters.h; it only
+         operates on the "bins" tree's fitted numbers, no jet geometry.
+
+    Configurable per submission:
+      {{JETTREES_DIR}}   absolute path to a folder of jet_output_*.root
+                          files (a trailing slash is added automatically
+                          if missing).
+      {{OUTDIR}}          absolute output directory (created if missing).
+      {{JSON_NAME}}       filename for the final lookup table, e.g.
+                          JetEnergyScale_lookup_mytune.json.
+      {{SAVE_CALIBRATION_ROOT}}   1 = keep the intermediate jet_calibration.root
+                          (the fitted (E,x,y) bin tree CalibrationMap reads),
+                          0 = discard it once the JSON is written.
+      {{STDOUT_URL}}      where SUMS copies the job's captured stdout.
+      {{STDERR_URL}}      where SUMS copies the job's captured stderr.
+                          submit_jet_scale.sh's -k flag controls both
+                          (0 = discard to /dev/null, default; 1 = save
+                          under {{OUTDIR}}/log/, auto-created).
+
+    To generate and submit, use submit_jet_scale.sh (see its -h), which
+    wraps the sed substitution + star-submit shown below. The SandBox
+    <File> paths below are relative to the pipeline root (SUMS packages
+    each <File> preserving that relative path, confirmed directly from
+    a real job's .package.zip), so star-submit MUST run from there, not
+    from a dedicated submit folder. submit_jet_scale.sh sweeps the
+    sched*/*.package/*.csh/*.list/*.condor files star-submit generates
+    into ../submit/ (a dedicated folder) right after submission instead:
+
+        cd ..   # pipeline root, if not already there
+        sed -e 's#{{JETTREES_DIR}}#/path/to/JetTrees#g' \
+            -e 's#{{OUTDIR}}#/path/to/output#g' \
+            -e 's/{{JSON_NAME}}/JetEnergyScale_lookup_mytune.json/g' \
+            -e 's/{{SAVE_CALIBRATION_ROOT}}/0/g' \
+            jet_scale/jet_scale.xml > jet_scale/jet_scale_myrun.xml
+        star-submit jet_scale/jet_scale_myrun.xml
+        mkdir -p submit && mv sched* submit/ 2>/dev/null
+
+    This is memory/CPU-bound rather than IO-bound (whole-folder scan, then
+    a Minuit2 fit per position bin), so it stays a single job (nProcesses=1)
+    rather than something split across many; it can also just be compiled
+    and run directly on the login node if preferred (see the two g++/./
+    lines below) instead of going through SUMS at all.
+
+    JetEnergyScaleFineGrid's bin_accum map duplicates each matched jet
+    across every fine-grid point within match_radius of it (by design, so
+    neighboring grid points' fits overlap), so peak memory scales with
+    total matched-jet count across the whole input folder, not just file
+    count. Condor's default cgroup memory limit is 2048 MB, which a large
+    input folder (e.g. a multi-replica combined tune, several hundred
+    files) can exceed and get the job held for
+    ("gone over cgroup memory limit... Consider resubmitting with a higher
+    request_memory"). <ResourceUsage><Memory> below requests more headroom
+    for every submission so this doesn't need discovering per-tune.
+-->
+
+<job nProcesses="1">
+
+    <ResourceUsage>
+        <Memory>
+            <MinMemory>4000</MinMemory>
+            <MaxMemory>8000</MaxMemory>
+        </Memory>
+    </ResourceUsage>
+
+    <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
+
+    <command>
+
+        stardev
+
+        module purge
+        module load fastjet-3.3.4
+        module load root-5.34.38
+
+        #--------------------------------------------
+        # SUMS preserves the jet_scale/ and shared/ subfolders when
+        # packaging the SandBox; both compiles below expect their
+        # dependencies flat in the job's working directory.
+        #--------------------------------------------
+        cp jet_scale/* .
+        cp shared/* .
+
+        set INDIR = "{{JETTREES_DIR}}"
+        if ( "${INDIR}" !~ */ ) then
+            set INDIR = "${INDIR}/"
+        endif
+
+        echo "========================================"
+        echo "JetTrees input dir = ${INDIR}"
+        echo "Output JSON name   = {{JSON_NAME}}"
+        echo "========================================"
+
+        echo "Compiling JetEnergyScaleFineGrid..."
+        g++ -m64 JetEnergyScaleFineGrid.cpp VectorDict.cxx -o JetEnergyScaleFineGrid \
+            `root-config --cflags --libs` \
+            `fastjet-config --cxxflags --libs` -std=c++11
+
+        echo "Running JetEnergyScaleFineGrid..."
+        ./JetEnergyScaleFineGrid "${INDIR}"
+
+        echo "Compiling CalibrationMap..."
+        g++ -m64 CalibrationMap.cpp -o CalibrationMap \
+            `root-config --cflags --libs` -lMinuit2 -std=c++11
+
+        echo "Running CalibrationMap..."
+        ./CalibrationMap jet_calibration.root {{JSON_NAME}}
+
+        #--------------------------------------------
+        # Keep or discard the intermediate calibration root file
+        #--------------------------------------------
+        if ( {{SAVE_CALIBRATION_ROOT}} == 0 ) then
+            rm -f jet_calibration.root
+        endif
+
+        echo "Files in scratch:"
+        ls -l
+
+    </command>
+
+    <SandBox installer="ZIP">
+        <Package>
+            <File>file:./jet_scale/JetEnergyScaleFineGrid.cpp</File>
+            <File>file:./jet_scale/CalibrationMap.cpp</File>
+            <File>file:./shared/VectorDict.cxx</File>
+            <File>file:./shared/VectorDict.h</File>
+            <File>file:./shared/VectorDictClass.h</File>
+            <File>file:./shared/VectorDictLinkDef.h</File>
+            <File>file:./shared/JetParameters.h</File>
+        </Package>
+    </SandBox>
+
+    <stdout URL="{{STDOUT_URL}}"/>
+    <stderr URL="{{STDERR_URL}}"/>
+
+    <output fromScratch="jet_calibration.root" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="{{JSON_NAME}}" toURL="file:{{OUTDIR}}/" />
+
+</job>

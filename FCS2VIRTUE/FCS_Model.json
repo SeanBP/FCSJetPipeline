@@ -1,0 +1,77 @@
+{
+  "header": {
+    "version": "3.1.1",
+    "detector": "STAR FCS",
+    "length_unit": "m",
+    "scale": 1.0
+  },
+
+  "components": [
+    {
+      "index": 0,
+      "type": "block",
+      "name": "ECAL Right",
+      "position": [-0.791159, -0.052600, 7.398065],
+      "size": [1.224786, 1.893960, 0.330000],
+      "euler_angles_deg": [0, -1.73003, 0],
+      "color_rgba": [1.0, 0.8, 0.2, 0.4]
+    },
+    {
+      "index": 1,
+      "type": "block",
+      "name": "ECAL Left",
+      "position": [0.791159, -0.052600, 7.398065],
+      "size": [1.224786, 1.893960, 0.330000],
+      "euler_angles_deg": [0, 1.73003, 0],
+      "color_rgba": [1.0, 0.8, 0.2, 0.4]
+    },
+
+    {
+      "index": 2,
+      "type": "block",
+      "name": "HCAL Right",
+      "position": [-0.869454, 0.018000, 8.476607],
+      "size": [1.298253, 1.998100, 0.840000],
+      "euler_angles_deg": [0, -1.73003, 0],
+      "color_rgba": [0.8, 0.2, 0.2, 0.4]
+    },
+    {
+      "index": 3,
+      "type": "block",
+      "name": "HCAL Left",
+      "position": [0.869454, 0.018000, 8.476607],
+      "size": [1.298253, 1.998100, 0.840000],
+      "euler_angles_deg": [0, 1.73003, 0],
+      "color_rgba": [0.8, 0.2, 0.2, 0.4]
+    },
+
+    {
+      "index": 4,
+      "type": "toroid",
+      "name": "EPD",
+      "position": [0, 0, 3.750000],
+      "sides": 24,
+      "radii": {
+        "left": [0.14, 1.70],
+        "right": [0.14, 1.70]
+      },
+      "length": [0.10, 0.10],
+      "color_rgba": [0.2, 0.6, 1.0, 0.4]
+    },
+
+    {
+      "index": 5,
+      "type": "toroid",
+      "name": "STAR Main Detector",
+      "position": [0, 0, 0],
+      "sides": 24,
+      "radii": {
+        "left": [0.05, 2.20],
+        "right": [0.05, 2.20]
+      },
+      "length": [4.50, 4.50],
+      "color_rgba": [0.5, 0.5, 0.5, 0.15]
+    }
+  ]
+}
+

@@ -1,0 +1,92 @@
+herwig6_default: forward-plane azimuthal asymmetry bug
+========================================================
+Status as of 2026-07-31: UNRESOLVED. Do not trust this tune's calibration
+map. Full 400-job production data was deleted after this was found;
+SimpleTree_pt70_0.root (one job, pt-hat=70 GeV, run 0) was kept alongside
+this file for future debugging.
+
+Symptom
+-------
+Position bins from the JES calibration fit (JetEnergyScaleFineGrid.cpp /
+CalibrationMap.cpp) covered mostly the +y half of the FCS acceptance, with
+only a handful of bins in -y. Quantified directly from the JetTrees (before
+any binning/min-entries thresholds, so this is not a fitting artifact):
+
+  truth_y:   +y=75773  -y=27552   ratio=2.75
+  truth_x:   +x=69371  -x=33954   ratio=2.04
+  truth_phi: sin(phi)>0 (upper)=75771  sin(phi)<0 (lower)=27554  ratio=2.75
+
+Sanity check on pythia8_cteq6l1 (same JetMatcher/JetEnergyScaleFineGrid code,
+same eta/pt/phi acceptance cuts, same detector geometry) is symmetric to ~1%:
+  truth_y:   +y=613839 -y=602187  ratio=1.02
+  truth_phi: sin(phi)>0=613839  sin(phi)<0=602187  ratio=1.02
+
+Both truth_x AND truth_phi are skewed together (not independent x/y biases),
+meaning events coherently favor one specific azimuthal quadrant rather than
+having e.g. a pure up/down bias. The ratio was essentially identical (2.6-2.85)
+across all 8 independent jet_output_N.root chunks (each drawing from
+thousands of events, many different jobs/random seeds/pT bins), i.e. this is
+a structural/reproducible effect, not a statistical fluke of one job or seed.
+
+What's ruled out (traced in the actual source, not assumed)
+-------------------------------------------------------------
+- JetMatcher.cpp / JetEnergyScaleFineGrid.cpp / CalibrationMap.cpp: identical
+  code path used by all 8 tunes; produces symmetric results for every
+  Pythia6/8 tune. Not the cause.
+- StarHerwig6::FillPP() / Generate() (Herwig6_5_20/StarHerwig6.cxx): standard
+  HEPEVT read, px=phep(idx,1), py=phep(idx,2), pz=phep(idx,3) -- correct,
+  no swap.
+- The RNG hookup: HWRGEN (Herwig's Fortran RNG entry point, called
+  pervasively throughout herwig6520.F for essentially all random draws) is
+  correctly remapped to StarRandom::Instance().flat() in StarHerwig6.cxx
+  (search "Remapping Herwigs random number generator to StarRandom"). Not an
+  unseeded/disconnected side RNG.
+- SetBeams.F (STAR-custom Fortran, sets HWBMCH/PART1/PART2): trivial, just
+  particle species strings, unrelated to kinematics.
+- StarGenerator::SetFrame's "3MOM" overload (StarGenerator.cxx, the one used
+  for Herwig's beam setup -- Pythia6/8 use the different "CMS" 2-arg overload
+  instead, and both come out symmetric): just stores mBlueMomentum/
+  mYellMomentum, both purely along Z as passed in ({0,0,320}, {0,0,-320}).
+  No azimuth logic here.
+- AZSPIN (Herwig's spin-correlation flag, herwig6520.F): governs azimuthal
+  correlations *within* the parton shower relative to the hard-process
+  plane (Knowles & Collins algorithm), not the absolute lab-frame
+  orientation of the whole event. Can't produce a coherent single-direction
+  bias like this.
+
+Leading hypothesis / where to look next
+-----------------------------------------
+Since both x and phi are skewed together (one quadrant favored), the bug
+most likely lives wherever Herwig assigns the *initial* azimuthal
+orientation of the hard 2->2 subprocess in the lab frame -- i.e. something
+that's effectively fixed (or nearly fixed) once per event rather than
+varying per branch/decay. That would NOT show up in the generic
+`HWRGEN(0)*...` rejection-sampling calls scattered throughout the shower
+code (grepped these, all look like standard weighted rejection sampling,
+nothing obviously wrong). Candidates not yet checked:
+  - The hard-subprocess kinematics setup routine(s) (likely something in
+    the HWEPRO/HWBGEN family, herwig6520.F -- this file is ~64,000 lines,
+    a full physics engine, not something I traced line-by-line).
+  - Whether STAR's "3MOM" SetBeams/SetFrame path for Herwig interacts with
+    Herwig's own internal collision-frame convention in a way the "CMS"
+    path (used successfully by Pythia6/8) doesn't.
+  - Possible: rebuild with debug prints around the hard-process azimuth
+    assignment to directly observe what's happening, since static reading
+    of a 64k-line legacy Fortran file didn't converge on the exact line.
+
+Relevant source paths (all read-only reference, nothing here was modified):
+  /cvmfs/star.sdcc.bnl.gov/packages/dev/StRoot/StarGenerator/Herwig6_5_20/
+    StarHerwig6.cxx, StarHerwig6.h, herwig6520.F (64k lines), SetBeams.F,
+    Herwig6.cxx, Herwig6.h
+  /cvmfs/star.sdcc.bnl.gov/packages/dev/StRoot/StarGenerator/BASE/
+    StarGenerator.cxx (SetFrame overloads)
+
+Generation setup that produced the deleted data (for reproducing)
+---------------------------------------------------------------------
+  Generator scripts: starsim_herwig6_filter.C, starsim_herwig6_default.xml,
+  runHerwig6.C, in this same folder. Debugging sample
+  (SimpleTree_pt70_0.root) is at /star/data01/pwg/seanp/tunes/herwig6_default/.
+  Herwig6("pp", ckin3) sets: pblue={0,0,320}, pyell={0,0,-320} via
+  SetFrame("3MOM", pblue, pyell); SetProcess(1000) (QCD 2->2 inclusive);
+  herwig6->hwhard().PTMIN = ckin3 (pT-hat scan, 62-80 GeV in steps of 2);
+  unmodified Herwig 6 defaults otherwise (no HWPRAM tuning).

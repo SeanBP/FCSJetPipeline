@@ -1,0 +1,14 @@
+# Example StFcsDb::getGain()/getGainCorrection() output for one run
+# (22359013, 2021-12-25 -- the same representative run used throughout
+# this project's other playgrounds). UNLIKE geometry, this is NOT "the"
+# Run 22 gain -- gain/gainCorrection is genuinely time-dependent across
+# the run (see README.md for a second run's values showing this directly:
+# run 23101043 (2022-04-11) gives ECAL gainCorrection=1.42660213 and
+# HCAL gain=0.0083368998, both different from below). This file is a
+# single-run example of the retrieval mechanism, not a reusable constant.
+#
+# Produced via: get_fcs_gain.C(22359013)
+#
+# Columns: det name id gain gainCorrection
+0 ECAL 50 0.0053 1.21
+2 HCAL 50 0.00689 1
