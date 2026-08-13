@@ -21,11 +21,8 @@ StarFilterMaker *filter = 0;
 
 // bschmookler's dir has the MRST2007lomod grid but no pdfsets.index (and
 // isn't writable by us to add one); the system LHAPDF share dir has the
-// index but not this grid. Merged copy of both, writable, lives here
-// (physically at FCSJetPipeline/sim_to_jet/lhapdf_data -- this points at
-// the home-directory symlink instead so the path survives future
-// pipeline-directory reorganizations):
-TString LHAPDF_DATA_PATH="/star/u/seanp/lhapdf_data";
+// index but not this grid. Merged copy of both, writable, lives here:
+TString LHAPDF_DATA_PATH="/star/u/seanp/FCSJetPipeline/sim_to_jet/lhapdf_data";
 
 // ----------------------------------------------------------------------------
 void geometry( TString tag, Bool_t agml=true )

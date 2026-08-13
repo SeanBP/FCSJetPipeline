@@ -280,9 +280,14 @@ carries the same branch for schema consistency but never attaches an
 
 ## jet_scale
 
-Takes a folder of `jet_output_*.root` (JetTrees) files -- from either
-`sim_to_jet` or `data_to_jet` -- and produces the JSON lookup table used
-to correct reco jet energies. Two steps, one job (see "Job-splitting"
+Takes a folder of `jet_output_*.root` (JetTrees) files from `sim_to_jet`
+and produces the JSON lookup table used to correct reco jet energies.
+**`sim_to_jet` output only** -- `JetEnergyScaleFineGrid` fits reco jet
+energy against matched truth jet energy (`truth_E`, `match_truth_idx`),
+and only simulated events have truth-level jets to match against;
+`data_to_jet`'s JetTrees (`RecoJets.cpp`) carry no truth branches at all,
+so pointing `-i` at a `data_to_jet` output folder fails. Two steps, one
+job (see "Job-splitting"
 above for why there's no `-j`): `JetEnergyScaleFineGrid` scans every file
 in the folder and fits a scale/response Gaussian on a fine (E, x, y) grid
 (references the shared `shared/JetParameters.h` for the fiducial-cut
