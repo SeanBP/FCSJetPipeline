@@ -10,8 +10,10 @@
 # Job submission scratch (sched/package/csh/list/condor files, swept here by submit_*.sh)
 submit/
 
-# Default scratch output/log directories -- auto-created by submit_*.sh
-output/
+# Default scratch output/log directories -- auto-created by submit_*.sh.
+# Anchored to the repo root (leading slash) so this doesn't also match
+# FCS2VIRTUE/output/, which holds tracked reference JSONs, not scratch.
+/output/
 log/
 
 # Editor/OS cruft
