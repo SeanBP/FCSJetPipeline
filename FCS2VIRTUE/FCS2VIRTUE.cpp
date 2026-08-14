@@ -149,11 +149,12 @@ static const double JET_ENERGY_OPACITY_MAX_GEV = 200.0;
 static const double JET_ALPHA_MIN = 0.3;
 static const double JET_ALPHA_MAX = 1.0;
 
-// Track color/opacity: both scale linearly with energy, from
-// [0, 0, 1, 0] (0 energy -- fully blue, fully transparent) to
-// [1, 0, 0, 1] (this event's max mcparticle energy -- fully red, fully
-// opaque). No energy cut and no top-fraction trim on tracks -- every
-// mcparticle with a well-defined direction is rendered.
+// Track color/opacity: both scale on a log scale with energy (same
+// energy_color() helper as calo hits), from [0, 0, 1, 0] (this event's
+// min mcparticle energy -- fully blue, fully transparent) to [1, 0, 0, 1]
+// (this event's max mcparticle energy -- fully red, fully opaque). No
+// energy cut and no top-fraction trim on tracks -- every mcparticle with
+// a well-defined direction is rendered.
 
 struct Vec3 {
     double x, y, z;
@@ -497,12 +498,20 @@ int main(int argc, char** argv) {
                 qualifyingIdx.push_back(i);
             }
 
-            // Max energy of ANY mcparticle in this event (not just the
-            // rendered/qualifying subset) -- the top of the linear
-            // color/opacity scale below.
-            double maxE = 0.0;
+            // Energy range across ANY mcparticle in this event (not just
+            // the rendered/qualifying subset) -- same per-event
+            // real-min/max-anchored approach as the calo-hit color scale
+            // above (an absolute-zero floor would make the log scale
+            // degenerate: real track energies are so far in log-space
+            // from ~0 that nearly everything would cluster near fraction=1).
+            double minE = 1.0, maxE = 1.0;
+            bool haveTrackRange = false;
             for (int i = 0; i < mcpart_num; i++) {
-                if (mcpart_E[i] > maxE) maxE = mcpart_E[i];
+                double e = mcpart_E[i];
+                if (e > 0) {
+                    if (!haveTrackRange) { minE = maxE = e; haveTrackRange = true; }
+                    else { minE = std::min(minE, e); maxE = std::max(maxE, e); }
+                }
             }
 
             for (int i : qualifyingIdx) {
@@ -517,13 +526,14 @@ int main(int argc, char** argv) {
                 double vy = mcpart_Vtx_y[i] * UNIT_SCALE;
                 double vz = mcpart_Vtx_z[i] * UNIT_SCALE;
 
-                // Color and opacity both scale linearly with energy, from
-                // (blue, transparent) at 0 to (red, opaque) at maxE.
-                double trackFrac = (maxE > 0.0) ? (mcpart_E[i] / maxE) : 0.0;
-                trackFrac = std::min(std::max(trackFrac, 0.0), 1.0);
-                double alpha = trackFrac;
-
-                double rgb[3] = { trackFrac, 0.0, 1.0 - trackFrac };
+                // Color and opacity both scale on a log scale with energy,
+                // from (blue, transparent) at this event's min mcparticle
+                // energy to (red, opaque) at its max -- same energy_color()
+                // helper used for calo hits.
+                double trackColor[4];
+                energy_color(mcpart_E[i], minE, maxE, trackColor);
+                double rgb[3] = { trackColor[0], trackColor[1], trackColor[2] };
+                double alpha = trackColor[3];
 
                 // duration_ns: [start, end]. start is the light-travel time
                 // from the origin to this track's vertex (same
