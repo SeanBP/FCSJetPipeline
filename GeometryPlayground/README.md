@@ -62,11 +62,56 @@ be run directly from a bare shell.
   exactly symmetric in both the idealized DB geometry and real reconstructed
   hit extents (hit *counts* differ ~6%, but that's occupancy, not geometry).
   `JetParameters.h` therefore uses a single shared rectangle applied to both
-  sides via `fabs(x)`, not separate north/south values.
+  sides via `fabs(x)`, not separate north/south values. This symmetry is
+  confirmed present in the raw DB row itself (see below), not an artifact
+  of a symmetric default being returned instead of real DB content.
 
 ## Requesting a run before 2021-12-21
 
 The DB returns a pre-survey placeholder position for these dates (round
 numbers, not the real calibrated position) -- `get_fcs_geometry.C` prints a
 `WARNING:` line but does not block. Do not trust the resulting fiducial
-numbers for such a run.
+numbers for such a run. (The real DB transition is precise to the minute --
+`2021-12-20 16:30:00` -- see below; the day-granularity `2021-12-21` cutoff
+in the code is a deliberately conservative rounding of that.)
+
+## Verifying this reads real DB values, not StFcsDb's hardcoded defaults
+
+A collaborator flagged a real failure mode: `St_db_Maker` must be
+constructed and initialized *before* `StFcsDbMaker`, and `InitRun()` must
+actually run against the right date, or `StFcsDb` silently falls back to
+values that were never queried from the DB at all. Checked directly rather
+than assumed:
+
+- **Is there actually a hardcoded fallback?** Yes -- traced in
+  `StFcsDb.cxx`: `getDetectorOffset()` has an `if(mDbAccess==0)` branch that
+  returns fixed literals with no date dependence at all (`-17.399`/`17.399`
+  for ECAL, notably the *same numbers* as the real post-survey value, which
+  could otherwise mask this exact bug). `mDbAccess` defaults to `1` and is
+  only set to `0` via `StFcsDb::setDbAccess(0)`, which `get_fcs_geometry.C`
+  never calls -- so this fallback branch cannot be what's producing our
+  output, by construction.
+- **Is the maker order actually right?** Confirmed from a real run's BFC
+  log, not assumed from the chain-flag string order:
+  `St_db_Maker::db` -> `StDetectorDbMaker::detDb` -> `StFcsDbMaker::fcsDbMkr`
+  (`StBFChain`'s own dependency resolution, not our macro's flag ordering).
+- **Does the DB fetch actually succeed?** `StFcsDbMaker::InitRun()` logs
+  `LOG_ERROR` if `Geometry/fcs` or `fcsDetectorPosition` isn't found -- ran
+  `get_fcs_geometry.C` fresh for two runs and grepped the full log: zero
+  `LOG_ERROR` lines either time, and `StFcsDbMaker::InitRun - Date&time
+  from St_db_Maker=...` in both cases correctly echoed back the exact date
+  `SetDateTime()` had just pinned.
+- **Does the output match the real DB content?** Dumped
+  `Geometry_fcs.fcsDetectorPosition` directly via `mysql` and compared
+  against two live runs' output, full double precision:
+  - Run `22344001` -> 2021-12-10 -> tool reports `xoff=-67.399002075195312`
+    (ECAL north) -- matches the DB row active `[2021-12-01 00:01:00,
+    2021-12-20 16:30:10)`: `xoff=-67.39900208`.
+  - Run `22355001` -> 2021-12-21 -> tool reports `xoff=-17.39900016784668`
+    (ECAL north) -- matches the DB row active from `2021-12-20 16:30:10`
+    onward: `xoff=-17.39900017`.
+
+  Both match bit-for-bit, and the fact that the tool's output *changes*
+  with date is itself further evidence against the fallback theory -- the
+  hardcoded no-DB branch is date-invariant by construction, so it could
+  never reproduce the `-67.399` placeholder for the earlier run.

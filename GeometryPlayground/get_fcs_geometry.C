@@ -84,10 +84,12 @@ void RunNumberToDateTime(int runNumber, int &idat, int &itim){
 // only took effect starting this date. Empirically bisected (Aug 2026,
 // GeometryPlayground): xoff was a placeholder value (round numbers,
 // -67.399/67.399 for ECAL) through 2021-12-20, then jumped to the final
-// calibrated value (-17.399/17.399) on 2021-12-21 and stayed fixed there
-// for the rest of Run 22 (checked through the y2023 nominal date).
-// Cross-checked against Akio Ogawa's run22 gain page: run 22355068 is
-// documented as "2021Dec21" -- day-of-year 355 of 2021, exactly this date.
+// calibrated value (-17.399/17.399) and stayed fixed there for the rest
+// of Run 22 (checked through the y2023 nominal date). Confirmed directly
+// against the raw DB table: the real transition is precise to the
+// minute, 2021-12-20 16:30:00 (dataID 17/22 in Geometry_fcs.
+// fcsDetectorPosition); this constant rounds that up to the next whole
+// day, so it flags a few conservative extra hours on the 20th itself.
 // (yoff/y-center settles even earlier, by 2021-12-02, so xoff is the
 // binding constraint.) Requesting a run/date before this returns
 // geometry that was never the real, final detector position.
