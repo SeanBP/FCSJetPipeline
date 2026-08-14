@@ -149,11 +149,11 @@ static const double JET_ENERGY_OPACITY_MAX_GEV = 200.0;
 static const double JET_ALPHA_MIN = 0.3;
 static const double JET_ALPHA_MAX = 1.0;
 
-// Track opacity range (see the per-event Emin/Emax scaling in the tracks
-// loop below). No energy cut and no top-fraction trim on tracks -- every
+// Track color/opacity: both scale linearly with energy, from
+// [0, 0, 1, 0] (0 energy -- fully blue, fully transparent) to
+// [1, 0, 0, 1] (this event's max mcparticle energy -- fully red, fully
+// opaque). No energy cut and no top-fraction trim on tracks -- every
 // mcparticle with a well-defined direction is rendered.
-static const double TRACK_ALPHA_MIN = 0.3;
-static const double TRACK_ALPHA_MAX = 1.0;
 
 struct Vec3 {
     double x, y, z;
@@ -218,7 +218,7 @@ double eta_to_theta(double eta) {
 void writeHeader(std::ofstream& f) {
     f << "  \"header\": {\n";
     f << "    \"version\": \"3.1.1\",\n";
-    f << "    \"experiment\": \"STAR FCS -- tracks: red=+charge, blue=-charge, grey=neutral; jets: green=truth, orange=reco\",\n";
+    f << "    \"experiment\": \"STAR FCS -- jets: green=truth, orange=reco\",\n";
     f << "    \"energy_unit\": \"GeV\",\n";
     f << "    \"color_bar\": \"Log\",\n";
     f << "    \"scale\": 1.0,\n";
@@ -497,12 +497,12 @@ int main(int argc, char** argv) {
                 qualifyingIdx.push_back(i);
             }
 
-            // Energy range among all rendered tracks, for opacity scaling.
-            double trackEmin = 0.0, trackEmax = 0.0;
-            bool haveTrackRange = false;
-            for (int idx : qualifyingIdx) {
-                if (!haveTrackRange) { trackEmin = trackEmax = mcpart_E[idx]; haveTrackRange = true; }
-                else { trackEmin = std::min(trackEmin, (double)mcpart_E[idx]); trackEmax = std::max(trackEmax, (double)mcpart_E[idx]); }
+            // Max energy of ANY mcparticle in this event (not just the
+            // rendered/qualifying subset) -- the top of the linear
+            // color/opacity scale below.
+            double maxE = 0.0;
+            for (int i = 0; i < mcpart_num; i++) {
+                if (mcpart_E[i] > maxE) maxE = mcpart_E[i];
             }
 
             for (int i : qualifyingIdx) {
@@ -517,19 +517,13 @@ int main(int argc, char** argv) {
                 double vy = mcpart_Vtx_y[i] * UNIT_SCALE;
                 double vz = mcpart_Vtx_z[i] * UNIT_SCALE;
 
-                // Opacity scales linearly with energy across this event's
-                // track energy range.
-                double trackFrac = (trackEmax > trackEmin)
-                    ? (mcpart_E[i] - trackEmin) / (trackEmax - trackEmin)
-                    : 1.0;
+                // Color and opacity both scale linearly with energy, from
+                // (blue, transparent) at 0 to (red, opaque) at maxE.
+                double trackFrac = (maxE > 0.0) ? (mcpart_E[i] / maxE) : 0.0;
                 trackFrac = std::min(std::max(trackFrac, 0.0), 1.0);
-                double alpha = TRACK_ALPHA_MIN + (TRACK_ALPHA_MAX - TRACK_ALPHA_MIN) * trackFrac;
+                double alpha = trackFrac;
 
-                // Color by charge sign: red = positive, blue = negative, grey = neutral
-                double rgb[3];
-                if (mcpart_charge[i] > 0) { rgb[0]=1.0; rgb[1]=0.2; rgb[2]=0.2; }
-                else if (mcpart_charge[i] < 0) { rgb[0]=0.2; rgb[1]=0.2; rgb[2]=1.0; }
-                else { rgb[0]=0.6; rgb[1]=0.6; rgb[2]=0.6; }
+                double rgb[3] = { trackFrac, 0.0, 1.0 - trackFrac };
 
                 // duration_ns: [start, end]. start is the light-travel time
                 // from the origin to this track's vertex (same
