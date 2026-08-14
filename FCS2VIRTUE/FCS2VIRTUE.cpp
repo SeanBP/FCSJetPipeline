@@ -110,6 +110,10 @@ static const double FCS_FRONT_Z_MM = 7233.065;
 // STAR's normal full-field configuration, not a reduced or zero field.
 static const double B_FIELD_TESLA = 0.5;
 
+// VIRTUE's track-propagation step size (time between successive points
+// along a rendered helix).
+static const double SEGMENT_NS = 0.5;
+
 // Note: the anti-kt jet radius parameter R (eta-phi space) is NOT
 // redeclared here -- it's read directly from JetParameters.h's `R`
 // (included above), the same shared constant JetMatcher.cpp/RecoJets.cpp
@@ -145,23 +149,11 @@ static const double JET_ENERGY_OPACITY_MAX_GEV = 200.0;
 static const double JET_ALPHA_MIN = 0.3;
 static const double JET_ALPHA_MAX = 1.0;
 
-// Minimum track (mcparticle) energy to render: reuses the same ECAL hit
-// threshold JetMatcher.cpp/RecoJets.cpp apply to calorimeter hits (there
-// is no dedicated truth-particle energy cut in either script -- they only
-// filter truth particles by vertex, not energy -- so this is a stand-in,
-// not a literal transplant). mip_threshold/ecal_mip come from
-// JetParameters.h (included above).
-static const double MIN_TRACK_ENERGY_GEV = mip_threshold * ecal_mip; // 0.31 GeV
-
 // Track opacity range (see the per-event Emin/Emax scaling in the tracks
-// loop below).
+// loop below). No energy cut and no top-fraction trim on tracks -- every
+// mcparticle with a well-defined direction is rendered.
 static const double TRACK_ALPHA_MIN = 0.3;
 static const double TRACK_ALPHA_MAX = 1.0;
-
-// Only the top TRACK_TOP_FRACTION most energetic tracks (per event, among
-// those already passing MIN_TRACK_ENERGY_GEV) get rendered -- at least 1
-// if any qualify.
-static const double TRACK_TOP_FRACTION = 0.50;
 
 struct Vec3 {
     double x, y, z;
@@ -246,6 +238,7 @@ void writeHeader(std::ofstream& f) {
     f << "      }\n";
     f << "    ],\n";
     f << "    \"tracker_settings\": {\n";
+    f << "      \"segment_ns\": " << SEGMENT_NS << ",\n";
     f << "      \"B_field_T\": " << B_FIELD_TESLA << ",\n";
     f << "      \"tracker_boundary\": [" << TRACKER_RADIUS_MM << ", " << TRACKER_Z_MIN_MM << ", " << TRACKER_Z_MAX_MM << "]\n";
     f << "    }\n";
@@ -493,13 +486,10 @@ int main(int argc, char** argv) {
         std::vector<std::string> trackEntries;
 
         if (doTracks) {
-            // First pass: collect indices of tracks that pass the existing
-            // energy/momentum filters, then keep only the top
-            // TRACK_TOP_FRACTION by energy (at least 1, if any qualify).
+            // Every mcparticle with a well-defined direction is rendered --
+            // no energy cut, no top-fraction trim.
             std::vector<int> qualifyingIdx;
             for (int i = 0; i < mcpart_num; i++) {
-                if (mcpart_E[i] < MIN_TRACK_ENERGY_GEV) continue;
-
                 double px = mcpart_px[i], py = mcpart_py[i], pz = mcpart_pz[i];
                 double p = std::sqrt(px * px + py * py + pz * pz);
                 if (p < 1e-9) continue; // at-rest particle, no meaningful direction
@@ -507,18 +497,8 @@ int main(int argc, char** argv) {
                 qualifyingIdx.push_back(i);
             }
 
-            std::sort(qualifyingIdx.begin(), qualifyingIdx.end(),
-                      [&](int a, int b) { return mcpart_E[a] > mcpart_E[b]; });
-
-            size_t nKeep = qualifyingIdx.empty() ? 0
-                : std::max((size_t)1, (size_t)std::ceil(qualifyingIdx.size() * TRACK_TOP_FRACTION));
-            if (nKeep < qualifyingIdx.size()) qualifyingIdx.resize(nKeep);
-
-            // Energy range among the KEPT (top-fraction) tracks, for
-            // opacity scaling -- same per-event dynamic-range approach as
-            // before, just computed over the now-smaller shown subset so
-            // brightness still varies meaningfully within it.
-            double trackEmin = MIN_TRACK_ENERGY_GEV, trackEmax = MIN_TRACK_ENERGY_GEV;
+            // Energy range among all rendered tracks, for opacity scaling.
+            double trackEmin = 0.0, trackEmax = 0.0;
             bool haveTrackRange = false;
             for (int idx : qualifyingIdx) {
                 if (!haveTrackRange) { trackEmin = trackEmax = mcpart_E[idx]; haveTrackRange = true; }
@@ -551,12 +531,22 @@ int main(int argc, char** argv) {
                 else if (mcpart_charge[i] < 0) { rgb[0]=0.2; rgb[1]=0.2; rgb[2]=1.0; }
                 else { rgb[0]=0.6; rgb[1]=0.6; rgb[2]=0.6; }
 
+                // duration_ns: [start, end]. start is the light-travel time
+                // from the origin to this track's vertex (same
+                // propagation_time() convention used for hits/blocks/jets)
+                // -- when the track starts showing up. end is a fixed
+                // render-stop time; tracks also stop rendering earlier if
+                // they reach the tracker_boundary.
+                double startNs = propagation_time({ vx, vy, vz });
+                double endNs = 30.0;
+
                 std::ostringstream entry;
                 entry << std::setprecision(6);
                 entry << "        {\n";
                 entry << "          \"qOverP\": " << qOverP << ",\n";
                 entry << "          \"angle_rad\": [" << theta << ", " << phi << "],\n";
                 entry << "          \"vertex\": [" << vx << ", " << vy << ", " << vz << "],\n";
+                entry << "          \"duration_ns\": [" << startNs << ", " << endNs << "],\n";
                 entry << "          \"color_rgba\": [" << rgb[0] << ", " << rgb[1] << ", " << rgb[2] << ", " << alpha << "]\n";
                 entry << "        }";
                 trackEntries.push_back(entry.str());
