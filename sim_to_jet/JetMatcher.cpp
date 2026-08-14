@@ -258,6 +258,21 @@ int main(int argc, char** argv) {
             vector<PseudoJet> truth_jets_selected;
 
             for (auto &jet : truth_all) {
+                // Truth particles are NOT eta-restricted before clustering
+                // (only mcpart_idVtx[i]==1, i.e. primary-vertex, above), so
+                // a jet built mostly/entirely from backward-going
+                // beam-remnant/ISR particles can have jet.pz()<=0. The
+                // jetXE/jetYE projection below assumes forward propagation
+                // to the z=+z_proj plane; for pz<=0 it instead evaluates to
+                // the point where the BACKWARD-extended ray crosses that
+                // plane -- a well-defined but physically meaningless
+                // number that can spuriously fall inside the fiducial
+                // rectangle. Reco jets don't need this guard: they're
+                // built from real calorimeter hit positions, which are
+                // always at the FCS's fixed forward z, so jet.pz() there
+                // is structurally always positive.
+                if (jet.pz() <= 0) continue;
+
                 float jetXE = z_proj * jet.px() / jet.pz();
                 float jetYE = z_proj * jet.py() / jet.pz();
                 if (pass_jet_scale_cut(jetXE, jetYE, reco_fiducial_buffer, -R/2.0f)) truth_jets_selected.push_back(jet);
