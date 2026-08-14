@@ -77,7 +77,7 @@ in the code is a deliberately conservative rounding of that.)
 
 ## Verifying this reads real DB values, not StFcsDb's hardcoded defaults
 
-A collaborator flagged a real failure mode: `St_db_Maker` must be
+`St_db_Maker` must be
 constructed and initialized *before* `StFcsDbMaker`, and `InitRun()` must
 actually run against the right date, or `StFcsDb` silently falls back to
 values that were never queried from the DB at all. Checked directly rather
@@ -110,8 +110,14 @@ than assumed:
   - Run `22355001` -> 2021-12-21 -> tool reports `xoff=-17.39900016784668`
     (ECAL north) -- matches the DB row active from `2021-12-20 16:30:10`
     onward: `xoff=-17.39900017`.
+  - Sanity check with a run in the middle of Run 22's real data-taking
+    window: run `23045001` -> 2022-02-14 -> same `xoff=-17.39900016784668`,
+    zero `LOG_ERROR`/`WARNING` lines, same clean maker order -- confirms
+    this isn't just correct at the two dates picked to bracket the survey
+    transition.
 
-  Both match bit-for-bit, and the fact that the tool's output *changes*
-  with date is itself further evidence against the fallback theory -- the
-  hardcoded no-DB branch is date-invariant by construction, so it could
-  never reproduce the `-67.399` placeholder for the earlier run.
+  All three match bit-for-bit, and the fact that the tool's output
+  *changes* with date (for the pre-survey run) is itself further evidence
+  against the fallback theory -- the hardcoded no-DB branch is
+  date-invariant by construction, so it could never reproduce the
+  `-67.399` placeholder for that earlier run.
