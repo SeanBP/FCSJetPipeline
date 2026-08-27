@@ -54,24 +54,16 @@ void runMudst(char* file="st_fwd_23080044_raw_1000019.MuDst.root",
     StFcsDbMaker *fcsDbMkr= new StFcsDbMaker();
     StFcsDb* fcsDb = (StFcsDb*) chain->GetDataSet("fcsDb");
 
-    // Real per-event spin configuration (see StSimpleReaderMaker.h's
-    // Spin_config comment): resolved from Calibrations/rhic via bunch
-    // crossing id, -1 ("no data") wherever that DB isn't covered -- see
-    // SpinPlayground/run_number_to_spin_coverage.sh for the actual
-    // coverage window. Not used by sim_to_jet's readMudst.C -- simulated
-    // events have no real polarization pattern to report.
+    // Real per-event spin config; -1 outside the spin-DB coverage window
+    // (see SpinPlayground/run_number_to_spin_coverage.sh).
     StSpinDbMaker* spinDbMkr = new StSpinDbMaker();
 
     //Analysis Maker
     StSimpleReaderMaker* AnalysisCode  =  new StSimpleReaderMaker(muDstMaker) ;
     AnalysisCode -> SetSpinDb(spinDbMkr) ;
 
-    // Retroactive HCAL gain correction (see StSimpleReaderMaker.h's
-    // mUseHcalRetroCorr comment and hcal_gain_corrections/README.md):
-    // currently a no-op (the placeholder file is all 1.0), until real
-    // per-tower HCAL corrections are measured. Not used by sim_to_jet's
-    // readMudst.C -- simulated events already get real, live gain
-    // straight from StFcsDb.
+    // Retroactive HCAL gain correction; currently a no-op placeholder
+    // (all 1.0) until real per-tower HCAL corrections are measured.
     AnalysisCode -> SetHcalRetroactiveGainCorr("hcal_gain_corrections") ;
 
     // In order to speed up the analysis and eliminate IO, turn off unneeded branches

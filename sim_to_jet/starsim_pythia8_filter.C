@@ -30,11 +30,7 @@ void command( TString cmd )
   geant_maker -> Do( cmd );
 }
 // ----------------------------------------------------------------------------
-// trig()  -- generates one event
-// trig(n) -- generates n+1 events.
-//
-// NOTE:  last event generated will be corrupt in the FZD file
-//
+// trig(n) generates n+1 events; last event in the FZD file will be corrupt.
 void trig( Int_t n=1 )
 {
   chain->EventLoop(n);
@@ -47,10 +43,6 @@ void trig( Int_t n=1 )
 void Pythia8( TString config="pp:W", Double_t ckin3=0.0, Double_t ckin4=-1.0, Int_t pdfSet=-1 )
 {
 
-  //
-  // Create the pythia 8 event generator and add it to
-  // the primary generator
-  //
   StarPythia8 *pythia8 = new StarPythia8();
   if ( config=="pp:W" )
     {
@@ -66,7 +58,8 @@ void Pythia8( TString config="pp:W", Double_t ckin3=0.0, Double_t ckin4=-1.0, In
     }
   if ( config=="pp:minbias" )
     {
-      pythia8->SetFrame("CMS", 500.0);
+      // Real Run 22 energy: sqrt(s)~508.4 GeV (254.2 GeV/nucleon), not 500.
+      pythia8->SetFrame("CMS", 508.4);
       pythia8->SetBlue("proton");
       pythia8->SetYell("proton");    
 
@@ -102,7 +95,7 @@ void Pythia8( TString config="pp:W", Double_t ckin3=0.0, Double_t ckin4=-1.0, In
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
-void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t pdfSet=-1 )
+void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t pdfSet=-1, Double_t fcsFilterEthr=50.0 )
 {
 
   gROOT->ProcessLine(".L bfc.C");
@@ -130,116 +123,46 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t p
   gSystem->Load( "FastJetFilter.so" );
   gSystem->Load( "FCSJetFilter.so" );
 
-//   // And unloading of geometry
-//   TString geo = gSystem->DynamicPathName("geometry.so");
-//   if ( !geo.Contains("Error" ) ) {
-//     std::cout << "Unloading geometry.so" << endl;
-//     gSystem->Unload( gSystem->DynamicPathName("geometry.so") );
-//   }
-
-
-  // Setup RNG seed and map all ROOT TRandom here
   StarRandom::seed( rngSeed );
   StarRandom::capture();
-  
-  //
-  // Create the primary event generator and insert it
-  // before the geant maker
-  //
-  //  StarPrimaryMaker *
+
   _primary = new StarPrimaryMaker();
   {
     _primary -> SetFileName( "pythia8.starsim.root");
     chain -> AddBefore( "geant", _primary );
   }
 
-  //
-  // Setup an event generator
-  //
-
   double ckin4=-1.0;
-  //Pythia8("pp:heavyflavor:D0jets", ckin3, ckin4 );
   Pythia8("pp:minbias", ckin3, ckin4, pdfSet );
-  command("call gstar_part"); 
-  
-  //Load geometry 
-  //-- don't actually seem to need to do this if same as passed to BFC above
+  command("call gstar_part");
   geometry("y2023");
 
 #if 1
-  //
-  // Setup the generator filter
-  //
-  //  filter = new StDijetFilter();
-
-  //filter = new FastJetFilter();
- // _primary -> AddFilter( filter );
-
   filter = new FcsJetFilter();
+  ((FcsJetFilter*)filter) -> SetEnergyThreshold( fcsFilterEthr );
   _primary -> AddFilter( filter );
 
-  // If set to 1, tracks will be saved in the tree on events which were
-  // rejected.  If the tree size is too big (because the filter is too
-  // powerful) you may want to set this equal to zero.  In which case
-  // only header information is saved for the event.
-  //_primary->SetAttr("FilterKeepAll",     int(1));
-
-  // By default, the primary maker enters an infinite loop and executes
-  // the event generator until it yields an event which passes the filter.
-  // The big full chain treats this as a single event.
-  //
-  // If you want the BFC to see an empty event, set the FilterSkipRejects
-  // attribute on the primary maker and give it the priveledge it needs
-  // to kill the event. 
-  //---  primary->SetAttr("FilterSkipRejects", int(1) ); // enables event skipping 
-  //---  chain->SetAttr(".Privilege",1,"StarPrimaryMaker::*" );
+  //_primary->SetAttr("FilterKeepAll", int(1));  // keep rejected-event tracks too
 #endif
 
-  //
-  // Setup cuts on which particles get passed to geant for
-  //   simulation.  (To run generator in standalone mode,
-  //   set ptmin=1.0E9.)
-  //                    ptmin  ptmax
+  // Particle acceptance cuts passed to geant (ptmin, ptmax / etamin, etamax / phimin, phimax)
   _primary->SetPtRange  (0.0,  -1.0);         // GeV
-  //                    etamin etamax
   _primary->SetEtaRange ( +1.0, +5.0 );
-  //                    phimin phimax
   _primary->SetPhiRange ( 0., TMath::TwoPi() );
-  
-  
-  // 
-  // Setup a realistic z-vertex distribution:
-  //   x = 0 gauss width = 1mm
-  //   y = 0 gauss width = 1mm
-  //   z = 0 gauss width = 30cm
-  // 
+
+  // z-vertex: gauss widths x=1mm, y=1mm, z=30cm
   _primary->SetVertex( 0., 0., 0. );
   _primary->SetSigma( 0.1, 0.1, 30.0 );
 
-  
-  //
-  // Initialize primary event generator and all sub makers
-  //
   _primary -> Init();
 
   command("gkine -4 0");
   command("gfile o pythia8.starsim.fzd");
   
 
-  //
-  // Trigger on nevents
-  //
   trig( nevents );
-
-  //
-  // Finish the chain
-  //
   chain->Finish();
-
-  //
-  // EXIT starsim
-  //
-  command("call agexit");  // Make sure that STARSIM exits properly
+  command("call agexit");  // ensure STARSIM exits properly
 
 }
 // ----------------------------------------------------------------------------

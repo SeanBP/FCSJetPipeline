@@ -1,9 +1,6 @@
-// Builds the JSON jet-energy-scale lookup table (JetEnergyScale_lookup*.json)
-// from a jet_calibration_grid*.root "bins" tree via numerical inversion:
-// per (x,y) position bin, fit <scale> vs <response> with a log-quadratic
-// background plus an optional Gaussian bump, then smooth the resulting
-// A/B/C/D/E0/sigma maps over the full position grid.
-//
+// Builds the JES lookup JSON from a jet_calibration_grid*.root "bins" tree:
+// per (x,y) bin, fit <scale> vs <response> (log-quadratic + optional
+// Gaussian bump), then smooth the A/B/C/D/E0/sigma maps over the grid.
 // C++ port of CalibrationMap.py -- same algorithm, no plotting.
 
 #include <TFile.h>
@@ -29,9 +26,7 @@
 #include <memory>
 #include <algorithm>
 
-// --------------------------------------------------
 // CONFIGURATION (mirrors CalibrationMap.py)
-// --------------------------------------------------
 
 std::string ROOT_FILE = "jet_calibration_grid_test.root";
 std::string OUTPUT_JSON = "JetEnergyScale_lookup_GridTest.json";
@@ -40,22 +35,18 @@ std::string OUTPUT_JSON = "JetEnergyScale_lookup_GridTest.json";
 // non-positive dof, so only the 3-parameter background is fit instead.
 const int MIN_POINTS_FOR_BUMP = 7;
 
-// See CalibrationMap.py for the derivation of these sanity cuts: they drop
-// the noise tail from (E,x,y) bins with too few reconstructed jets for
-// scale_mu/response_mu to be a meaningful fitted mean.
+// Sanity cuts dropping the noise tail from bins with too few jets for a
+// meaningful fitted mean (see CalibrationMap.py for derivation).
 const double RESPONSE_SANITY_FACTOR = 1.5;
 const double SCALE_SANITY_MAX = 1.5;
 
-// Fixed bounds for the Gaussian bump term (see CalibrationMap.py for
-// rationale). sigma's lower bound is pinned just above zero since it is a
-// denominator in the model.
+// Gaussian bump bounds; sigma's lower bound is pinned above zero (it's a denominator).
 const double D_MIN = 0.0, D_MAX = 0.2;
 const double E0_MIN = 10.0, E0_MAX = 35.0;
 const double SIGMA_MIN = 1e-3, SIGMA_MAX = 25.0;
 
-// Under the null hypothesis of no bump, chi2 improves by chance alone
-// following a chi-square distribution with 3 dof (Wilks' theorem); the
-// bump is only kept if it beats that quantile.
+// Bump kept only if its chi2 improvement beats the chance level for a
+// chi-square(3 dof) distribution (Wilks' theorem).
 const double BUMP_SIGNIFICANCE_CL = 0.5;
 
 // "a few percent" of each parameter's own range; a fit within this of
@@ -69,16 +60,11 @@ const double BUMP_PRESENT_THRESHOLD = 1e-4;
 // CalibrationMap.py).
 const int SMOOTH_N_ITER = 6;
 const int SMOOTH_RADIUS = 2;
-// -1 disables the fill-distance clip entirely: any position bin that never
-// got a direct fit inherits the neighborhood-average value computed by
-// smooth_map's own diffusion loop, instead of being reset back to NaN and
-// dropped. Positions with no fitted neighbor within reach (i.e. genuinely
-// outside the acceptance) still end up NaN on their own, since diffusion
-// has nothing finite to average from -- this isn't a fixed radius, it falls
-// out naturally from SMOOTH_N_ITER/SMOOTH_RADIUS.
+// -1 = no fill-distance clip: an unfit bin inherits smooth_map's diffusion
+// average instead of staying NaN (bins outside acceptance still end up NaN,
+// since diffusion has nothing finite nearby to average from).
 const int SMOOTH_MAX_FILL_DISTANCE = -1;
 
-// --------------------------------------------------
 struct BinRow
 {
     double x_center, y_center;
@@ -98,7 +84,6 @@ struct FitRow
 
 typedef std::vector<std::vector<double>> Grid2D;
 
-// --------------------------------------------------
 std::vector<BinRow> load_bins(const std::string &root_file)
 {
     TFile f(root_file.c_str());
@@ -142,7 +127,6 @@ std::vector<BinRow> load_bins(const std::string &root_file)
     return rows;
 }
 
-// --------------------------------------------------
 double log_quad_model(double E, double A, double B, double C)
 {
     double lnE = std::log(E);
@@ -154,7 +138,6 @@ double log_quad_gauss_model(double E, double A, double B, double C, double D, do
     return log_quad_model(E, A, B, C) + D * std::exp(-((E - E0) * (E - E0)) / (2 * sigma * sigma));
 }
 
-// --------------------------------------------------
 struct BackgroundChi2
 {
     const std::vector<double> &response, &scale, &scale_err;
@@ -189,10 +172,7 @@ struct GaussChi2
     }
 };
 
-// --------------------------------------------------
-// Bounded chi2 minimization. Mirrors scipy's L-BFGS-B-with-Powell-fallback:
-// Migrad is Minuit2's primary local minimizer, Simplex (derivative-free) is
-// the fallback when Migrad fails to converge.
+// Bounded chi2 minimization: Migrad (primary), Simplex fallback if it doesn't converge.
 bool minimize_once(
     ROOT::Math::Functor &func,
     const std::string &algo,
@@ -264,10 +244,8 @@ void fit_with_restarts(
     }
 }
 
-// --------------------------------------------------
-// True if value sits at (within rtol of) lo or hi. check_lower=false skips
-// the lower-bound check -- used for D, where the lower bound (0) is the
-// legitimate "no bump needed" outcome, not a sign of a degenerate fit.
+// True if value sits at (within rtol of) lo or hi. check_lower=false skips the
+// lower check -- for D, lower bound 0 is a legitimate "no bump" outcome, not degenerate.
 bool at_bound(double value, double lo, double hi, bool check_lower, double rtol = BOUND_HIT_RTOL)
 {
     double span = hi - lo;
@@ -279,7 +257,6 @@ bool at_bound(double value, double lo, double hi, bool check_lower, double rtol 
     return value >= hi - eps;
 }
 
-// --------------------------------------------------
 std::vector<double> linspace(double lo, double hi, int n)
 {
     std::vector<double> v(n);
@@ -293,11 +270,8 @@ std::vector<double> linspace(double lo, double hi, int n)
     return v;
 }
 
-// --------------------------------------------------
-// Fits the log-quadratic background, and the background-plus-bump model if
-// there are enough points, keeping the bump only if it clears the
-// significance bar and isn't pinned at a bound. Returns false if there are
-// too few finite points to attempt any fit at all.
+// Fits background, then background+bump if enough points (keeping the bump
+// only if significant and not bound-pinned). False if too few points to fit at all.
 bool fit_log_gauss_function_constrained(
     const std::vector<double> &response_in,
     const std::vector<double> &scale_in,
@@ -404,11 +378,8 @@ bool fit_log_gauss_function_constrained(
     return true;
 }
 
-// --------------------------------------------------
-// For each unique (x,y) position bin, filter to valid (E,x,y) entries and
-// fit <scale> vs <response>. Position bins with fewer than 4 valid entries,
-// or fewer than 3 finite ones after fit_log_gauss_function_constrained's own
-// masking, are dropped entirely (no fit row).
+// Per (x,y) bin, fit <scale> vs <response>; bins with <4 valid entries
+// (or <3 finite after masking) are dropped entirely.
 std::vector<FitRow> compute_all_regions(const std::vector<BinRow> &rows, double chi2_improvement_min)
 {
     std::map<std::pair<double, double>, std::vector<int>> groups;
@@ -482,7 +453,6 @@ std::vector<FitRow> compute_all_regions(const std::vector<BinRow> &rows, double 
     return fit_rows;
 }
 
-// --------------------------------------------------
 Grid2D make_nan_grid(int nx, int ny)
 {
     return Grid2D(nx, std::vector<double>(ny, std::numeric_limits<double>::quiet_NaN()));
@@ -540,7 +510,6 @@ std::map<std::string, Grid2D> build_coarse_maps(
     return maps;
 }
 
-// --------------------------------------------------
 // Fill every NaN cell inside footprint_mask with the single global mean of
 // all real (non-NaN) values in Z. Cells outside footprint_mask are left NaN.
 Grid2D fill_nan_global_mean(const Grid2D &Z, const std::vector<std::vector<bool>> &footprint_mask)
@@ -567,7 +536,6 @@ Grid2D fill_nan_global_mean(const Grid2D &Z, const std::vector<std::vector<bool>
     return out;
 }
 
-// --------------------------------------------------
 std::vector<std::vector<bool>> dilate(const std::vector<std::vector<bool>> &mask)
 {
     int nx = (int)mask.size();
@@ -592,10 +560,8 @@ std::vector<std::vector<bool>> dilate(const std::vector<std::vector<bool>> &mask
     return out;
 }
 
-// --------------------------------------------------
-// Neighbor-averaging smoother with MAD-based outlier rejection. See
-// smooth_map's docstring in CalibrationMap.py for the full parameter
-// rationale; behavior here is identical.
+// Neighbor-averaging smoother with MAD-based outlier rejection (see
+// CalibrationMap.py's smooth_map docstring for full parameter rationale).
 Grid2D smooth_map(
     const Grid2D &Z,
     int n_iter = SMOOTH_N_ITER,
@@ -735,7 +701,6 @@ Grid2D smooth_map(
     return Z_smooth;
 }
 
-// --------------------------------------------------
 void write_double(std::ostream &os, double v)
 {
     char buf[64];
@@ -743,7 +708,6 @@ void write_double(std::ostream &os, double v)
     os << buf;
 }
 
-// --------------------------------------------------
 void write_calibration_json(
     const std::vector<FitRow> &fit_rows_in,
     const std::vector<double> &xs,
@@ -769,15 +733,10 @@ void write_calibration_json(
     std::cout << "A real bump was fit for " << n_bump_cells << "/" << n_fit_cells
               << " calibrated grid cells (rest are background-only)" << std::endl;
 
-    // Every physics parameter is smoothed the same way: cells that never
-    // got a direct fit inherit the neighborhood average of nearby fitted
-    // cells (see smooth_map / SMOOTH_MAX_FILL_DISTANCE above). A/B/C/D all
-    // share the same NaN footprint from build_coarse_maps (a FitRow either
-    // sets all four or none), so they end up with matching filled
-    // footprints; E0/sigma have a larger NaN footprint (also NaN for
-    // genuine background-only fits, where D=0 makes their value physically
-    // irrelevant) and so may not always find a bump-bearing neighbor close
-    // enough to average from.
+    // Unfit cells inherit the neighborhood average via smooth_map. A/B/C/D
+    // share one NaN footprint (a FitRow sets all four or none); E0/sigma
+    // have a larger one (also NaN for background-only fits), so may not
+    // always find a bump-bearing neighbor to average from.
     std::map<std::string, Grid2D> smoothed_maps;
     for (const auto &param : all_params)
         smoothed_maps[param] = smooth_map(coarse_maps[param]);
@@ -795,12 +754,9 @@ void write_calibration_json(
     std::cout << "Filled " << n_abcd_filled << "/" << n_abcd_nan_before
               << " previously-empty position bins with the neighborhood average of nearby fits" << std::endl;
 
-    // Residual fallback: wherever A/B/C/D ended up finite (either from a
-    // direct fit or the neighborhood fill above) but E0/sigma still didn't
-    // -- no bump-bearing neighbor was reachable -- fall back to the global
-    // mean of all real bump E0/sigma values in this tune, rather than
-    // leaving them NaN (which would force a real, neighborhood-filled D
-    // bump term back down to 0 at save time, discarding it).
+    // Where A/B/C/D are finite but E0/sigma aren't (no bump-bearing neighbor
+    // reachable), fall back to the global mean bump E0/sigma rather than
+    // leaving NaN (which would zero out a real, filled D bump term at save time).
     std::vector<std::vector<bool>> has_abcd(xs.size(), std::vector<bool>(ys.size()));
     long n_e0_nan_before = 0;
     for (size_t i = 0; i < xs.size(); i++)
@@ -922,7 +878,6 @@ void write_calibration_json(
     std::cout << "Lookup table saved to " << save_file << std::endl;
 }
 
-// --------------------------------------------------
 int main(int argc, char **argv)
 {
     gROOT->SetBatch(kTRUE);

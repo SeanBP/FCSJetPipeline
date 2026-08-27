@@ -36,10 +36,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // ------------------ Trigger filter ------------------
-    // Comma-separated list of FcsTriggerDefs.h flag names; an event is
-    // kept if any of them fired. Empty/omitted -> no filtering, keep
-    // every event (unchanged behavior).
+    // Comma-separated FcsTriggerDefs.h flag names; kept if any fired, empty = keep all.
     vector<int> filterFlagIndices;
     if (argc >= 3 && string(argv[2]).size() > 0) {
         string filterArg = argv[2];
@@ -113,20 +110,26 @@ int main(int argc, char** argv) {
     outTree->Branch("reco_tau1", &reco_tau1);
     outTree->Branch("reco_tau2", &reco_tau2);
 
-    // Per-event FCS trigger flags, passed through from the SimpleTree
-    // (see FcsTriggerDefs.h) so each event's jets can be cut on which
-    // trigger(s) fired without a separate join back to the SimpleTree.
+    // Per-event FCS trigger flags, passed through from the SimpleTree (FcsTriggerDefs.h)
     Int_t Trig_flag[kNTrigFlags];
     for (int i = 0; i < kNTrigFlags; i++){
         outTree->Branch(kTrigFlagName[i], &Trig_flag[i], TString::Format("%s/I", kTrigFlagName[i]));
     }
 
-    // Per-event spin configuration, passed through from the SimpleTree
-    // (see StSimpleReaderMaker.h's Spin_config comment) -- StSpinDbMaker's
-    // spin4bits combined code, or -1 ("no data") wherever the offline
-    // spin DB doesn't cover this run/bunch crossing.
+    // Per-event spin config, passed through from the SimpleTree; -1 = no spin-DB coverage
     Int_t Spin_config;
     outTree->Branch("Spin_config", &Spin_config, "Spin_config/I");
+
+    // MC cross-section weighting branches, passed through from the SimpleTree
+    // for schema parity with sim_to_jet's jetTree (see JetMatcher.cpp /
+    // StSimpleReaderMaker::SetMCXSec()). Always the -1 sentinel here --
+    // data_to_jet's runMudst.C never calls SetMCXSec(), real data has no
+    // generator cross section.
+    Float_t mc_sigma_pb, mc_sigma_err_pb;
+    Int_t mc_n_gen;
+    outTree->Branch("mc_sigma_pb", &mc_sigma_pb, "mc_sigma_pb/F");
+    outTree->Branch("mc_sigma_err_pb", &mc_sigma_err_pb, "mc_sigma_err_pb/F");
+    outTree->Branch("mc_n_gen", &mc_n_gen, "mc_n_gen/I");
 
     const int MAX_HITS = 10000;
 
@@ -162,6 +165,13 @@ int main(int argc, char** argv) {
             tree->SetBranchAddress(kTrigFlagName[i], &Trig_flag[i]);
         }
         tree->SetBranchAddress("Spin_config", &Spin_config);
+
+        mc_sigma_pb = -1; mc_sigma_err_pb = -1; mc_n_gen = -1;
+        if ( tree->GetBranch("mc_sigma_pb") ) {
+            tree->SetBranchAddress("mc_sigma_pb", &mc_sigma_pb);
+            tree->SetBranchAddress("mc_sigma_err_pb", &mc_sigma_err_pb);
+            tree->SetBranchAddress("mc_n_gen", &mc_n_gen);
+        }
 
         Long64_t nentries = tree->GetEntries();
         cout << "Processing file: " << fname << " with " << nentries << " events." << endl;

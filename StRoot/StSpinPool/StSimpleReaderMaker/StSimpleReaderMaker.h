@@ -128,6 +128,23 @@ class StSimpleReaderMaker : public StMaker
   Int_t mSpinLastRunNumber = -1 ;
   int Spin_config ;
 
+  // MC cross-section bookkeeping (sim_to_jet only -- see SetMCXSec()).
+  // Constant for the whole job/file (one generator run = one ptHatMin bin =
+  // one sigmaGen), so these are set once via SetMCXSec() and just repeated
+  // on every Fill() rather than recomputed per event. -1 is the "not MC /
+  // not set" sentinel, same convention as Spin_config for real data (there
+  // SetMCXSec() is never called, so these three stay -1 for every event).
+  float mc_sigma_pb = -1;
+  float mc_sigma_err_pb = -1;
+  int mc_n_gen = -1;
+
+  // Generator-level ptHatMin cut for this job (sim_to_jet only -- see
+  // SetMCPtHatMin()). GeV; matches the ckin3 argument passed to
+  // Pythia8()/Pythia6() in starsim_pythia8_filter.C/starsim_pythia6_filter.C
+  // (the ${ptcut} shell variable in sim_to_jet.xml). Constant for the whole
+  // job/file, same convention/sentinel as mc_sigma_pb above.
+  float mc_pthatmin_gev = -1;
+
   // Retroactive HCAL gain-correction machinery (real data only -- see
   // FCSJetPipeline/data_to_jet/hcal_gain_corrections/README.md).
   // StFcsDb's HCAL gainCorrection is currently a flat 1.0 placeholder (no
@@ -185,6 +202,27 @@ class StSimpleReaderMaker : public StMaker
   // bunch-crossing id. Not called by sim_to_jet -- see Spin_config's
   // comment above for why simulated events always report -1 regardless.
   void SetSpinDb(StSpinDbMaker* spinDb) { mSpinDb = spinDb; }
+
+  // Sim-only mode (sim_to_jet): record this job's generator cross-section
+  // normalization on the SimpleTree, so it survives all the way to the
+  // JetTree (see JetMatcher.cpp) for per-event MC weighting. sigma_pb/
+  // sigmaErr_pb are the generator's total cross section (and its error) for
+  // this job's ptHatMin/ptHatMax phase-space cut, in pb; nGen is the number
+  // of hard-scattering trials that cross section corresponds to (PYTHIA's
+  // nAccepted/sumWeightGen -- the full generated sample, NOT the smaller
+  // count that survives FcsJetFilter: the filter only decides what gets
+  // written to disk, it doesn't change how much luminosity each surviving
+  // event represents). Not called by data_to_jet -- see mc_sigma_pb's
+  // comment in the header for why real data keeps the -1 sentinel.
+  void SetMCXSec(double sigma_pb, double sigmaErr_pb, int nGen) {
+    mc_sigma_pb = sigma_pb; mc_sigma_err_pb = sigmaErr_pb; mc_n_gen = nGen;
+  }
+
+  // Sim-only mode (sim_to_jet): record this job's generator-level ptHatMin
+  // cut (ckin3 in starsim_pythia8_filter.C/starsim_pythia6_filter.C), so it
+  // survives to the JetTree (see JetMatcher.cpp) alongside mc_sigma_pb. Not
+  // called by data_to_jet -- see mc_pthatmin_gev's comment in the header.
+  void SetMCPtHatMin(double pthatmin_gev) { mc_pthatmin_gev = pthatmin_gev; }
 
   // Real-data mode (data_to_jet): enable retroactive HCAL gain
   // correction. manifestDir is the folder containing manifest.txt and

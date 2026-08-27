@@ -17,9 +17,7 @@
 
 #include "JetParameters.h"
 
-// --------------------------------------------------
 // CONFIGURATION
-// --------------------------------------------------
 
 std::string input_dir = "/star/data01/pwg/seanp/tunes/pythia8_nnpdf23lo/JetTrees/";
 std::string tree_name = "jetTree";
@@ -55,7 +53,6 @@ double grid_spacing = 2.5;
 // included in its histogram
 double match_radius = 5.0;
 
-// --------------------------------------------------
 struct FitResult
 {
     double mu;
@@ -72,7 +69,6 @@ struct FitResult
           chi2_ndf(NAN) {}
 };
 
-// --------------------------------------------------
 inline int FindBin(double v, const std::vector<double> &b)
 {
     if (v < b.front() || v >= b.back())
@@ -92,7 +88,6 @@ inline int FindBin(double v, const std::vector<double> &b)
     return low;
 }
 
-// --------------------------------------------------
 struct BinKey
 {
     int q, ix, iy, ie;
@@ -114,7 +109,6 @@ struct BinKeyHash
     }
 };
 
-// --------------------------------------------------
 struct BinData
 {
     double scale_mu;
@@ -135,14 +129,12 @@ struct BinData
           resp_mu_err(re) {}
 };
 
-// --------------------------------------------------
 struct BinAccum
 {
     std::vector<float> resp_vals;
     std::vector<float> scale_vals;
 };
 
-// --------------------------------------------------
 FitResult gaussian_fit(const std::vector<double> &v)
 {
     FitResult r;
@@ -184,7 +176,6 @@ FitResult gaussian_fit(const std::vector<double> &v)
     return r;
 }
 
-// --------------------------------------------------
 int main(int argc, char** argv)
 {
     gROOT->SetBatch(kTRUE);
@@ -209,9 +200,7 @@ int main(int argc, char** argv)
             root_files.push_back(input_dir + fname);
     }
 
-    // --------------------------------------------------
     // Precompute bin edges
-    // --------------------------------------------------
 
     std::vector<double> e_bins(n_bins_E + 1);
     for (int i = 0; i <= n_bins_E; i++)
@@ -230,9 +219,8 @@ int main(int argc, char** argv)
     for (int i = 0; i < n_grid_y; i++)
         y_grid[i] = y_min + i * grid_spacing;
 
-    // eta/phi of every grid point, and whether it lies in the region reco
-    // jets can actually be reconstructed in (same fiducial buffer cut used
-    // for reco jet selection in JetMatcher)
+    // eta/phi of every grid point, and whether it's in the reconstructable
+    // fiducial region (same buffer cut as JetMatcher's reco jet selection)
     std::vector<std::vector<double>> grid_eta(n_grid_x, std::vector<double>(n_grid_y));
     std::vector<std::vector<double>> grid_phi(n_grid_x, std::vector<double>(n_grid_y));
     std::vector<std::vector<bool>> grid_valid(n_grid_x, std::vector<bool>(n_grid_y));
@@ -244,9 +232,7 @@ int main(int argc, char** argv)
         grid_valid[ix][iy] = pass_fiducial_cut((float)x_grid[ix], (float)y_grid[iy], reco_fiducial_buffer);
     }
 
-    // --------------------------------------------------
     // Accumulate per-bin values directly (memory-efficient)
-    // --------------------------------------------------
 
     std::unordered_map<BinKey, BinAccum, BinKeyHash> bin_accum;
 
@@ -303,9 +289,8 @@ int main(int argc, char** argv)
 
                 double scale = reco / truth;
 
-                // include this jet in every grid point within match_radius in x-y (detector
-                // surface) distance; since the grid is evenly spaced, the affected index
-                // range can be computed directly
+                // Include this jet at every grid point within match_radius (index
+                // range computed directly since the grid is evenly spaced).
                 int ix_lo = std::max(0, (int)std::floor((x - match_radius - x_min) / grid_spacing));
                 int ix_hi = std::min(n_grid_x - 1, (int)std::ceil((x + match_radius - x_min) / grid_spacing));
                 int iy_lo = std::max(0, (int)std::floor((y - match_radius - y_min) / grid_spacing));
@@ -336,9 +321,7 @@ int main(int argc, char** argv)
         delete f;
     }
 
-    // --------------------------------------------------
     // Fit per-bin
-    // --------------------------------------------------
 
     std::unordered_map<BinKey, BinData, BinKeyHash> bin_mu_map;
 
@@ -362,9 +345,7 @@ int main(int argc, char** argv)
         bin_mu_map[it->first] = BinData(sc.mu, resp.mu, sc.mu_err, resp.mu_err);
     }
 
-    // --------------------------------------------------
     // Output
-    // --------------------------------------------------
 
     TFile fout("jet_calibration.root", "RECREATE");
     TTree t("bins", "calibration bins");

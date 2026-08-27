@@ -4,22 +4,16 @@
 #   ./submit_data_to_jet.sh -f <listfile> -s <0|1> -o <outdir> \
 #       [-j <nprocesses>] [-l <label>] [-k <0|1>] [-t <triggers>]
 #
-#   -f  absolute path to a file catalog list (one file per line, in the
-#       "path,filename,events" format MakeRunList.pl writes: an xrootd URL
-#       or local path, with the event count appended as a trailing
-#       event-count number)
-#   -s  1 to keep the intermediate SimpleTree_mudst files, 0 to discard them
+#   -f  absolute path to a file catalog list (MakeRunList.pl's
+#       "path,filename,events" format: xrootd URL or local path, event
+#       count appended as a trailing number)
+#   -s  1 = keep intermediate SimpleTree_mudst files, 0 = discard
 #   -o  output directory (created if missing)
-#   -j  number of parallel jobs (nProcesses); the listfile's lines are
-#       split evenly across them, default 1
-#   -l  short label used only in the generated XML's filename, default "run"
-#   -k  1 to save each job's stdout/stderr under <outdir>/log/ (auto-
-#       created), 0 to discard them, default 0
-#   -t  comma-separated FCS trigger flag names (see FcsTriggerDefs.h /
-#       TriggerIDs.txt, e.g. "fcsJP2,fcsJPA0,fcsJPA1,fcsJPBC0,fcsJPBC1,
-#       fcsJPDE0,fcsJPDE1" for jet-patch triggers) -- an event only gets a
-#       jetTree entry if at least one of them fired. Omit/empty (default)
-#       keeps every event; the SimpleTree itself is never filtered.
+#   -j  number of parallel jobs; listfile lines split evenly across them, default 1
+#   -l  short label for the generated XML's filename, default "run"
+#   -k  1 = save stdout/stderr under <outdir>/log/, 0 = discard, default 0
+#   -t  comma-separated FCS trigger flag names (see FcsTriggerDefs.h); an
+#       event only gets a jetTree entry if one fired. Empty = keep every event.
 #
 # Example:
 #   ./submit_data_to_jet.sh -f /star/u/seanp/FCSJetPipeline/catalog/run22.list \
@@ -46,7 +40,7 @@ while getopts "f:s:o:j:l:k:t:h" opt; do
     k) KEEPLOGS="$OPTARG" ;;
     t) TRIGGER_FILTER="$OPTARG" ;;
     h|*)
-      sed -n '2,27p' "$0"
+      sed -n '2,21p' "$0"
       exit 0
       ;;
   esac
@@ -62,24 +56,13 @@ if [ ! -f "$LISTFILE" ]; then
     exit 1
 fi
 
-# This script lives in data_to_jet/. data_to_jet.xml's SandBox <File>
-# paths are relative to the pipeline root (SUMS packages each <File>
-# preserving that relative path, e.g. data_to_jet/runMudst.C -- confirmed
-# directly from a real job's .package.zip), so star-submit MUST run from
-# there, not from a dedicated submit folder (an absolute SandBox path
-# would repackage everything under the wrong subpath and break the
-# `cp data_to_jet/* .` step in data_to_jet.xml). Instead, the
-# sched*/*.package/*.csh/*.list/*.condor files star-submit drops in the
-# CWD it runs from are swept into submit/ (a dedicated folder) right
-# after submission -- see the marker-file logic below (this used to dump
-# ~9000 files/~100MB directly into FCSJetPipeline/ over a handful of
-# submissions before that cleanup step existed).
+# SandBox <File> paths in data_to_jet.xml are pipeline-root-relative, so
+# star-submit must run from there, not from here.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIPELINE_ROOT="$(dirname "${SCRIPT_DIR}")"
 OUTXML="${SCRIPT_DIR}/data_to_jet_${LABEL}.xml"
 
-# Fail fast on a typo'd trigger name here, rather than have it silently
-# error out inside a job whose logs are discarded by default (-k 0).
+# Fail fast on a typo'd trigger name, rather than inside a job with discarded logs.
 if [ -n "$TRIGGER_FILTER" ]; then
     VALID_NAMES=$(awk '/kTrigFlagName\[kNTrigFlags\]/{flag=1; next} flag && /};/{flag=0} flag' "${SCRIPT_DIR}/FcsTriggerDefs.h" | sed -e 's/^[[:space:]]*"//' -e 's/",$//')
     IFS=',' read -ra REQUESTED <<< "$TRIGGER_FILTER"
@@ -122,5 +105,18 @@ MARKER=$(mktemp)
 star-submit "data_to_jet/data_to_jet_${LABEL}.xml"
 SUBMIT_DIR="${PIPELINE_ROOT}/submit"
 mkdir -p "${SUBMIT_DIR}"
-find "${PIPELINE_ROOT}" -maxdepth 1 -name 'sched*' -newer "${MARKER}" -exec mv -t "${SUBMIT_DIR}" {} +
+
+# sched*/.csh/.package files are read from PIPELINE_ROOT by their original
+# path at job start, not transferred by condor -- sweeping immediately races
+# job startup and kills jobs. Defer the sweep until condor_wait confirms
+# this submission's own jobs are done, in the background.
+REPORT=$(find "${PIPELINE_ROOT}" -maxdepth 1 -name 'sched*.report' -newer "${MARKER}")
+REQID=$(basename "${REPORT}" .report | sed 's/^sched//')
+# Read the real Log path from the .condor file rather than assuming
+# /tmp/$USER/... -- a wrong guess makes condor_wait fail immediately, so
+# also gate the sweep on its exit status.
+CONDORFILE=$(find "${PIPELINE_ROOT}" -maxdepth 1 -name "sched${REQID}_*.condor" -newer "${MARKER}" | head -1)
+CONDORLOG=$(grep -m1 '^Log' "${CONDORFILE}" | sed -e 's/^Log[[:space:]]*=[[:space:]]*//')
+nohup bash -c "if condor_wait '${CONDORLOG}' >/dev/null 2>&1; then find '${PIPELINE_ROOT}' -maxdepth 1 -name 'sched${REQID}*' -exec mv -t '${SUBMIT_DIR}' {} +; else echo \"condor_wait failed for ${REQID} (log='${CONDORLOG}') -- NOT sweeping, leaving sched files in place\" >> '${PIPELINE_ROOT}/submit/.sweep_failures.log'; fi" >/dev/null 2>&1 &
+disown
 rm -f "${MARKER}"

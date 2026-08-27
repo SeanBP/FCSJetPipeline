@@ -37,11 +37,7 @@ int main(int argc, char** argv) {
     while (getline(infile, line))
         if (!line.empty()) file_names.push_back(line);
 
-    // ------------------ Trigger filter ------------------
-    // Comma-separated list of FcsTriggerDefs.h flag names; an event is
-    // kept if any of them fired. Empty/omitted -> no filtering, keep
-    // every event (unchanged behavior). Same convention as RecoJets.cpp
-    // (data_to_jet's jet finder).
+    // Comma-separated FcsTriggerDefs.h flag names; kept if any fired, empty = keep all.
     vector<int> filterFlagIndices;
     if (argc >= 3 && string(argv[2]).size() > 0) {
         string filterArg = argv[2];
@@ -138,22 +134,33 @@ int main(int argc, char** argv) {
     outTree->Branch("truth_const_pid", &truth_const_pid);
     outTree->Branch("truth_nconst", &truth_nconst);
 
-    // Per-event FCS trigger flags, passed through from the SimpleTree
-    // (see FcsTriggerDefs.h), same convention as RecoJets.cpp
-    // (data_to_jet's jet finder) so both pipelines' JetTrees carry the
-    // same branches.
+    // Per-event FCS trigger flags, passed through from the SimpleTree (FcsTriggerDefs.h)
     Int_t Trig_flag[kNTrigFlags];
     for (int i = 0; i < kNTrigFlags; i++){
         outTree->Branch(kTrigFlagName[i], &Trig_flag[i], TString::Format("%s/I", kTrigFlagName[i]));
     }
 
-    // Per-event spin configuration, same branch as RecoJets.cpp/
-    // data_to_jet for schema consistency -- always -1 ("no data") here,
-    // since sim_to_jet's readMudst.C never calls StSimpleReaderMaker::
-    // SetSpinDb() (simulated events have no real polarization pattern to
-    // report; see StSimpleReaderMaker.h's Spin_config comment).
+    // Schema consistency with data_to_jet; always -1 here (sim has no real spin data)
     Int_t Spin_config;
     outTree->Branch("Spin_config", &Spin_config, "Spin_config/I");
+
+    // Per-event MC cross-section weighting, passed through from the
+    // SimpleTree (see StSimpleReaderMaker::SetMCXSec()). Bound fresh from
+    // each input file's own "data" tree inside the loop below, so a
+    // jetTree built from several SimpleTree files (different ptHatMin
+    // bins/generation jobs) still carries the right sigma/nGen per row --
+    // -1 sentinel if a source SimpleTree predates this bookkeeping.
+    Float_t mc_sigma_pb, mc_sigma_err_pb;
+    Int_t mc_n_gen;
+    outTree->Branch("mc_sigma_pb", &mc_sigma_pb, "mc_sigma_pb/F");
+    outTree->Branch("mc_sigma_err_pb", &mc_sigma_err_pb, "mc_sigma_err_pb/F");
+    outTree->Branch("mc_n_gen", &mc_n_gen, "mc_n_gen/I");
+
+    // Generator-level ptHatMin cut for this job (see
+    // StSimpleReaderMaker::SetMCPtHatMin()), same passthrough/-1-sentinel
+    // convention as mc_sigma_pb above.
+    Float_t mc_pthatmin_gev;
+    outTree->Branch("mc_pthatmin_gev", &mc_pthatmin_gev, "mc_pthatmin_gev/F");
 
     TDatabasePDG* pdgDB = TDatabasePDG::Instance();
 
@@ -200,6 +207,20 @@ int main(int argc, char** argv) {
             tree->SetBranchAddress(kTrigFlagName[i], &Trig_flag[i]);
         }
         tree->SetBranchAddress("Spin_config", &Spin_config);
+
+        // -1 sentinel by default; overridden below only if this particular
+        // input file actually has the branch (older SimpleTree files won't).
+        mc_sigma_pb = -1; mc_sigma_err_pb = -1; mc_n_gen = -1;
+        if ( tree->GetBranch("mc_sigma_pb") ) {
+            tree->SetBranchAddress("mc_sigma_pb", &mc_sigma_pb);
+            tree->SetBranchAddress("mc_sigma_err_pb", &mc_sigma_err_pb);
+            tree->SetBranchAddress("mc_n_gen", &mc_n_gen);
+        }
+
+        mc_pthatmin_gev = -1;
+        if ( tree->GetBranch("mc_pthatmin_gev") ) {
+            tree->SetBranchAddress("mc_pthatmin_gev", &mc_pthatmin_gev);
+        }
 
         Long64_t nentries = tree->GetEntries();
 
@@ -258,19 +279,10 @@ int main(int argc, char** argv) {
             vector<PseudoJet> truth_jets_selected;
 
             for (auto &jet : truth_all) {
-                // Truth particles are NOT eta-restricted before clustering
-                // (only mcpart_idVtx[i]==1, i.e. primary-vertex, above), so
-                // a jet built mostly/entirely from backward-going
-                // beam-remnant/ISR particles can have jet.pz()<=0. The
-                // jetXE/jetYE projection below assumes forward propagation
-                // to the z=+z_proj plane; for pz<=0 it instead evaluates to
-                // the point where the BACKWARD-extended ray crosses that
-                // plane -- a well-defined but physically meaningless
-                // number that can spuriously fall inside the fiducial
-                // rectangle. Reco jets don't need this guard: they're
-                // built from real calorimeter hit positions, which are
-                // always at the FCS's fixed forward z, so jet.pz() there
-                // is structurally always positive.
+                // Truth isn't eta-restricted before clustering, so a backward-going
+                // (pz<=0) jet's forward-z projection below would be meaningless but
+                // could spuriously pass the fiducial cut. Reco jets don't need this
+                // guard (calorimeter hits are always at fixed forward z).
                 if (jet.pz() <= 0) continue;
 
                 float jetXE = z_proj * jet.px() / jet.pz();

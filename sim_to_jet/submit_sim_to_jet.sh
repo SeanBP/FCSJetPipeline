@@ -3,45 +3,36 @@
 # Usage:
 #   ./submit_sim_to_jet.sh -g <pythia8|pythia6> -t <tune_param> -p <ptcut> \
 #       -n <nevents> -s <0|1> -o <outdir> [-j <nprocesses>] [-l <label>] \
-#       [-k <0|1>] [-f <triggers>] [-c <run_number>]
+#       [-k <0|1>] [-f <triggers>] [-c <run_number>] [-e <filter_ethr>]
 #
 #   -g  generator: pythia8 or pythia6
-#   -t  tune/PDF param: pythia8 PDF:pSet int (8=CTEQ6L1, 5=MSTW2008LO,
-#       3=MRST LO*, 21=NNPDF3.1sx, <=0=default) or pythia6 PyTune int
-#       (325=Perugia STAR, 0=Pythia6 default)
-#   -p  ptHatMin cut in GeV (single flat value for every job; ignored if
-#       -w is given)
+#   -t  tune/PDF: pythia8 PDF:pSet (8=CTEQ6L1, 5=MSTW2008LO, 3=MRST LO*,
+#       21=NNPDF3.1sx, <=0=default); pythia6 PyTune (325=Perugia STAR, 0=default)
+#   -p  ptHatMin cut in GeV, flat for every job (ignored if -w given)
 #   -n  events per job
-#   -s  1 to keep the intermediate SimpleTree, 0 to discard it
+#   -s  1 = keep intermediate SimpleTree, 0 = discard
 #   -o  output directory (created if missing)
 #   -j  number of parallel jobs (nProcesses), default 1
-#   -w  optional: absolute path to a JSON file giving the relative
-#       proportions of ptHatMin cuts to sample across the -j jobs (see
-#       pthat_distribution_optimized.json for the format/an example);
-#       overrides -p
-#   -l  short label used only in the generated XML's filename, default "run"
-#   -k  1 to save each job's stdout/stderr under <outdir>/log/ (auto-
-#       created), 0 to discard them, default 0
-#   -f  comma-separated FCS trigger flag names (see FcsTriggerDefs.h /
-#       TriggerIDs.txt, e.g. "fcsJP2,fcsJPA0,fcsJPA1,fcsJPBC0,fcsJPBC1,
-#       fcsJPDE0,fcsJPDE1" for jet-patch triggers) -- an event only gets a
-#       jetTree entry if at least one of them fired. Omit/empty (default)
-#       keeps every event; the SimpleTree itself is never filtered.
-#       (Called -f here, not -t like data_to_jet's equivalent flag,
-#       since -t is already taken by the tune/PDF param above.)
-#   -c  a real Run 22 run number (e.g. 23101043) whose FCS gain/
-#       gainCorrection calibration era should be used for the simulated
-#       detector response, instead of BFC's own nominal "y2023" date.
-#       Omit/0 (default) = don't override. See RunNumberToDate() in
-#       runSimBfc.C for the run-number -> calendar-date conversion
-#       (verified empirically -- the run number's year code is NOT the
-#       real calendar year, e.g. 22359013 is really 2021-12-25).
+#   -w  absolute path to a JSON of relative ptHatMin proportions to sample
+#       across the -j jobs (see pthat_distribution_optimized.json); overrides -p
+#   -l  short label for the generated XML's filename, default "run"
+#   -k  1 = save stdout/stderr under <outdir>/log/, 0 = discard, default 0
+#   -f  comma-separated FCS trigger flag names (see FcsTriggerDefs.h); an
+#       event only gets a jetTree entry if one fired. Empty = keep every event.
+#   -c  real Run 22 run number to pin the FCS gain/gainCorrection calibration
+#       era to (see RunNumberToDate() in runSimBfc.C). 0/omit = BFC's own
+#       nominal date.
+#   -e  FcsJetFilter's generator-level forward-flux accept threshold, GeV.
+#       An event is kept only if projected flux onto one FCS arm exceeds
+#       this (StRoot/StarGenerator/FILT/FcsJetFilter.cxx). Default 50.0,
+#       the original hardcoded value before this flag existed. Pass 0 to
+#       disable the filter (accept every generated event).
 #
 # Example:
 #   ./submit_sim_to_jet.sh -g pythia8 -t 8 -p 10 -n 500 -s 0 \
 #       -o /star/data01/pwg/seanp/pipeline_output/cteq6l1_pt10_test \
 #       -f "fcsJP2,fcsJPA0,fcsJPA1,fcsJPBC0,fcsJPBC1,fcsJPDE0,fcsJPDE1" \
-#       -c 23101043
+#       -c 23101043 -e 50.0
 
 set -e
 
@@ -57,8 +48,9 @@ LABEL="run"
 KEEPLOGS=0
 TRIGGER_FILTER=""
 CALIB_RUN=0
+FILTER_ETHR=50.0
 
-while getopts "g:t:p:n:s:o:j:w:l:k:f:c:h" opt; do
+while getopts "g:t:p:n:s:o:j:w:l:k:f:c:e:h" opt; do
   case $opt in
     g) GENERATOR="$OPTARG" ;;
     t) TUNE_PARAM="$OPTARG" ;;
@@ -72,8 +64,9 @@ while getopts "g:t:p:n:s:o:j:w:l:k:f:c:h" opt; do
     k) KEEPLOGS="$OPTARG" ;;
     f) TRIGGER_FILTER="$OPTARG" ;;
     c) CALIB_RUN="$OPTARG" ;;
+    e) FILTER_ETHR="$OPTARG" ;;
     h|*)
-      sed -n '2,44p' "$0"
+      sed -n '2,34p' "$0"
       exit 0
       ;;
   esac
@@ -104,20 +97,13 @@ if ! [[ "$CALIB_RUN" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
-# This script lives in sim_to_jet/. sim_to_jet.xml's SandBox <File> paths
-# are relative to the pipeline root (SUMS packages each <File> preserving
-# that relative path, e.g. sim_to_jet/runSimBfc.C -- confirmed directly
-# from a real job's .package.zip), so star-submit MUST run from there,
-# not from a dedicated submit folder. Instead, the sched*/*.package/*.csh/
-# *.list/*.condor files star-submit drops in the CWD it runs from are
-# swept into submit/ (a dedicated folder) right after submission -- see
-# the marker-file logic below.
+# SandBox <File> paths in sim_to_jet.xml are pipeline-root-relative, so
+# star-submit must run from there, not from here.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIPELINE_ROOT="$(dirname "${SCRIPT_DIR}")"
 OUTXML="${SCRIPT_DIR}/sim_to_jet_${LABEL}.xml"
 
-# Fail fast on a typo'd trigger name here, rather than have it silently
-# error out inside a job whose logs are discarded by default (-k 0).
+# Fail fast on a typo'd trigger name, rather than inside a job with discarded logs.
 if [ -n "$TRIGGER_FILTER" ]; then
     VALID_NAMES=$(awk '/kTrigFlagName\[kNTrigFlags\]/{flag=1; next} flag && /};/{flag=0} flag' "${SCRIPT_DIR}/FcsTriggerDefs.h" | sed -e 's/^[[:space:]]*"//' -e 's/",$//')
     IFS=',' read -ra REQUESTED <<< "$TRIGGER_FILTER"
@@ -143,7 +129,7 @@ fi
 
 export XML_IN="${SCRIPT_DIR}/sim_to_jet.xml"
 export XML_OUT="${OUTXML}"
-export GENERATOR TUNE_PARAM PTCUT NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN
+export GENERATOR TUNE_PARAM PTCUT NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR
 
 python3 << 'PYEOF'
 import json
@@ -192,6 +178,7 @@ xml = xml.replace("{{STDOUT_URL}}", os.environ["STDOUT_URL"])
 xml = xml.replace("{{STDERR_URL}}", os.environ["STDERR_URL"])
 xml = xml.replace("{{TRIGGER_FILTER}}", os.environ.get("TRIGGER_FILTER", ""))
 xml = xml.replace("{{CALIB_RUN}}", os.environ.get("CALIB_RUN", "0"))
+xml = xml.replace("{{FILTER_ETHR}}", os.environ.get("FILTER_ETHR", "50.0"))
 
 with open(os.environ["XML_OUT"], "w") as f:
     f.write(xml)
@@ -199,9 +186,9 @@ PYEOF
 
 echo "Generated ${OUTXML}"
 if [ -n "$PTCUT_JSON" ]; then
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR}"
 else
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR}"
 fi
 
 mkdir -p "${OUTDIR}"
@@ -211,5 +198,18 @@ MARKER=$(mktemp)
 star-submit "sim_to_jet/sim_to_jet_${LABEL}.xml"
 SUBMIT_DIR="${PIPELINE_ROOT}/submit"
 mkdir -p "${SUBMIT_DIR}"
-find "${PIPELINE_ROOT}" -maxdepth 1 -name 'sched*' -newer "${MARKER}" -exec mv -t "${SUBMIT_DIR}" {} +
+
+# sched*/.csh/.package files are read from PIPELINE_ROOT by their original
+# path at job start, not transferred by condor -- sweeping immediately races
+# job startup and kills jobs. Defer the sweep until condor_wait confirms
+# this submission's own jobs are done, in the background.
+REPORT=$(find "${PIPELINE_ROOT}" -maxdepth 1 -name 'sched*.report' -newer "${MARKER}")
+REQID=$(basename "${REPORT}" .report | sed 's/^sched//')
+# Read the real Log path from the .condor file rather than assuming
+# /tmp/$USER/... -- a wrong guess makes condor_wait fail immediately, so
+# also gate the sweep on its exit status.
+CONDORFILE=$(find "${PIPELINE_ROOT}" -maxdepth 1 -name "sched${REQID}_*.condor" -newer "${MARKER}" | head -1)
+CONDORLOG=$(grep -m1 '^Log' "${CONDORFILE}" | sed -e 's/^Log[[:space:]]*=[[:space:]]*//')
+nohup bash -c "if condor_wait '${CONDORLOG}' >/dev/null 2>&1; then find '${PIPELINE_ROOT}' -maxdepth 1 -name 'sched${REQID}*' -exec mv -t '${SUBMIT_DIR}' {} +; else echo \"condor_wait failed for ${REQID} (log='${CONDORLOG}') -- NOT sweeping, leaving sched files in place\" >> '${PIPELINE_ROOT}/submit/.sweep_failures.log'; fi" >/dev/null 2>&1 &
+disown
 rm -f "${MARKER}"

@@ -7,10 +7,8 @@
 #       every file in it is modified in place (no undo)
 #   -c  absolute path to the calibration JSON lookup table
 #   -j  number of parallel jobs to evenly split the folder's files across
-#   -l  short label used only in the generated XML's filename, default "run"
-#   -k  1 to save each job's stdout/stderr under <jettrees_dir>/log/
-#       (auto-created; there's no separate output dir for this in-place
-#       pipeline), 0 to discard them, default 0
+#   -l  short label for the generated XML's filename, default "run"
+#   -k  1 = save stdout/stderr under <jettrees_dir>/log/, 0 = discard, default 0
 #
 # Example:
 #   ./submit_jet_calibration.sh -i /star/data01/pwg/seanp/tunes/pythia8_mstw2008lo/JetTrees \
@@ -72,14 +70,8 @@ if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
     exit 1
 fi
 
-# This script lives in jet_calibration/. jet_calibration.xml's SandBox
-# <File> paths are relative to the pipeline root (SUMS packages each
-# <File> preserving that relative path -- confirmed directly from a real
-# job's .package.zip), so star-submit MUST run from there, not from a
-# dedicated submit folder. Instead, the sched*/*.package/*.csh/*.list/
-# *.condor files star-submit drops in the CWD it runs from are swept into
-# submit/ (a dedicated folder) right after submission -- see the
-# marker-file logic below.
+# SandBox <File> paths in jet_calibration.xml are pipeline-root-relative,
+# so star-submit must run from there, not from here.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIPELINE_ROOT="$(dirname "${SCRIPT_DIR}")"
 OUTXML="${SCRIPT_DIR}/jet_calibration_${LABEL}.xml"
@@ -108,5 +100,18 @@ MARKER=$(mktemp)
 star-submit "jet_calibration/jet_calibration_${LABEL}.xml"
 SUBMIT_DIR="${PIPELINE_ROOT}/submit"
 mkdir -p "${SUBMIT_DIR}"
-find "${PIPELINE_ROOT}" -maxdepth 1 -name 'sched*' -newer "${MARKER}" -exec mv -t "${SUBMIT_DIR}" {} +
+
+# sched*/.csh/.package files are read from PIPELINE_ROOT by their original
+# path at job start, not transferred by condor -- sweeping immediately races
+# job startup and kills jobs. Defer the sweep until condor_wait confirms
+# this submission's own jobs are done, in the background.
+REPORT=$(find "${PIPELINE_ROOT}" -maxdepth 1 -name 'sched*.report' -newer "${MARKER}")
+REQID=$(basename "${REPORT}" .report | sed 's/^sched//')
+# Read the real Log path from the .condor file rather than assuming
+# /tmp/$USER/... -- a wrong guess makes condor_wait fail immediately, so
+# also gate the sweep on its exit status.
+CONDORFILE=$(find "${PIPELINE_ROOT}" -maxdepth 1 -name "sched${REQID}_*.condor" -newer "${MARKER}" | head -1)
+CONDORLOG=$(grep -m1 '^Log' "${CONDORFILE}" | sed -e 's/^Log[[:space:]]*=[[:space:]]*//')
+nohup bash -c "if condor_wait '${CONDORLOG}' >/dev/null 2>&1; then find '${PIPELINE_ROOT}' -maxdepth 1 -name 'sched${REQID}*' -exec mv -t '${SUBMIT_DIR}' {} +; else echo \"condor_wait failed for ${REQID} (log='${CONDORLOG}') -- NOT sweeping, leaving sched files in place\" >> '${PIPELINE_ROOT}/submit/.sweep_failures.log'; fi" >/dev/null 2>&1 &
+disown
 rm -f "${MARKER}"

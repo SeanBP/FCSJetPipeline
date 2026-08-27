@@ -1,73 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <!--
-    Data-to-jet pipeline: MuDst -> SimpleTree (runMudst.C, reco-only; the
-    MuDst already went through official offline production, so this does
-    not rerun BFC/clustering, just reads it) -> jet finding, for real
-    STAR MuDst files. No intermediate multi-file list-building step (like
-    the old make_prod_lists.sh) is needed: every line of the raw file list
-    produced by MakeRunList.pl is split evenly across {{NPROCESSES}} jobs
-    (contiguous, non-overlapping ranges). A job handling several files
-    still runs RecoJets once per SimpleTree file rather than combining
-    them, so every jet_output file keeps a matching SimpleTree_mudst file
-    with the same run/segment filename suffix, and the two can be linked
-    back together to look up the same event later.
+    Data-to-jet pipeline: MuDst -> SimpleTree (runMudst.C, reco-only,
+    reads already-officially-produced MuDst) -> jet finding, for real
+    STAR MuDst files. Every line of the file list from MakeRunList.pl is
+    split evenly across {{NPROCESSES}} jobs; each job runs RecoJets once
+    per SimpleTree file (not combined), so every jet_output file keeps a
+    matching SimpleTree_mudst filename suffix for later linking.
 
-    Companion to ../sim_to_jet/sim_to_jet.xml; both compile against the
-    same shared ../shared/JetParameters.h, so editing that one file
-    updates the physics constants/cuts used by simulation and production
-    jet-finding together.
+    Companion to ../sim_to_jet/sim_to_jet.xml, sharing ../shared/JetParameters.h.
 
-    Configurable per submission:
-      {{LISTFILE}}       absolute path to a file catalog list (one file
-                          per line, in the "path,filename,events" format
-                          MakeRunList.pl writes: an xrootd URL or local
-                          path, with the event count appended as a
-                          trailing event-count number).
-      {{NPROCESSES}}      number of parallel jobs to evenly split the
-                          list's lines across.
-      {{SAVE_SIMPLETREE}} 1 = keep every intermediate SimpleTree_mudst_*.root,
-                          0 = discard them after jet finding runs.
-      {{TRIGGER_FILTER}}  comma-separated FCS trigger flag names (see
-                          FcsTriggerDefs.h); an event only gets a
-                          jetTree entry if at least one of them fired.
-                          Empty = keep every event (default, unchanged
-                          behavior). The SimpleTree itself is never
-                          filtered, only jetTree entries are skipped.
-      {{OUTDIR}}          absolute output directory (created if missing).
-      {{STDOUT_URL}}      where SUMS copies each job's captured stdout.
-      {{STDERR_URL}}      where SUMS copies each job's captured stderr.
-                          submit_data_to_jet.sh's -k flag controls both
-                          (0 = discard to /dev/null, default; 1 = save
-                          under {{OUTDIR}}/log/, auto-created).
+    Configurable per submission (filled in by submit_data_to_jet.sh, see its -h):
+      {{LISTFILE}}        absolute path to a MakeRunList.pl-format catalog list
+      {{NPROCESSES}}      number of parallel jobs to split the list across
+      {{SAVE_SIMPLETREE}} 1 = keep intermediate SimpleTree_mudst_*.root, 0 = discard
+      {{TRIGGER_FILTER}}  comma-separated FCS trigger names (FcsTriggerDefs.h);
+                          jetTree entry only if one fired, empty = keep all
+      {{OUTDIR}}          absolute output directory
+      {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
 
-    To generate and submit, use submit_data_to_jet.sh (see its -h), which
-    wraps the sed substitution + star-submit shown below. The SandBox
-    <File> paths below are relative to the pipeline root, so star-submit
-    must actually run from there (SUMS packages each <File> preserving
-    that relative path, e.g. data_to_jet/runMudst.C (confirmed directly
-    from a real job's .package.zip; an absolute path would repackage
-    everything under the wrong subpath and break the `cp data_to_jet/* .`
-    step below). submit_data_to_jet.sh runs star-submit from the pipeline
-    root as required, then immediately moves the sched*/*.package/*.csh/
-    *.list/*.condor files it generates into ../submit/ (a dedicated
-    scratch folder) so they don't clutter the pipeline root:
-
-        cd ..   # pipeline root, if not already there
-        sed -e 's#{{LISTFILE}}#/path/to/my.list#g' \
-            -e 's/{{NPROCESSES}}/50/g' \
-            -e 's/{{SAVE_SIMPLETREE}}/0/g' \
-            -e 's#{{OUTDIR}}#/path/to/output#g' \
-            data_to_jet/data_to_jet.xml > data_to_jet/data_to_jet_myrun.xml
-        star-submit data_to_jet/data_to_jet_myrun.xml
-        mkdir -p submit && mv sched* submit/ 2>/dev/null
-
-    Runs inside the same singularity container as sim_to_jet.xml;
-    root4star only reliably resolves that way under SUMS in this setup
-    (confirmed empirically; the original prodjets.xml/RunMuDst.csh this
-    was ported from never actually called root4star without one, since
-    RecoJets is a standalone compiled binary, so their lack of a shell
-    wrapper was never actually validated for this step).
+    star-submit must run from the pipeline root, since the SandBox <File>
+    paths below are relative to it. Runs inside the same singularity
+    container as sim_to_jet.xml.
 -->
 
 <job nProcesses="{{NPROCESSES}}">
@@ -78,25 +32,15 @@
 
         stardev
 
-        #--------------------------------------------
-        # SUMS preserves the data_to_jet/ subfolder when packaging the
-        # SandBox; runMudst.C and RecoJets expect their dependencies flat
-        # in the job's working directory.
-        #--------------------------------------------
+        # Flatten data_to_jet/ into the job's working dir.
         cp data_to_jet/* .
         cp shared/* .
-        # cp (not -r above) skips subdirectories -- hcal_gain_corrections/
-        # needs its own recursive copy so it lands flat as ./hcal_gain_corrections/,
-        # the same relative path runMudst.C's SetHcalRetroactiveGainCorr()
-        # call uses (also matches running runMudst.C by hand from within
-        # data_to_jet/, where the folder is already a flat sibling).
+        # cp (not -r) skips subdirs -- hcal_gain_corrections/ needs its own
+        # recursive copy to land flat where SetHcalRetroactiveGainCorr() expects it.
         cp -r data_to_jet/hcal_gain_corrections .
 
-        #--------------------------------------------
-        # Evenly split every line of {{LISTFILE}} across NPROCESSES jobs:
-        # contiguous, non-overlapping ranges (first "remainder" jobs get
-        # one extra line).
-        #--------------------------------------------
+        # Evenly split {{LISTFILE}} across NPROCESSES jobs (contiguous ranges,
+        # first "remainder" jobs get one extra line).
         set NTOTAL = `wc -l &lt; {{LISTFILE}}`
         set NJOBS = {{NPROCESSES}}
 
@@ -127,19 +71,17 @@
 
         sed -n "${line_start},${line_end}p" {{LISTFILE}} > my_lines.list
 
-        #--------------------------------------------
-        # Fetch and convert every assigned file: xrdcp if it's an xrootd
-        # URL (matches RunMuDst.csh's detection), plain cp otherwise.
-        # MakeRunList.pl's default keys are path,filename,events; each
-        # line is a file URL/path with the event count appended as a
-        # trailing number, so strip that last path component to recover
-        # the real file location.
-        #--------------------------------------------
+        # Fetch each assigned file (xrdcp for xrootd URLs, cp otherwise);
+        # strip the trailing event-count column MakeRunList.pl appends.
         set xrdname = "root://xrdstar.rcf.bnl.gov:1095"
         set xrdnchar = `echo $xrdname | awk '{print length($0)}'`
 
         rm -f simpletree_files.list
         touch simpletree_files.list
+
+        # Needed so the NBEFORE/NAFTER glob below (0 matches on the first
+        # iteration) expands to nothing instead of aborting with "No match."
+        set nonomatch
 
         set i = 1
         while ( ${i} &lt;= ${mycount} )
@@ -171,17 +113,24 @@
                 continue
             endif
 
+            set NBEFORE = `ls SimpleTree_mudst_*.root | grep -c '\.root$'`
+
             echo "Running runMudst.C..."
             root4star -b -q runMudst.C\(\"${LOCALFILE}\",-1,-2,\".\",1,0\)
 
             rm -f ${LOCALFILE}
 
-            set SIMPLETREE = `ls -t SimpleTree_mudst_*.root | head -1`
-            if ( "${SIMPLETREE}" == "" ) then
-                echo "ERROR: runMudst.C produced no output for ${FILEURL}, skipping"
+            # Require a NEW file, not just "ls -t | head -1" finding one --
+            # that silently re-picks up a stale prior-iteration file when
+            # runMudst.C fails without crashing, causing a phantom duplicate.
+            set NAFTER = `ls SimpleTree_mudst_*.root | grep -c '\.root$'`
+            if ( ${NAFTER} &lt;= ${NBEFORE} ) then
+                echo "ERROR: runMudst.C produced no NEW output for ${FILEURL} (SimpleTree count stayed at ${NBEFORE}), skipping"
                 @ i++
                 continue
             endif
+
+            set SIMPLETREE = `ls -t SimpleTree_mudst_*.root | head -1`
             echo "Produced: ${SIMPLETREE}"
             echo "${SIMPLETREE}" >> simpletree_files.list
 
@@ -196,14 +145,7 @@
             exit 1
         endif
 
-        #--------------------------------------------
-        # Jet finding, one RecoJets call per SimpleTree file (not a single
-        # combined multi-file call): each jet_output file is named with
-        # the same run/segment suffix as the SimpleTree file it came from,
-        # so the two can be linked back together later to look at the
-        # same events in both.
-        #--------------------------------------------
-
+        # Jet finding: one RecoJets call per SimpleTree file, output named with matching suffix.
         module purge
         module load fastjet-3.3.4
         module load root-5.34.38
@@ -224,16 +166,13 @@
             echo "Jet finding ${j}/${NPRODUCED}: ${STFILE} -> jet_output_${SUFFIX}.root"
             echo "----------------------------------------"
 
-            echo "${STFILE}" > single_file.list
+            echo "${STFILE}" >! single_file.list
             ./RecoJets single_file.list "${TRIGGER_FILTER}"
             mv jet_output.root jet_output_${SUFFIX}.root
 
             @ j++
         end
 
-        #--------------------------------------------
-        # Keep or discard the intermediate SimpleTree files
-        #--------------------------------------------
         if ( {{SAVE_SIMPLETREE}} == 0 ) then
             foreach f ( `cat simpletree_files.list` )
                 rm -f ${f}

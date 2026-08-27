@@ -1,70 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <!--
-    Jet-energy-scale calibration pipeline: takes a folder of jet_output_*.root
-    (JetTrees) files from the sim_to_jet pipeline and produces the JSON
-    lookup table used to correct reco jet energies. Two steps, one job:
+    Jet-energy-scale calibration pipeline: takes a folder of sim_to_jet
+    JetTrees and produces the JSON lookup table used to correct reco jet
+    energies. Two steps, one job:
+      1. JetEnergyScaleFineGrid: matches reco/truth jets, fits a
+         scale/response Gaussian on a fine (E,x,y) grid -> jet_calibration.root
+         (uses ../shared/JetParameters.h for the fiducial-cut geometry)
+      2. CalibrationMap: fits a smooth model per (x,y) bin from that tree,
+         writes the final JSON lookup
 
-      1. JetEnergyScaleFineGrid: scans every .root file in the input
-         folder, matches reco/truth jets, and fits a scale/response
-         Gaussian on a fine (E, x, y) grid, writing jet_calibration.root
-         (a "bins" tree). References the shared ../shared/JetParameters.h
-         for the fiducial-cut geometry the grid is built over.
-      2. CalibrationMap: fits a smooth log-quadratic-plus-Gaussian-bump
-         model per (x,y) position bin from that tree, then writes the
-         final JSON lookup. Does not reference JetParameters.h; it only
-         operates on the "bins" tree's fitted numbers, no jet geometry.
+    Configurable per submission (filled in by submit_jet_scale.sh, see its -h):
+      {{JETTREES_DIR}}           folder of jet_output_*.root files
+      {{OUTDIR}}                 absolute output directory
+      {{JSON_NAME}}              output lookup table filename
+      {{SAVE_CALIBRATION_ROOT}}  1 = keep intermediate jet_calibration.root, 0 = discard
+      {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
 
-    Configurable per submission:
-      {{JETTREES_DIR}}   absolute path to a folder of jet_output_*.root
-                          files (a trailing slash is added automatically
-                          if missing).
-      {{OUTDIR}}          absolute output directory (created if missing).
-      {{JSON_NAME}}       filename for the final lookup table, e.g.
-                          JetEnergyScale_lookup_mytune.json.
-      {{SAVE_CALIBRATION_ROOT}}   1 = keep the intermediate jet_calibration.root
-                          (the fitted (E,x,y) bin tree CalibrationMap reads),
-                          0 = discard it once the JSON is written.
-      {{STDOUT_URL}}      where SUMS copies the job's captured stdout.
-      {{STDERR_URL}}      where SUMS copies the job's captured stderr.
-                          submit_jet_scale.sh's -k flag controls both
-                          (0 = discard to /dev/null, default; 1 = save
-                          under {{OUTDIR}}/log/, auto-created).
+    star-submit must run from the pipeline root, since the SandBox
+    <File> paths below are relative to it.
 
-    To generate and submit, use submit_jet_scale.sh (see its -h), which
-    wraps the sed substitution + star-submit shown below. The SandBox
-    <File> paths below are relative to the pipeline root (SUMS packages
-    each <File> preserving that relative path, confirmed directly from
-    a real job's .package.zip), so star-submit MUST run from there, not
-    from a dedicated submit folder. submit_jet_scale.sh sweeps the
-    sched*/*.package/*.csh/*.list/*.condor files star-submit generates
-    into ../submit/ (a dedicated folder) right after submission instead:
-
-        cd ..   # pipeline root, if not already there
-        sed -e 's#{{JETTREES_DIR}}#/path/to/JetTrees#g' \
-            -e 's#{{OUTDIR}}#/path/to/output#g' \
-            -e 's/{{JSON_NAME}}/JetEnergyScale_lookup_mytune.json/g' \
-            -e 's/{{SAVE_CALIBRATION_ROOT}}/0/g' \
-            jet_scale/jet_scale.xml > jet_scale/jet_scale_myrun.xml
-        star-submit jet_scale/jet_scale_myrun.xml
-        mkdir -p submit && mv sched* submit/ 2>/dev/null
-
-    This is memory/CPU-bound rather than IO-bound (whole-folder scan, then
-    a Minuit2 fit per position bin), so it stays a single job (nProcesses=1)
-    rather than something split across many; it can also just be compiled
-    and run directly on the login node if preferred (see the two g++/./
-    lines below) instead of going through SUMS at all.
-
-    JetEnergyScaleFineGrid's bin_accum map duplicates each matched jet
-    across every fine-grid point within match_radius of it (by design, so
-    neighboring grid points' fits overlap), so peak memory scales with
-    total matched-jet count across the whole input folder, not just file
-    count. Condor's default cgroup memory limit is 2048 MB, which a large
-    input folder (e.g. a multi-replica combined tune, several hundred
-    files) can exceed and get the job held for
-    ("gone over cgroup memory limit... Consider resubmitting with a higher
-    request_memory"). <ResourceUsage><Memory> below requests more headroom
-    for every submission so this doesn't need discovering per-tune.
+    Single job (nProcesses=1): memory/CPU-bound (whole-folder scan + a
+    Minuit2 fit per position bin), not IO-bound, so not split across many
+    jobs; can also be compiled and run directly on the login node.
+    JetEnergyScaleFineGrid's peak memory scales with total matched-jet
+    count (each jet is duplicated across every nearby fine-grid point), so
+    a large input folder can exceed condor's default 2048 MB cgroup limit:
+    <ResourceUsage><Memory> below requests more headroom for every submission.
 -->
 
 <job nProcesses="1">
@@ -86,11 +48,7 @@
         module load fastjet-3.3.4
         module load root-5.34.38
 
-        #--------------------------------------------
-        # SUMS preserves the jet_scale/ and shared/ subfolders when
-        # packaging the SandBox; both compiles below expect their
-        # dependencies flat in the job's working directory.
-        #--------------------------------------------
+        # Flatten jet_scale/ and shared/ into the job's working dir.
         cp jet_scale/* .
         cp shared/* .
 
@@ -119,9 +77,6 @@
         echo "Running CalibrationMap..."
         ./CalibrationMap jet_calibration.root {{JSON_NAME}}
 
-        #--------------------------------------------
-        # Keep or discard the intermediate calibration root file
-        #--------------------------------------------
         if ( {{SAVE_CALIBRATION_ROOT}} == 0 ) then
             rm -f jet_calibration.root
         endif

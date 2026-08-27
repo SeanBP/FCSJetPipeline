@@ -149,6 +149,34 @@ rest stay 0 for simulated events. `trgSelect=202209` (default, set in
 for the run period being modeled; see `TriggerPlayground` if this needs
 revisiting.
 
+**MC cross-section weighting.** Both the SimpleTree and JetTree also carry
+`mc_sigma_pb`/`mc_sigma_err_pb`/`mc_n_gen` -- the generator's total cross
+section (and its error, in pb) for this job's ptHatMin/ptHatMax phase-space
+cut, and the number of hard-scattering trials (PYTHIA's `nAccepted`) it
+corresponds to, so `dividing weight = mc_sigma_pb / mc_n_gen` gives each
+event's share of integrated luminosity regardless of which ptHatMin-bin job
+(and hence which SimpleTree file) it came from -- needed since `jet_scale`-
+style cross-section analyses merge many ptHatMin bins with very different
+statistics into one sample. `-1` is the "not MC" sentinel (always the value
+in `data_to_jet`'s trees, and in any sim SimpleTree older than this
+bookkeeping). Sourced from `StarPrimaryMaker::Finish()`'s `StarGenStats`
+object (framework code, not this pipeline's) which every `starsim.C` run
+already writes to `pythia8.starsim.root`/`pythia6.starsim.root` --
+`sim_to_jet.xml` renames it to `${pid}.genstats.root` immediately after the
+starsim step (its original name collides with `runSimBfc.C`'s own output
+file, which would otherwise silently clobber it), and `readMudst.C`'s
+`ReadMCXSec()` reads it back and calls `StSimpleReaderMaker::SetMCXSec()`
+before the chain runs. **Use `nAccepted`, not the smaller number of events
+that survive `FcsJetFilter`**, as the weight's denominator -- confirmed from
+`StarGenStats::luminosity() = sumWeightGen/sigmaGen` in the framework
+source: the filter only decides what gets written to the `.fzd` file, it
+doesn't change how much integrated luminosity each surviving event
+represents. `JetMatcher.cpp`/`RecoJets.cpp` pass these three branches
+straight through to `jetTree`, re-binding them per input SimpleTree file
+inside their file loop (not once globally), since one `jetTree` can be
+built from several SimpleTree files with different `mc_sigma_pb`/`mc_n_gen`
+values.
+
 **ECAL/HCAL gain calibration.** `runSimBfc.C` deliberately does *not*
 call `StFcsDb::forceUniformGain()`/`forceUniformGainCorrection()` --
 `StFcsDb` is left on its default `GAINMODE::DB`, which pulls real

@@ -174,6 +174,11 @@ Int_t StSimpleReaderMaker::Init( )
 
   out_tree->Branch("Spin_config", &Spin_config, "Spin_config/I");
 
+  out_tree->Branch("mc_sigma_pb", &mc_sigma_pb, "mc_sigma_pb/F");
+  out_tree->Branch("mc_sigma_err_pb", &mc_sigma_err_pb, "mc_sigma_err_pb/F");
+  out_tree->Branch("mc_n_gen", &mc_n_gen, "mc_n_gen/I");
+  out_tree->Branch("mc_pthatmin_gev", &mc_pthatmin_gev, "mc_pthatmin_gev/F");
+
   if ( mTrgSim ){
     mTrgBase = mTrgSim->getTriggerEmu();
     for (int i = 0; i < kNSimTrg; i++){

@@ -2,56 +2,22 @@
 
 <!--
     Jet-calibration pipeline: takes a folder of jet_output_*.root
-    (JetTrees) files and a JSON lookup table (from the jet_scale
-    pipeline) and adds the corrected branches (reco_E_corr,
-    reco_x_F_corr, reco_E_uniform_corr, reco_x_F_uniform_corr) to those
-    files in place; ApplyCorrections opens each file with TFile "UPDATE"
-    and overwrites the tree, it does not produce separate output files.
-    References the shared ../shared/JetParameters.h (computeFeynmanX, for
-    reco_x_F_corr/reco_x_F_uniform_corr).
+    (JetTrees) files and a JSON lookup table (from jet_scale) and adds
+    corrected branches (reco_E_corr, reco_x_F_corr, reco_E_uniform_corr,
+    reco_x_F_uniform_corr) to those files IN PLACE (TFile "UPDATE", no
+    separate output files, no undo). Uses ../shared/JetParameters.h's
+    computeFeynmanX.
 
-    Configurable per submission:
-      {{JETTREES_DIR}}   absolute path to a folder of jet_output_*.root
-                          files (a trailing slash is added automatically
-                          if missing). All files directly in it are
-                          candidates for correction; the total is split
-                          evenly across {{NPROCESSES}} jobs (contiguous,
-                          non-overlapping ranges, so concurrent jobs never
-                          touch the same file).
-      {{CALIB_JSON}}      absolute path to the calibration JSON lookup
-                          table.
-      {{NPROCESSES}}      number of parallel jobs to split the files
-                          across.
-      {{STDOUT_URL}}      where SUMS copies each job's captured stdout.
-      {{STDERR_URL}}      where SUMS copies each job's captured stderr.
-                          submit_jet_calibration.sh's -k flag controls
-                          both (0 = discard to /dev/null, default; 1 =
-                          save under {{JETTREES_DIR}}/log/, auto-created;
-                          there's no separate output directory for this
-                          pipeline, since it corrects files in place).
+    Configurable per submission (filled in by submit_jet_calibration.sh,
+    see its -h):
+      {{JETTREES_DIR}}    folder of jet_output_*.root files, split evenly
+                          across {{NPROCESSES}} jobs (contiguous ranges)
+      {{CALIB_JSON}}      absolute path to the calibration JSON lookup table
+      {{NPROCESSES}}      number of parallel jobs
+      {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
 
-    To generate and submit, use submit_jet_calibration.sh (see its -h),
-    which wraps the sed substitution + star-submit shown below. The
-    SandBox <File> paths below are relative to the pipeline root (SUMS
-    packages each <File> preserving that relative path, confirmed
-    directly from a real job's .package.zip), so star-submit MUST run
-    from there, not from a dedicated submit folder.
-    submit_jet_calibration.sh sweeps the sched*/*.package/*.csh/*.list/
-    *.condor files star-submit generates into ../submit/ (a dedicated
-    folder) right after submission instead:
-
-        cd ..   # pipeline root, if not already there
-        sed -e 's#{{JETTREES_DIR}}#/path/to/JetTrees#g' \
-            -e 's#{{CALIB_JSON}}#/path/to/lookup.json#g' \
-            -e 's/{{NPROCESSES}}/10/g' \
-            jet_calibration/jet_calibration.xml > jet_calibration/jet_calibration_myrun.xml
-        star-submit jet_calibration/jet_calibration_myrun.xml
-        mkdir -p submit && mv sched* submit/ 2>/dev/null
-
-    This is destructive/in-place (the original jet_output_*.root files are
-    modified directly, there is nothing to stage back), so double check
-    {{JETTREES_DIR}} and {{CALIB_JSON}} before submitting; there is no
-    undo.
+    star-submit must run from the pipeline root, since the SandBox
+    <File> paths below are relative to it.
 -->
 
 <job nProcesses="{{NPROCESSES}}">
@@ -66,11 +32,7 @@
         module load fastjet-3.3.4
         module load root-5.34.38
 
-        #--------------------------------------------
-        # SUMS preserves the jet_calibration/ and shared/ subfolders when
-        # packaging the SandBox; the compile below expects its
-        # dependencies flat in the job's working directory.
-        #--------------------------------------------
+        # Flatten jet_calibration/ and shared/ into the job's working dir.
         cp jet_calibration/* .
         cp shared/* .
 
@@ -83,12 +45,8 @@
             set INDIR = "${INDIR}/"
         endif
 
-        #--------------------------------------------
-        # Evenly split every .root file in INDIR across NPROCESSES jobs:
-        # contiguous, non-overlapping ranges (first "remainder" jobs get
-        # one extra file), so this job only ever opens files no other
-        # concurrent job also has open.
-        #--------------------------------------------
+        # Evenly split every .root file across NPROCESSES jobs (contiguous
+        # ranges) so no two jobs ever open the same file.
         ls ${INDIR}*.root | sort > all_files.list
         set NTOTAL = `wc -l &lt; all_files.list`
         set NJOBS = {{NPROCESSES}}

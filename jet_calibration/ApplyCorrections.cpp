@@ -12,7 +12,6 @@
 
 #include "JetParameters.h"
 
-// --------------------------------------------------
 struct LookupGrid
 {
     int nx, ny;
@@ -27,7 +26,6 @@ struct LookupGrid
     std::vector<std::vector<double>> sigma;
 };
 
-// --------------------------------------------------
 double clamp(double v,double lo,double hi)
 {
     if(v<lo) return lo;
@@ -35,7 +33,6 @@ double clamp(double v,double lo,double hi)
     return v;
 }
 
-// --------------------------------------------------
 int find_index(const std::vector<double>& grid,double v)
 {
     int N = grid.size();
@@ -59,7 +56,6 @@ int find_index(const std::vector<double>& grid,double v)
     return lo;
 }
 
-// --------------------------------------------------
 double bilinear(
     const std::vector<double>& xg,
     const std::vector<double>& yg,
@@ -90,15 +86,12 @@ double bilinear(
     return a*(1-ty) + b*ty;
 }
 
-// --------------------------------------------------
 bool invalid(double v)
 {
     return !std::isfinite(v);
 }
 
-// --------------------------------------------------
 // Minimal JSON parsing (fixed structure)
-// --------------------------------------------------
 void read_array_1d(std::ifstream& in, std::vector<double>& out)
 {
     out.clear();
@@ -153,7 +146,6 @@ void read_array_2d(std::ifstream& in, std::vector<std::vector<double>>& out)
     }
 }
 
-// --------------------------------------------------
 int main(int argc, char** argv)
 {
     if (argc < 3)
@@ -195,9 +187,6 @@ int main(int argc, char** argv)
     buffer << in.rdbuf();
     std::string json = buffer.str();
 
-    // -----------------------------
-    // Read integer
-    // -----------------------------
     auto extract_int =
     [&](const std::string& key)
     {
@@ -221,9 +210,6 @@ int main(int argc, char** argv)
     grid.nx = extract_int("nx");
     grid.ny = extract_int("ny");
 
-    // -----------------------------
-    // Read 1D array
-    // -----------------------------
     auto extract_array_1d =
     [&](const std::string& key,
         std::vector<double>& out)
@@ -256,13 +242,8 @@ int main(int argc, char** argv)
     extract_array_1d("x_grid", grid.x);
     extract_array_1d("y_grid", grid.y);
 
-    // -----------------------------
-    // Read the sparse per-bin fit parameters
-    // -----------------------------
-    // "bins": [ { "i":.., "j":.., "A":.., "B":.., "C":..,
-    //             "D":.., "E0":.., "sigma":.. }, ... ]
-    // Bins are only present over a rectangular sub-range of
-    // (i,j); everything else is left as NaN.
+    // Sparse per-bin fit params ("bins":[{"i","j","A","B","C","D","E0","sigma"},...]);
+    // only present over a rectangular (i,j) sub-range, rest left as NaN.
     int imin = grid.nx, imax = -1;
     int jmin = grid.ny, jmax = -1;
 
@@ -448,11 +429,8 @@ int main(int argc, char** argv)
         TBranch* b_corr =
             tree->Branch("reco_E_corr",&reco_E_corr_ptr);
 
-        // Corrected Feynman x, using the corrected energy and the
-        // (unaffected by the energy-only correction) reco_eta -- see
-        // computeFeynmanX's comment in JetParameters.h for why E rather
-        // than pT is used, so this actually differs from the uncorrected
-        // reco_x_F written by JetMatcher.cpp/RecoJets.cpp.
+        // Corrected x_F: corrected energy + unaffected reco_eta (see
+        // computeFeynmanX in JetParameters.h for why E, not pT, is used).
         std::vector<float> reco_x_F_corr;
         std::vector<float>* reco_x_F_corr_ptr = &reco_x_F_corr;
         TBranch* b_xF_corr =
@@ -522,12 +500,8 @@ int main(int argc, char** argv)
                 total_jets++;
 
                 double E = reco_E->at(j);
-                // x is reflected to match the grid JetEnergyScaleFineGrid.cpp
-                // builds (reflect_to_positive_half folds x to positive before
-                // binning) -- but that reflection was never applied to y, so
-                // folding y here would look up the wrong grid cell for every
-                // negative-y jet. See JetEnergyScaleFineGrid.cpp's grid_valid/
-                // BinKey construction: only x is reflected there.
+                // x is reflected positive to match the grid (JetEnergyScaleFineGrid.cpp
+                // folds x, not y -- folding y here would look up the wrong bin).
                 double x = std::fabs(reco_x->at(j));
                 double y = reco_y->at(j);
 
