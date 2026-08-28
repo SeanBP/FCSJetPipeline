@@ -6,10 +6,10 @@
 // before this macro ever runs). Scans by class rather than by hardcoded key
 // name (StarPythia8's object is named "Pythia8", StarPythia6's is
 // "Pythia6Stats") so this doesn't break if that naming ever changes.
-// Returns false (leaves sigma_pb/sigmaErr_pb/nGen untouched) if no genstats
-// file is found -- e.g. a non-sim_to_jet caller, or an older job predating
-// this bookkeeping.
-Bool_t ReadMCXSec(Double_t &sigma_pb, Double_t &sigmaErr_pb, Int_t &nGen){
+// Returns false (leaves sigmaGen/nTried untouched) if no genstats file is
+// found -- e.g. a non-sim_to_jet caller, or an older job predating this
+// bookkeeping.
+Bool_t ReadMCJobStats(Double_t &sigmaGen, Int_t &nTried){
   TString candidates[2] = {"pythia8.genstats.root", "pythia6.genstats.root"};
   for (int i = 0; i < 2; i++){
     if ( gSystem->AccessPathName(candidates[i]) ) continue; // AccessPathName returns 0 on success
@@ -21,18 +21,16 @@ Bool_t ReadMCXSec(Double_t &sigma_pb, Double_t &sigmaErr_pb, Int_t &nGen){
       if ( TString(key->GetClassName()) != "StarGenStats" ) continue;
       StarGenStats* stats = (StarGenStats*)key->ReadObj();
       if ( !stats ) continue;
-      // Pythia convention: sigmaGen/sigmaErr in mb; 1 mb = 1e9 pb.
-      sigma_pb = stats->sigmaGen * 1e9;
-      sigmaErr_pb = stats->sigmaErr * 1e9;
-      nGen = stats->nAccepted;
-      cout << "ReadMCXSec: " << candidates[i] << " -> sigmaGen=" << stats->sigmaGen
-           << " mb (+-" << stats->sigmaErr << "), nAccepted=" << stats->nAccepted
-           << " -> sigma_pb=" << sigma_pb << ", nGen=" << nGen << endl;
+      // Raw, as PYTHIA reports it -- no unit conversion (sigmaGen is in mb).
+      sigmaGen = stats->sigmaGen;
+      nTried = stats->nTried;
+      cout << "ReadMCJobStats: " << candidates[i] << " -> sigmaGen=" << stats->sigmaGen
+           << " mb, nTried=" << stats->nTried << endl;
       return kTRUE;
     }
-    cout << "ReadMCXSec: " << candidates[i] << " found but no StarGenStats object in it" << endl;
+    cout << "ReadMCJobStats: " << candidates[i] << " found but no StarGenStats object in it" << endl;
   }
-  cout << "ReadMCXSec: no genstats file found -- mc_sigma_pb/mc_n_gen will stay at the -1 sentinel" << endl;
+  cout << "ReadMCJobStats: no genstats file found -- sigma_job/N_job will stay at the -1 sentinel" << endl;
   return kFALSE;
 }
 
@@ -47,7 +45,7 @@ void readMudst(Int_t nEvents, Int_t nFiles, TString InputFileList, TString Outpu
   gSystem -> Load("StFcsTriggerSimMaker");
   gSystem -> Load("StSimpleReaderMaker.so");
   gSystem -> Load("StEpdUtil");
-  gSystem -> Load("StarGeneratorEvent.so"); // StarGenStats, for ReadMCXSec() above
+  gSystem -> Load("StarGeneratorEvent.so"); // StarGenStats, for ReadMCJobStats() above
 
   // List of member links in the chain
   StChain*                    chain  =  new StChain ;
@@ -87,9 +85,9 @@ void readMudst(Int_t nEvents, Int_t nFiles, TString InputFileList, TString Outpu
   StSimpleReaderMaker* AnalysisCode  =  new StSimpleReaderMaker(muDstMaker) ;
   AnalysisCode -> SetTriggerSim(trgSim) ;
 
-  Double_t mc_sigma_pb, mc_sigma_err_pb; Int_t mc_n_gen;
-  if ( ReadMCXSec(mc_sigma_pb, mc_sigma_err_pb, mc_n_gen) )
-    AnalysisCode -> SetMCXSec(mc_sigma_pb, mc_sigma_err_pb, mc_n_gen) ;
+  Double_t sigmaGen; Int_t nTried;
+  if ( ReadMCJobStats(sigmaGen, nTried) )
+    AnalysisCode -> SetMCJobStats(sigmaGen, nTried) ;
 
   AnalysisCode -> SetMCPtHatMin(ptHatMin) ;
 

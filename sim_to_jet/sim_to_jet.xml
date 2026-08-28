@@ -91,7 +91,7 @@
 
         # Rescue StarPrimaryMaker's end-of-run StarGenStats file (cross
         # section for this job's ptHatMin cut, read back by readMudst.C's
-        # ReadMCXSec()) before runSimBfc.C's own output file -- which
+        # ReadMCJobStats()) before runSimBfc.C's own output file -- which
         # collides on the exact same name, ${pid}.starsim.root -- silently
         # overwrites it below. ${ptcut} itself (the ptHatMin cut value, not
         # just its resulting cross section) is passed straight through to
@@ -132,8 +132,8 @@
         endif
 
         # Temporary, job-local only; never meant to leave scratch. Its
-        # useful content (sigmaGen/nAccepted) is already baked into every
-        # jetTree/SimpleTree row above via mc_sigma_pb/mc_n_gen.
+        # useful content (sigmaGen/nTried) is already baked into every
+        # jetTree/SimpleTree row above via sigma_job/N_job.
         rm -f single_file.list ${pid}.genstats.root
 
         echo "Files in scratch:"

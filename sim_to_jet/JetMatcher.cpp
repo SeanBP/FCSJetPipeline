@@ -144,21 +144,23 @@ int main(int argc, char** argv) {
     Int_t Spin_config;
     outTree->Branch("Spin_config", &Spin_config, "Spin_config/I");
 
-    // Per-event MC cross-section weighting, passed through from the
-    // SimpleTree (see StSimpleReaderMaker::SetMCXSec()). Bound fresh from
-    // each input file's own "data" tree inside the loop below, so a
-    // jetTree built from several SimpleTree files (different ptHatMin
-    // bins/generation jobs) still carries the right sigma/nGen per row --
-    // -1 sentinel if a source SimpleTree predates this bookkeeping.
-    Float_t mc_sigma_pb, mc_sigma_err_pb;
-    Int_t mc_n_gen;
-    outTree->Branch("mc_sigma_pb", &mc_sigma_pb, "mc_sigma_pb/F");
-    outTree->Branch("mc_sigma_err_pb", &mc_sigma_err_pb, "mc_sigma_err_pb/F");
-    outTree->Branch("mc_n_gen", &mc_n_gen, "mc_n_gen/I");
+    // Per-event MC job-level weighting, passed through from the SimpleTree
+    // (see StSimpleReaderMaker::SetMCJobStats()): sigma_job is PYTHIA's raw
+    // final cross-section estimate (mb, unconverted) and N_job its true
+    // total generated trial count, for the job that produced this event.
+    // Constant for the whole job/file, same convention as mc_pthatmin_gev
+    // below -- bound directly to each input file's own branch in the loop,
+    // so a jetTree built from several SimpleTree files (different ptHatMin
+    // bins/generation jobs) still carries the right value per event. -1
+    // sentinel if a source SimpleTree predates this bookkeeping.
+    Double_t sigma_job;
+    Int_t N_job;
+    outTree->Branch("sigma_job", &sigma_job, "sigma_job/D");
+    outTree->Branch("N_job", &N_job, "N_job/I");
 
     // Generator-level ptHatMin cut for this job (see
     // StSimpleReaderMaker::SetMCPtHatMin()), same passthrough/-1-sentinel
-    // convention as mc_sigma_pb above.
+    // convention as sigma_job above.
     Float_t mc_pthatmin_gev;
     outTree->Branch("mc_pthatmin_gev", &mc_pthatmin_gev, "mc_pthatmin_gev/F");
 
@@ -210,11 +212,10 @@ int main(int argc, char** argv) {
 
         // -1 sentinel by default; overridden below only if this particular
         // input file actually has the branch (older SimpleTree files won't).
-        mc_sigma_pb = -1; mc_sigma_err_pb = -1; mc_n_gen = -1;
-        if ( tree->GetBranch("mc_sigma_pb") ) {
-            tree->SetBranchAddress("mc_sigma_pb", &mc_sigma_pb);
-            tree->SetBranchAddress("mc_sigma_err_pb", &mc_sigma_err_pb);
-            tree->SetBranchAddress("mc_n_gen", &mc_n_gen);
+        sigma_job = -1; N_job = -1;
+        if ( tree->GetBranch("sigma_job") ) {
+            tree->SetBranchAddress("sigma_job", &sigma_job);
+            tree->SetBranchAddress("N_job", &N_job);
         }
 
         mc_pthatmin_gev = -1;

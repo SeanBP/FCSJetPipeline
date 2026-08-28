@@ -120,16 +120,15 @@ int main(int argc, char** argv) {
     Int_t Spin_config;
     outTree->Branch("Spin_config", &Spin_config, "Spin_config/I");
 
-    // MC cross-section weighting branches, passed through from the SimpleTree
-    // for schema parity with sim_to_jet's jetTree (see JetMatcher.cpp /
-    // StSimpleReaderMaker::SetMCXSec()). Always the -1 sentinel here --
-    // data_to_jet's runMudst.C never calls SetMCXSec(), real data has no
-    // generator cross section.
-    Float_t mc_sigma_pb, mc_sigma_err_pb;
-    Int_t mc_n_gen;
-    outTree->Branch("mc_sigma_pb", &mc_sigma_pb, "mc_sigma_pb/F");
-    outTree->Branch("mc_sigma_err_pb", &mc_sigma_err_pb, "mc_sigma_err_pb/F");
-    outTree->Branch("mc_n_gen", &mc_n_gen, "mc_n_gen/I");
+    // Per-event MC job-level weighting branches, passed through from the
+    // SimpleTree for schema parity with sim_to_jet's jetTree (see
+    // JetMatcher.cpp / StSimpleReaderMaker::SetMCJobStats()). Always the -1
+    // sentinel here -- data_to_jet's runMudst.C never calls
+    // SetMCJobStats(), real data has no generator cross section.
+    Double_t sigma_job;
+    Int_t N_job;
+    outTree->Branch("sigma_job", &sigma_job, "sigma_job/D");
+    outTree->Branch("N_job", &N_job, "N_job/I");
 
     const int MAX_HITS = 10000;
 
@@ -166,11 +165,10 @@ int main(int argc, char** argv) {
         }
         tree->SetBranchAddress("Spin_config", &Spin_config);
 
-        mc_sigma_pb = -1; mc_sigma_err_pb = -1; mc_n_gen = -1;
-        if ( tree->GetBranch("mc_sigma_pb") ) {
-            tree->SetBranchAddress("mc_sigma_pb", &mc_sigma_pb);
-            tree->SetBranchAddress("mc_sigma_err_pb", &mc_sigma_err_pb);
-            tree->SetBranchAddress("mc_n_gen", &mc_n_gen);
+        sigma_job = -1; N_job = -1;
+        if ( tree->GetBranch("sigma_job") ) {
+            tree->SetBranchAddress("sigma_job", &sigma_job);
+            tree->SetBranchAddress("N_job", &N_job);
         }
 
         Long64_t nentries = tree->GetEntries();
@@ -203,7 +201,7 @@ int main(int argc, char** argv) {
             reco_x_F.clear();
             reco_side.clear();
             reco_EMF.clear();
-            reco_tau1.clear(); 
+            reco_tau1.clear();
             reco_tau2.clear();
             reco_nconst.clear();
 
