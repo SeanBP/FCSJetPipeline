@@ -7,8 +7,8 @@
 
     Configurable per submission (filled in by submit_sim_to_jet.sh, see
     its -h):
-      {{GENERATOR}}        "pythia8" or "pythia6"
-      {{TUNE_PARAM}}        pythia8 PDF:pSet (8=CTEQ6L1, 5=MSTW2008LO,
+      pythia8        "pythia8" or "pythia6"
+      3        pythia8 PDF:pSet (8=CTEQ6L1, 5=MSTW2008LO,
                              3=MRST LO*, 21=NNPDF3.1sx, <=0=default);
                              pythia6 PyTune (325=Perugia STAR, 0=default)
       PTCUT_BLOCK            flat "set ptcut = N" / "set ptcutmax = N" (-p/-P),
@@ -17,28 +17,28 @@
                              pthat_distribution_optimized.json); either way
                              sets both ${ptcut} (ptHatMin) and ${ptcutmax}
                              (ptHatMax, -1 = no upper cut)
-      {{NEVENTS}}           events per job
-      {{SAVE_SIMPLETREE}}   1 = keep intermediate SimpleTree_*.root, 0 = discard
-      {{TRIGGER_FILTER}}    comma-separated FCS trigger names (FcsTriggerDefs.h);
+      4000           events per job
+      0   1 = keep intermediate SimpleTree_*.root, 0 = discard
+          comma-separated FCS trigger names (FcsTriggerDefs.h);
                              jetTree entry only if one fired, empty = keep all.
                              Emulated via fcs_trg_base in readMudst.C (sim
                              events have no real trigger decision)
-      {{CALIB_RUN}}         real Run 22 run number to pin the FCS gain
+      0         real Run 22 run number to pin the FCS gain
                              calibration era to (RunNumberToDateTime() in
                              runSimBfc.C); 0 = BFC's own nominal date
-      {{FILTER_ETHR}}       FcsJetFilter's forward-flux accept threshold
+      50.0       FcsJetFilter's forward-flux accept threshold
                              (GeV, -e flag; default 50.0, its original
                              hardcoded value). Generator-level: an event is
                              kept only if projected flux onto one FCS arm
                              exceeds this. 0 disables the filter (accepts
                              every event): see StRoot/StarGenerator/FILT/.
-      {{EM_ONLY}}           1 = build reco jets from ECAL hits only (no HCAL),
+      1           1 = build reco jets from ECAL hits only (no HCAL),
                              using the ECAL-only fiducial boundary for both
                              reco and truth jets (-E flag). 0 (default) =
                              previous ECAL+HCAL behavior. See JetParameters.h's
                              kFiducialRectEcal/reco_fiducial_buffer_ecal.
-      {{OUTDIR}}            absolute output directory
-      {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
+      /star/data01/pwg/seanp/pipeline_output/em_only_production            absolute output directory
+      file:/dev/null/file:/dev/null  per-job log destination (-k flag)
 
     star-submit must run from the pipeline root (one level up), since the
     SandBox <File> paths below are relative to it.
@@ -51,7 +51,7 @@
     it if StRoot/ changes.
 -->
 
-<job nProcesses="1">
+<job nProcesses="500">
 
     <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
 
@@ -64,7 +64,7 @@
         cp sim_to_jet/* .
         cp shared/* .
 
-        if ( "{{GENERATOR}}" == "pythia8" ) then
+        if ( "pythia8" == "pythia8" ) then
             ln -sf starsim_pythia8_filter.C starsim.C
             set pid = "pythia8"
         else
@@ -74,28 +74,101 @@
 
         set seed_temp=`od -vAn -N4 -tu4 &lt; /dev/urandom`
         set myseed=`expr ${seed_temp} % 100000`
-        set run_number = ${JOBINDEX}
+        # +500 offset: this is a second batch reproducing em_only_production's
+        # original 500 jobs (same ptcut/scaled_index binning, since that's
+        # still keyed on plain JOBINDEX) to double statistics in the same
+        # output directory -- the original batch already used run_number
+        # (JOBINDEX) 0-499 for its filenames, so this offset is required to
+        # avoid colliding with/overwriting those files.
+        @ run_number = ${JOBINDEX} + 500
 
         # ptHatMin/ptHatMax for this job (see header comment)
-{{PTCUT_BLOCK}}
+        set round_jobs = 500
+        set reference_jobs = 20000
+        @ scaled_index = ${JOBINDEX} * ${reference_jobs} / ${round_jobs}
+
+        if (${scaled_index} &lt; 1001) then
+            set ptcut = 0
+            set ptcutmax = 5
+        else if (${scaled_index} &lt; 2002) then
+            set ptcut = 5
+            set ptcutmax = 10
+        else if (${scaled_index} &lt; 3003) then
+            set ptcut = 10
+            set ptcutmax = 15
+        else if (${scaled_index} &lt; 4004) then
+            set ptcut = 15
+            set ptcutmax = 20
+        else if (${scaled_index} &lt; 5005) then
+            set ptcut = 20
+            set ptcutmax = 25
+        else if (${scaled_index} &lt; 6006) then
+            set ptcut = 25
+            set ptcutmax = 30
+        else if (${scaled_index} &lt; 7007) then
+            set ptcut = 30
+            set ptcutmax = 35
+        else if (${scaled_index} &lt; 8008) then
+            set ptcut = 35
+            set ptcutmax = 40
+        else if (${scaled_index} &lt; 9009) then
+            set ptcut = 40
+            set ptcutmax = 45
+        else if (${scaled_index} &lt; 10010) then
+            set ptcut = 45
+            set ptcutmax = 50
+        else if (${scaled_index} &lt; 11011) then
+            set ptcut = 50
+            set ptcutmax = 55
+        else if (${scaled_index} &lt; 12012) then
+            set ptcut = 55
+            set ptcutmax = 60
+        else if (${scaled_index} &lt; 13013) then
+            set ptcut = 60
+            set ptcutmax = 65
+        else if (${scaled_index} &lt; 14014) then
+            set ptcut = 65
+            set ptcutmax = 70
+        else if (${scaled_index} &lt; 15015) then
+            set ptcut = 70
+            set ptcutmax = 75
+        else if (${scaled_index} &lt; 16016) then
+            set ptcut = 75
+            set ptcutmax = 80
+        else if (${scaled_index} &lt; 17017) then
+            set ptcut = 80
+            set ptcutmax = 85
+        else if (${scaled_index} &lt; 18018) then
+            set ptcut = 85
+            set ptcutmax = 90
+        else if (${scaled_index} &lt; 19019) then
+            set ptcut = 90
+            set ptcutmax = 95
+        else if (${scaled_index} &lt; 19089) then
+            set ptcut = 95
+            set ptcutmax = 100
+        else
+            set ptcut = 100
+            set ptcutmax = -1
+        endif
 
         echo "========================================"
-        echo "Generator      = {{GENERATOR}} (tune/PDF param={{TUNE_PARAM}})"
+        echo "Generator      = pythia8 (tune/PDF param=3)"
         echo "ptHatMin       = ${ptcut} GeV"
         echo "ptHatMax       = ${ptcutmax} GeV"
-        echo "FcsJetFilter Ethr = {{FILTER_ETHR}} GeV"
-        echo "EM-only        = {{EM_ONLY}}"
-        echo "nevents        = {{NEVENTS}}"
-        echo "Save SimpleTree = {{SAVE_SIMPLETREE}}"
+        echo "FcsJetFilter Ethr = 50.0 GeV"
+        echo "EM-only        = 1"
+        echo "nevents        = 4000"
+        echo "Save SimpleTree = 0"
         echo "JOBINDEX       = ${JOBINDEX}"
         echo "Random seed    = ${myseed}"
         echo "========================================"
 
-        mkdir -p {{OUTDIR}}
+        mkdir -p /star/data01/pwg/seanp/pipeline_output/em_only_production
 
         echo "Starting detector simulation..."
 
-        root4star -q -b starsim.C\({{NEVENTS}},${myseed},${ptcut},{{TUNE_PARAM}},{{FILTER_ETHR}},${ptcutmax}\)
+        root4star -q -b starsim.C\(4000,${myseed},${ptcut},3,50.0,${ptcutmax}\)
 
         echo "Finished detector simulation."
 
@@ -112,9 +185,9 @@
         echo ""
         echo "Starting reconstruction..."
 
-        # Full positional arg list needed so {{CALIB_RUN}} (last param) can
+        # Full positional arg list needed so 0 (last param) can
         # be set -- CINT can't skip earlier args; rest are runSimBfc.C's own defaults.
-        root4star -b -q runSimBfc.C\({{NEVENTS}},1,\"${pid}\",202207,0,0,1.5,0.0,\"0.0100\",0,0,input_dir,output_dir,input_chain,0,{{CALIB_RUN}}\)
+        root4star -b -q runSimBfc.C\(4000,1,\"${pid}\",202207,0,0,1.5,0.0,\"0.0100\",0,0,input_dir,output_dir,input_chain,0,0\)
         root4star -b -q readMudst.C\(0,1,\"${pid}.MuDst.root\",\".\",\"\",202209,${ptcut},${ptcutmax}\)
 
         echo "Finished reconstruction."
@@ -129,15 +202,15 @@
             `root-config --cflags --libs` -lEG \
             `fastjet-config --cxxflags --libs` -std=c++11
 
-        set TRIGGER_FILTER = "{{TRIGGER_FILTER}}"
+        set TRIGGER_FILTER = ""
 
         echo "SimpleTree_mudst.root" > single_file.list
 
-        ./JetMatcher single_file.list "${TRIGGER_FILTER}" {{EM_ONLY}}
-        mv jet_output.root jet_output_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
+        ./JetMatcher single_file.list "${TRIGGER_FILTER}" 1
+        mv jet_output.root jet_output_pythia8_3_pt${ptcut}_${run_number}.root
 
-        if ( {{SAVE_SIMPLETREE}} == 1 ) then
-            mv SimpleTree_mudst.root SimpleTree_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
+        if ( 0 == 1 ) then
+            mv SimpleTree_mudst.root SimpleTree_pythia8_3_pt${ptcut}_${run_number}.root
         else
             rm -f SimpleTree_mudst.root
         endif
@@ -171,10 +244,10 @@
         </Package>
     </SandBox>
 
-    <stdout URL="{{STDOUT_URL}}"/>
-    <stderr URL="{{STDERR_URL}}"/>
+    <stdout URL="file:/dev/null"/>
+    <stderr URL="file:/dev/null"/>
 
-    <output fromScratch="jet_output_*.root" toURL="file:{{OUTDIR}}/" />
-    <output fromScratch="SimpleTree_*.root" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="jet_output_*.root" toURL="file:/star/data01/pwg/seanp/pipeline_output/em_only_production/" />
+    <output fromScratch="SimpleTree_*.root" toURL="file:/star/data01/pwg/seanp/pipeline_output/em_only_production/" />
 
 </job>

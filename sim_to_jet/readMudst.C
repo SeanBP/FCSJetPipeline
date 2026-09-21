@@ -34,7 +34,7 @@ Bool_t ReadMCJobStats(Double_t &sigmaGen, Int_t &nTried){
   return kFALSE;
 }
 
-void readMudst(Int_t nEvents, Int_t nFiles, TString InputFileList, TString OutputDir =".", TString JobIdName = "", Int_t trgSelect = 202209, Double_t ptHatMin = -1 )
+void readMudst(Int_t nEvents, Int_t nFiles, TString InputFileList, TString OutputDir =".", TString JobIdName = "", Int_t trgSelect = 202209, Double_t ptHatMin = -1, Double_t ptHatMax = -1 )
 {
 
   // Load libraries
@@ -90,6 +90,7 @@ void readMudst(Int_t nEvents, Int_t nFiles, TString InputFileList, TString Outpu
     AnalysisCode -> SetMCJobStats(sigmaGen, nTried) ;
 
   AnalysisCode -> SetMCPtHatMin(ptHatMin) ;
+  AnalysisCode -> SetMCPtHatMax(ptHatMax) ;
 
   // In order to speed up the analysis and eliminate IO, turn off unneeded branches
   //FIX ME: StMuMCTrack won't set status to 1 after being turned off

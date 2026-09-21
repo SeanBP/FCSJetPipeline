@@ -1,5 +1,5 @@
 {
-  "description": "Relative proportions of ptHatMin (GeV) to sample across a batch of sim_to_jet jobs, so the resulting statistics are weighted toward low-pT (where most of the cross section is) without starving the rare high-pT tail. Originally fit to pythia8_nnpdf23lo's own reference distribution. 'count' is this bin's share out of reference_total; submit_sim_to_jet.sh -w scales that proportion to however many jobs (-j) are actually submitted -- it does not require reference_total jobs to be submitted at once.",
+  "description": "Relative proportions of ptHatMin (GeV) to sample across a batch of sim_to_jet jobs, so the resulting statistics are weighted toward low-pT (where most of the cross section is) without starving the rare high-pT tail. Originally fit to pythia8_nnpdf23lo's own reference distribution. 'count' is this bin's share out of reference_total; submit_sim_to_jet.sh -w scales that proportion to however many jobs (-j) are actually submitted -- it does not require reference_total jobs to be submitted at once. Each bin may also carry an optional 'ptcutmax' (GeV); omitted/absent means -1 (no upper cut), same sentinel as everywhere else in this codebase. -w takes precedence over -p/-P entirely (both per-job ptcut and ptcutmax come from here, not the flat flags).",
   "reference_total": 20000,
   "bins": [
     { "ptcut": 0,  "count": 21 },

@@ -140,12 +140,15 @@ class StSimpleReaderMaker : public StMaker
   Double_t sigma_job = -1;
   Int_t N_job = -1;
 
-  // Generator-level ptHatMin cut for this job (sim_to_jet only -- see
-  // SetMCPtHatMin()). GeV; matches the ckin3 argument passed to
-  // Pythia8()/Pythia6() in starsim_pythia8_filter.C/starsim_pythia6_filter.C
-  // (the ${ptcut} shell variable in sim_to_jet.xml). Constant for the whole
-  // job/file, same convention/sentinel as sigma_job above.
+  // Generator-level ptHatMin/ptHatMax cut for this job (sim_to_jet only --
+  // see SetMCPtHatMin()/SetMCPtHatMax()). GeV; matches the ckin3/ckin4
+  // arguments passed to Pythia8()/Pythia6() in
+  // starsim_pythia8_filter.C/starsim_pythia6_filter.C (the ${ptcut}/
+  // ${ptcutmax} shell variables in sim_to_jet.xml). Constant for the whole
+  // job/file, same convention/sentinel as sigma_job above. mc_pthatmax_gev
+  // stays -1 (no upper cut) unless the job was actually given one.
   float mc_pthatmin_gev = -1;
+  float mc_pthatmax_gev = -1;
 
   // Retroactive HCAL gain-correction machinery (real data only -- see
   // FCSJetPipeline/data_to_jet/hcal_gain_corrections/README.md).
@@ -220,11 +223,13 @@ class StSimpleReaderMaker : public StMaker
     sigma_job = sigmaGen; N_job = nTried;
   }
 
-  // Sim-only mode (sim_to_jet): record this job's generator-level ptHatMin
-  // cut (ckin3 in starsim_pythia8_filter.C/starsim_pythia6_filter.C), so it
-  // survives to the JetTree (see JetMatcher.cpp) alongside sigma_job. Not
-  // called by data_to_jet -- see mc_pthatmin_gev's comment in the header.
+  // Sim-only mode (sim_to_jet): record this job's generator-level ptHatMin/
+  // ptHatMax cut (ckin3/ckin4 in
+  // starsim_pythia8_filter.C/starsim_pythia6_filter.C), so it survives to
+  // the JetTree (see JetMatcher.cpp) alongside sigma_job. Not called by
+  // data_to_jet -- see mc_pthatmin_gev's comment in the header.
   void SetMCPtHatMin(double pthatmin_gev) { mc_pthatmin_gev = pthatmin_gev; }
+  void SetMCPtHatMax(double pthatmax_gev) { mc_pthatmax_gev = pthatmax_gev; }
 
   // Real-data mode (data_to_jet): enable retroactive HCAL gain
   // correction. manifestDir is the folder containing manifest.txt and

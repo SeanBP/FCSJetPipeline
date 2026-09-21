@@ -46,7 +46,7 @@ void trig( Int_t n=1 )
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
-void Pythia6( TString mode="pp:minbias", Double_t ckin3=0.0, Int_t tune=325 )
+void Pythia6( TString mode="pp:minbias", Double_t ckin3=0.0, Int_t tune=325, Double_t ckin4=-1.0 )
 {
   gSystem->Setenv("LHAPDF_DATA_PATH", LHAPDF_DATA_PATH.Data() );
   gSystem->Load( "/opt/star/$STAR_HOST_SYS/lib/libLHAPDF.so");
@@ -70,9 +70,14 @@ void Pythia6( TString mode="pp:minbias", Double_t ckin3=0.0, Int_t tune=325 )
 
     if ( tune ) pythia6->PyTune( tune );
 
-    // pT-hat minimum, same role as Pythia8's PhaseSpace:ptHatMin
+    // pT-hat minimum/maximum, same role as Pythia8's
+    // PhaseSpace:ptHatMin/ptHatMax. PYTHIA6's own default is ckin(4)=-1,
+    // which it treats as "no upper cut" (CKIN(4) < CKIN(3)) -- matches our
+    // -1 sentinel convention exactly, so leaving ckin4 at its default here
+    // reproduces the previous (never-set) behavior.
     PySubs_t &pysubs = pythia6->pysubs();
     pysubs.ckin(3) = ckin3;
+    pysubs.ckin(4) = ckin4;
   }
 
   _primary->AddGenerator(pythia6);
@@ -80,7 +85,7 @@ void Pythia6( TString mode="pp:minbias", Double_t ckin3=0.0, Int_t tune=325 )
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
-void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t tune=325, Double_t fcsFilterEthr=50.0 )
+void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t tune=325, Double_t fcsFilterEthr=50.0, Double_t ckin4=-1.0 )
 {
 
   gROOT->ProcessLine(".L bfc.C");
@@ -112,7 +117,7 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t t
     chain -> AddBefore( "geant", _primary );
   }
 
-  Pythia6( "pp:minbias", ckin3, tune );
+  Pythia6( "pp:minbias", ckin3, tune, ckin4 );
   command("call gstar_part");
 
   geometry("y2023");

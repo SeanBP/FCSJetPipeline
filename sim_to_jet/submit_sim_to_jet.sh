@@ -2,19 +2,24 @@
 # Generates and submits a concrete sim_to_jet.xml job.
 # Usage:
 #   ./submit_sim_to_jet.sh -g <pythia8|pythia6> -t <tune_param> -p <ptcut> \
-#       -n <nevents> -s <0|1> -o <outdir> [-j <nprocesses>] [-l <label>] \
-#       [-k <0|1>] [-f <triggers>] [-c <run_number>] [-e <filter_ethr>]
+#       -n <nevents> -s <0|1> -o <outdir> [-P <ptcutmax>] [-j <nprocesses>] \
+#       [-l <label>] [-k <0|1>] [-f <triggers>] [-c <run_number>] \
+#       [-e <filter_ethr>] [-E <0|1>]
 #
 #   -g  generator: pythia8 or pythia6
 #   -t  tune/PDF: pythia8 PDF:pSet (8=CTEQ6L1, 5=MSTW2008LO, 3=MRST LO*,
 #       21=NNPDF3.1sx, <=0=default); pythia6 PyTune (325=Perugia STAR, 0=default)
 #   -p  ptHatMin cut in GeV, flat for every job (ignored if -w given)
+#   -P  ptHatMax cut in GeV, flat for every job, default -1 (no upper cut).
+#       Ignored if -w given -- put a "ptcutmax" key in each bin of the JSON
+#       instead (defaults to -1 per bin if omitted there).
 #   -n  events per job
 #   -s  1 = keep intermediate SimpleTree, 0 = discard
 #   -o  output directory (created if missing)
 #   -j  number of parallel jobs (nProcesses), default 1
-#   -w  absolute path to a JSON of relative ptHatMin proportions to sample
-#       across the -j jobs (see pthat_distribution_optimized.json); overrides -p
+#   -w  absolute path to a JSON of relative ptHatMin (and optionally
+#       ptHatMax) proportions to sample across the -j jobs (see
+#       pthat_distribution_optimized.json); overrides -p/-P entirely
 #   -l  short label for the generated XML's filename, default "run"
 #   -k  1 = save stdout/stderr under <outdir>/log/, 0 = discard, default 0
 #   -f  comma-separated FCS trigger flag names (see FcsTriggerDefs.h); an
@@ -27,6 +32,10 @@
 #       this (StRoot/StarGenerator/FILT/FcsJetFilter.cxx). Default 50.0,
 #       the original hardcoded value before this flag existed. Pass 0 to
 #       disable the filter (accept every generated event).
+#   -E  1 = build reco jets from ECAL hits only (no HCAL), using the
+#       ECAL-only fiducial boundary for both reco and truth jets
+#       (JetParameters.h's kFiducialRectEcal/reco_fiducial_buffer_ecal).
+#       0/omit = previous ECAL+HCAL behavior.
 #
 # Example:
 #   ./submit_sim_to_jet.sh -g pythia8 -t 8 -p 10 -n 500 -s 0 \
@@ -39,6 +48,7 @@ set -e
 GENERATOR=""
 TUNE_PARAM=""
 PTCUT=""
+PTCUTMAX=-1
 NEVENTS=""
 SAVE_SIMPLETREE=""
 OUTDIR=""
@@ -49,12 +59,14 @@ KEEPLOGS=0
 TRIGGER_FILTER=""
 CALIB_RUN=0
 FILTER_ETHR=50.0
+EM_ONLY=0
 
-while getopts "g:t:p:n:s:o:j:w:l:k:f:c:e:h" opt; do
+while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:h" opt; do
   case $opt in
     g) GENERATOR="$OPTARG" ;;
     t) TUNE_PARAM="$OPTARG" ;;
     p) PTCUT="$OPTARG" ;;
+    P) PTCUTMAX="$OPTARG" ;;
     n) NEVENTS="$OPTARG" ;;
     s) SAVE_SIMPLETREE="$OPTARG" ;;
     o) OUTDIR="$OPTARG" ;;
@@ -65,8 +77,9 @@ while getopts "g:t:p:n:s:o:j:w:l:k:f:c:e:h" opt; do
     f) TRIGGER_FILTER="$OPTARG" ;;
     c) CALIB_RUN="$OPTARG" ;;
     e) FILTER_ETHR="$OPTARG" ;;
+    E) EM_ONLY="$OPTARG" ;;
     h|*)
-      sed -n '2,34p' "$0"
+      sed -n '2,44p' "$0"
       exit 0
       ;;
   esac
@@ -94,6 +107,11 @@ fi
 
 if ! [[ "$CALIB_RUN" =~ ^[0-9]+$ ]]; then
     echo "Error: -c must be a plain run number (got '$CALIB_RUN')"
+    exit 1
+fi
+
+if [ "$EM_ONLY" != "0" ] && [ "$EM_ONLY" != "1" ]; then
+    echo "Error: -E must be 0 or 1 (got '$EM_ONLY')"
     exit 1
 fi
 
@@ -129,7 +147,7 @@ fi
 
 export XML_IN="${SCRIPT_DIR}/sim_to_jet.xml"
 export XML_OUT="${OUTXML}"
-export GENERATOR TUNE_PARAM PTCUT NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR
+export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR EM_ONLY
 
 python3 << 'PYEOF'
 import json
@@ -159,13 +177,16 @@ if ptcut_json:
         kw = "if" if i == 0 else "else if"
         lines.append("        {} (${{scaled_index}} &lt; {}) then".format(kw, cum))
         lines.append("            set ptcut = {}".format(b["ptcut"]))
+        lines.append("            set ptcutmax = {}".format(b.get("ptcutmax", -1)))
     lines.append("        else")
     lines.append("            set ptcut = {}".format(bins[-1]["ptcut"]))
+    lines.append("            set ptcutmax = {}".format(bins[-1].get("ptcutmax", -1)))
     lines.append("        endif")
 
     ptcut_block = "\n".join(lines)
 else:
-    ptcut_block = "        set ptcut = {}".format(os.environ["PTCUT"])
+    ptcut_block = "        set ptcut = {}\n        set ptcutmax = {}".format(
+        os.environ["PTCUT"], os.environ["PTCUTMAX"])
 
 xml = xml.replace("{{GENERATOR}}", os.environ["GENERATOR"])
 xml = xml.replace("{{TUNE_PARAM}}", os.environ["TUNE_PARAM"])
@@ -179,6 +200,7 @@ xml = xml.replace("{{STDERR_URL}}", os.environ["STDERR_URL"])
 xml = xml.replace("{{TRIGGER_FILTER}}", os.environ.get("TRIGGER_FILTER", ""))
 xml = xml.replace("{{CALIB_RUN}}", os.environ.get("CALIB_RUN", "0"))
 xml = xml.replace("{{FILTER_ETHR}}", os.environ.get("FILTER_ETHR", "50.0"))
+xml = xml.replace("{{EM_ONLY}}", os.environ.get("EM_ONLY", "0"))
 
 with open(os.environ["XML_OUT"], "w") as f:
     f.write(xml)
@@ -186,9 +208,9 @@ PYEOF
 
 echo "Generated ${OUTXML}"
 if [ -n "$PTCUT_JSON" ]; then
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY}"
 else
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY}"
 fi
 
 mkdir -p "${OUTDIR}"

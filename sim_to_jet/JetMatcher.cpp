@@ -25,11 +25,19 @@ using namespace fastjet;
 int main(int argc, char** argv) {
 
     if (argc < 2) {
-        cerr << "Usage: " << argv[0] << " file_list.list [trigger_filter]" << endl;
+        cerr << "Usage: " << argv[0] << " file_list.list [trigger_filter] [em_only]" << endl;
         cerr << "  trigger_filter: comma-separated FCS trigger flag names (see FcsTriggerDefs.h)." << endl;
         cerr << "                  An event is kept if ANY of them fired. Omit/empty = keep all events." << endl;
+        cerr << "  em_only: 1 = form reco jets from ECAL hits only (no HCAL), and use the" << endl;
+        cerr << "           ECAL-only fiducial boundary for both reco and truth jets." << endl;
+        cerr << "           0/omit = use both ECAL+HCAL, the previous default behavior." << endl;
         return 1;
     }
+
+    // Optional 3rd arg: 1 = EM-only reco jets (ECAL hits only, ECAL-only
+    // fiducial boundary for reco and truth jets alike). Default 0 keeps
+    // the previous ECAL+HCAL behavior unchanged.
+    bool em_only = (argc >= 4) && (string(argv[3]) == "1");
 
     ifstream infile(argv[1]);
     vector<string> file_names;
@@ -158,16 +166,37 @@ int main(int argc, char** argv) {
     outTree->Branch("sigma_job", &sigma_job, "sigma_job/D");
     outTree->Branch("N_job", &N_job, "N_job/I");
 
-    // Generator-level ptHatMin cut for this job (see
-    // StSimpleReaderMaker::SetMCPtHatMin()), same passthrough/-1-sentinel
-    // convention as sigma_job above.
+    // Generator-level ptHatMin/ptHatMax cut for this job (see
+    // StSimpleReaderMaker::SetMCPtHatMin()/SetMCPtHatMax()), same
+    // passthrough/-1-sentinel convention as sigma_job above.
     Float_t mc_pthatmin_gev;
+    Float_t mc_pthatmax_gev;
     outTree->Branch("mc_pthatmin_gev", &mc_pthatmin_gev, "mc_pthatmin_gev/F");
+    outTree->Branch("mc_pthatmax_gev", &mc_pthatmax_gev, "mc_pthatmax_gev/F");
+
+    // 1 if this file's reco jets were built from ECAL hits only (no HCAL,
+    // ECAL-only fiducial boundary), 0 for the previous ECAL+HCAL default.
+    // Constant for the whole job/file -- see the em_only CLI arg above.
+    Int_t reco_em_only = em_only ? 1 : 0;
+    outTree->Branch("reco_em_only", &reco_em_only, "reco_em_only/I");
 
     TDatabasePDG* pdgDB = TDatabasePDG::Instance();
 
     // -------- editable EM PID list --------
+    // Used for the (ECAL+HCAL) truth/reco EMF fraction computation below,
+    // the standard calorimetry definition of "electromagnetic" energy
+    // (photons + e+/e-).
     set<int> EM_PIDS = {11, -11, 22};
+
+    // em_only truth-level pre-clustering filter (see its use below):
+    // photons only, matching STAR's own FMS EM-jet particle-level
+    // definition verbatim (arXiv:2012.11428, Sec. II.D): "We define the
+    // 'particle level' as the stable particles (photons here) produced in
+    // a proton-proton event in PYTHIA prior to the GEANT simulation of
+    // detector responses." Electrons/positrons are never mentioned in
+    // that paper's truth-jet definition -- deliberately narrower than the
+    // EM_PIDS used for the EMF fraction above.
+    set<int> EM_ONLY_TRUTH_PIDS = {22};
 
     const int MAX = 10000;
 
@@ -176,6 +205,30 @@ int main(int argc, char** argv) {
     Float_t mcpart_px[MAX], mcpart_py[MAX], mcpart_pz[MAX], mcpart_E[MAX];
     Int_t mcpart_geid[MAX];
     Int_t mcpart_idVtx[MAX];
+    Float_t mcpart_Vtx_x[MAX], mcpart_Vtx_y[MAX], mcpart_Vtx_z[MAX];
+
+    // em_only truth filter: max displacement (cm) of a particle's creation
+    // vertex from the primary IP (fixed at (0,0,0), see
+    // starsim_pythia8_filter.C's _primary->SetVertex(0,0,0)) for it to
+    // still count as "prompt" -- see the em_only branch below for why this
+    // exists instead of the plain idVtx==1 cut used for the default mode.
+    //
+    // Value chosen from the actual decay-length hierarchy, not a round
+    // guess: the resonances we actually want to catch here (pi0, eta,
+    // Sigma0 -- i.e. the ones producing a jet's genuine prompt EM content)
+    // have c*tau of 25 nm, 0.15 nm, and 22 pm respectively, so even a
+    // boosted decay length (gamma*beta*c*tau) stays at the few-micron
+    // level for the highest constituent energies this analysis reaches
+    // (~40 GeV/c => gamma ~ a few hundred for pi0 => ~microns). Long-lived
+    // species that must stay excluded (K_short c*tau=2.68 cm, Lambda
+    // c*tau=7.89 cm, K_long c*tau=15.5 m) sit 6+ orders of magnitude
+    // higher and need momentum p < ~2 MeV/c (i.e. carrying negligible
+    // energy, since decay length is proportional to p) to spuriously
+    // decay within this cut -- so the residual contamination from those
+    // is both rare and bounded to a vanishingly small energy contribution.
+    // 100 microns (0.01 cm) sits comfortably above the prompt-decay scale
+    // and comfortably below where K_short/Lambda/K_long become an issue.
+    const double DECAY_DISPLACEMENT_MAX = 0.01;
 
     Float_t Cal_hit_energy[MAX], Cal_hit_posx[MAX], Cal_hit_posy[MAX], Cal_hit_posz[MAX];
     Int_t Cal_detid[MAX];
@@ -197,6 +250,9 @@ int main(int argc, char** argv) {
         tree->SetBranchAddress("mcpart_E", mcpart_E);
         tree->SetBranchAddress("mcpart_geid", mcpart_geid);
         tree->SetBranchAddress("mcpart_idVtx", mcpart_idVtx);
+        tree->SetBranchAddress("mcpart_Vtx_x", mcpart_Vtx_x);
+        tree->SetBranchAddress("mcpart_Vtx_y", mcpart_Vtx_y);
+        tree->SetBranchAddress("mcpart_Vtx_z", mcpart_Vtx_z);
 
         tree->SetBranchAddress("Cal_nhits", &Cal_nhits);
         tree->SetBranchAddress("Cal_hit_energy", Cal_hit_energy);
@@ -221,6 +277,11 @@ int main(int argc, char** argv) {
         mc_pthatmin_gev = -1;
         if ( tree->GetBranch("mc_pthatmin_gev") ) {
             tree->SetBranchAddress("mc_pthatmin_gev", &mc_pthatmin_gev);
+        }
+
+        mc_pthatmax_gev = -1;
+        if ( tree->GetBranch("mc_pthatmax_gev") ) {
+            tree->SetBranchAddress("mc_pthatmax_gev", &mc_pthatmax_gev);
         }
 
         Long64_t nentries = tree->GetEntries();
@@ -264,10 +325,108 @@ int main(int argc, char** argv) {
             vector<PseudoJet> truth_particles;
             vector<int> truth_pid_particles;
 
+            // em_only's vertex-displacement cut below needs the position
+            // of THIS event's own primary vertex, not the coordinate
+            // origin -- StarPrimaryMaker smears the actual collision point
+            // event-by-event (confirmed directly: one test event's idVtx==1
+            // particles all shared vtx=(0.105,-0.148,7.053), ~7 cm from
+            // the origin along z, well within RHIC's normal luminous-region
+            // spread) despite starsim_pythia8_filter.C's
+            // _primary->SetVertex(0,0,0) call, which only sets a nominal
+            // reference/mean, not a fixed per-event position. Measuring
+            // displacement from the origin instead of this position would
+            // reject essentially every particle in the event, prompt or
+            // not, once the smearing exceeds DECAY_DISPLACEMENT_MAX.
+            float primVtx_x = 0, primVtx_y = 0, primVtx_z = 0;
+            bool foundPrimVtx = false;
+            if (em_only) {
+                for (int i = 0; i < mcpart_num; i++) {
+                    if (mcpart_idVtx[i] == 1) {
+                        primVtx_x = mcpart_Vtx_x[i];
+                        primVtx_y = mcpart_Vtx_y[i];
+                        primVtx_z = mcpart_Vtx_z[i];
+                        foundPrimVtx = true;
+                        break;
+                    }
+                }
+            }
+
             for (int i = 0; i < mcpart_num; i++) {
-                if (mcpart_idVtx[i] != 1) continue;
+                if (em_only) {
+                    // idVtx==1 (StMcTrack::IdVx(), the StMcVertex ID of a
+                    // particle's creation point) only tags particles made
+                    // at the very first vertex; STAR/GEANT hands out a new
+                    // vertex ID for every decay-in-flight, including
+                    // pi0/eta -> gamma gamma, whose decay length is
+                    // microns even at high energy. A plain idVtx==1 cut
+                    // therefore silently drops the dominant EM content of
+                    // a real jet (pi0-decay photons) from the truth
+                    // object, even though a real ECAL sees that energy
+                    // fully -- this is what was producing reco_E > truth_E
+                    // for low-truth_E matched jets (single stray
+                    // primary-vertex photons loosely matched to much
+                    // richer real reco jets), not genuine EM leakage.
+                    //
+                    // Use a vertex-displacement cut instead: accept a
+                    // particle if it was created within
+                    // DECAY_DISPLACEMENT_MAX of THIS event's own primary
+                    // vertex (see above), which keeps prompt hadronic decay
+                    // products (pi0/eta/Sigma0, all sub-mm decay lengths)
+                    // while still excluding genuine GEANT detector-material
+                    // shower secondaries created at real detector radii
+                    // (cm to m scale). Deliberately NOT requiring
+                    // idVtxEnd==0 (i.e. not requiring the particle be
+                    // "final/stable"): a prompt decay photon that later
+                    // pair-converts in real material (confirmed in test
+                    // data: a 21.6 GeV prompt photon converting to e+e- at
+                    // 346 cm from the primary vertex) is still counted here
+                    // using its energy at creation, which is the correct
+                    // truth-level value -- requiring stability would drop
+                    // that energy from truth entirely (neither the
+                    // pre-conversion photon nor its far-displaced daughters
+                    // would pass), reintroducing a reco_E > truth_E bias
+                    // for any jet with an early conversion, which is not
+                    // rare (photon conversion probability before reaching
+                    // a calorimeter is typically ~10-20% given realistic
+                    // tracker/beampipe material budgets). This can't double
+                    // count: a real decay/interaction chain only moves
+                    // farther from the primary vertex at each successive
+                    // step (nonzero flight distance is required to reach
+                    // the next vertex), so at most one generation along any
+                    // lineage can ever sit within a tight micron-scale
+                    // radius of it -- confirmed in the same test data
+                    // (this photon's own creation vertex sits ~10 microns
+                    // from the primary vertex, matching pi0's real decay
+                    // length, while its conversion vertex is 346 cm away).
+                    if (!foundPrimVtx) continue;
+                    double dx = mcpart_Vtx_x[i] - primVtx_x;
+                    double dy = mcpart_Vtx_y[i] - primVtx_y;
+                    double dz = mcpart_Vtx_z[i] - primVtx_z;
+                    double vtx_r = sqrt(dx*dx + dy*dy + dz*dz);
+                    if (vtx_r > DECAY_DISPLACEMENT_MAX) continue;
+                } else {
+                    // ECAL+HCAL (default) truth-jet definition: unchanged.
+                    // Note this same idVtx==1 limitation (excludes prompt
+                    // hadron-decay photons like pi0->gg) likely also
+                    // affects this mode's truth jets, just proportionally
+                    // less since photons are only one contribution among
+                    // many hadronic constituents here -- not yet revisited.
+                    if (mcpart_idVtx[i] != 1) continue;
+                }
 
                 int pdg = pdgDB->ConvertGeant3ToPdg(mcpart_geid[i]);
+
+                // EM-only mode: restrict truth-level clustering input to
+                // photons before jet-finding (see EM_ONLY_TRUTH_PIDS above
+                // for the literature citation), rather than clustering all
+                // truth particles and computing an EM fraction after the
+                // fact. This matches STAR's own FMS "EM-jet" truth
+                // definition: the truth-level object is built only from
+                // the same particle species the EM-only detector can ever
+                // see, so reco/truth are the same kind of object by
+                // construction instead of a full hadronic jet the
+                // detector has no hope of fully capturing.
+                if (em_only && !EM_ONLY_TRUTH_PIDS.count(pdg)) continue;
 
                 truth_particles.emplace_back(mcpart_px[i], mcpart_py[i], mcpart_pz[i], mcpart_E[i]);
                 truth_pid_particles.push_back(pdg);
@@ -288,7 +447,10 @@ int main(int argc, char** argv) {
 
                 float jetXE = z_proj * jet.px() / jet.pz();
                 float jetYE = z_proj * jet.py() / jet.pz();
-                if (pass_jet_scale_cut(jetXE, jetYE, reco_fiducial_buffer, -R/2.0f)) truth_jets_selected.push_back(jet);
+                bool passesFiducial = em_only
+                    ? pass_jet_scale_cut(jetXE, jetYE, reco_fiducial_buffer_ecal, -R/2.0f, kFiducialRectEcal)
+                    : pass_jet_scale_cut(jetXE, jetYE, reco_fiducial_buffer, -R/2.0f);
+                if (passesFiducial) truth_jets_selected.push_back(jet);
             }
 
             // ---------------- reco ----------------
@@ -302,6 +464,7 @@ int main(int argc, char** argv) {
                 int det = Cal_detid[i];
 
                 if (det == 4 || det == 5) continue;
+                if (em_only && (det == 2 || det == 3)) continue;
 
                 if (!(((det == 0 || det == 1) && e > mip_threshold * ecal_mip) ||
                       ((det == 2 || det == 3) && e > mip_threshold * hcal_mip)))
@@ -324,7 +487,10 @@ int main(int argc, char** argv) {
             for (auto &jet : cs_reco.inclusive_jets()) {
                 float jetXE = z_proj * jet.px() / jet.pz();
                 float jetYE = z_proj * jet.py() / jet.pz();
-                if (pass_fiducial_cut(jetXE, jetYE, reco_fiducial_buffer)) reco_jets_selected.push_back(jet);
+                bool passesFiducial = em_only
+                    ? pass_fiducial_cut(jetXE, jetYE, reco_fiducial_buffer_ecal, kFiducialRectEcal)
+                    : pass_fiducial_cut(jetXE, jetYE, reco_fiducial_buffer);
+                if (passesFiducial) reco_jets_selected.push_back(jet);
             }
 
             // ---------------- matching ----------------
@@ -396,6 +562,10 @@ int main(int argc, char** argv) {
                     if (EM_PIDS.count(pid)) E_em += c.E();
                 }
 
+                // In em_only mode every truth constituent is already EM by
+                // construction (see the truth-particle filter above), so
+                // this is trivially ~1.0 there -- same situation as
+                // reco_EMF below, kept for schema consistency across modes.
                 double EMF = E_em / jet.E();
                 truth_EMF.push_back(EMF);
 

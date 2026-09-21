@@ -56,6 +56,28 @@ static const float cut_x_outer = 131.82035143f;
 static const float cut_y_min = -83.19687629f;
 static const float cut_y_max =  86.41376856f;
 
+// ------------------ ECAL-only geometry cut (EM-only reco jets) ------------------
+// Same derivation as cut_x_inner/etc above (GeometryPlayground/
+// run_number_to_fiducial.sh, ECAL front plane, run 22359013's geometry --
+// see fcs_corners_run22.txt), but using ECAL's OWN footprint instead of
+// being clipped to HCAL's smaller projected footprint: when reco jets are
+// built from ECAL hits only (no HCAL), there is no reason to cut them down
+// to HCAL's acceptance. ECAL's front face is tilted, not perpendicular to
+// z (confirmed from the real corner data -- the inner-column corners sit
+// at larger z than the outer-column ones), so these values are ECAL's own
+// corners projected onto the shared z_ecal plane like everything else
+// here, not their raw (x,y) -- only the outer-column corners happen to
+// already sit at z_ecal itself. North/south again confirmed bit-identical
+// (same DB-level symmetry as the default rectangle above), so one shared
+// rectangle applies here too. Regenerate via
+// GeometryPlayground/fiducial_from_corners.cpp's "ECAL-only rectangle"
+// output if the detector position ever changes.
+static const float cut_x_inner_ecal = 20.53604584f;
+static const float cut_x_outer_ecal = 137.59500000f;
+
+static const float cut_y_min_ecal = -96.72439178f;
+static const float cut_y_max_ecal =  86.25565167f;
+
 // ------------------ Buffer ------------------
 static const float cut_buffer = 0.0f;
 static const float R_buffer = 0.0f * R / 4.0f;
@@ -65,6 +87,16 @@ static const float R_buffer = 0.0f * R / 4.0f;
 // fiducial edge. Truth jets use pass_jet_scale_cut instead, extending this
 // same boundary outward by half a jet radius in eta-phi (see below).
 static const float reco_fiducial_buffer = 10.0f;
+
+// Same role as reco_fiducial_buffer, but for EM-only reco jets against the
+// ECAL-only rectangle above. Characterized via the EM-only JES calibration
+// diagnostics fork (JetScalePlayground/): a survey of high-statistics,
+// high-chi2 position bins found the poor-fit failure modes concentrated
+// within ~20cm of the fiducial edge, so bins inside that margin were
+// excluded from the calibration survey entirely -- 20.0f bakes that same
+// exclusion into jet-finding itself, rather than only filtering for it
+// downstream in the calibration/analysis stage.
+static const float reco_fiducial_buffer_ecal = 20.0f;
 
 // ------------------ Feynman x / detector side ------------------
 static const double SQRT_S = 500.0; // GeV, pp sqrt(s) for this dataset
@@ -213,32 +245,45 @@ inline double etaPhiSignedDistance(float jetXE, float jetYE,
     return inside ? best : -best;
 }
 
+// A fiducial rectangle's four bounds, so pass_jet_scale_cut/pass_fiducial_cut
+// below can be pointed at either the default (ECAL+HCAL-limited) rectangle
+// or the ECAL-only one (EM-only reco jets), instead of always hardcoding
+// cut_x_inner/etc.
+struct FiducialRect { float x_inner, x_outer, y_min, y_max; };
+
+static const FiducialRect kFiducialRect     = { cut_x_inner,      cut_x_outer,      cut_y_min,      cut_y_max };
+static const FiducialRect kFiducialRectEcal = { cut_x_inner_ecal, cut_x_outer_ecal, cut_y_min_ecal, cut_y_max_ecal };
+
 // symmetric two-window acceptance, with an eta-phi margin relative to a
-// rectangle boundary (the nominal fiducial rectangle inset by cmBuffer). A
-// positive etaPhiMargin erodes the acceptance region: the jet must clear the
-// boundary by that much in eta-phi (used to define where the jet-energy-scale
-// calibration map is valid). A negative etaPhiMargin dilates it: the jet may
-// fall outside the boundary by up to that much in eta-phi (used to accept
-// truth jets whose reco counterpart can still land inside the reco fiducial
-// cut).
-inline bool pass_jet_scale_cut(float jetXE, float jetYE, float cmBuffer, float etaPhiMargin)
+// rectangle boundary (rect inset by cmBuffer). A positive etaPhiMargin
+// erodes the acceptance region: the jet must clear the boundary by that
+// much in eta-phi (used to define where the jet-energy-scale calibration
+// map is valid). A negative etaPhiMargin dilates it: the jet may fall
+// outside the boundary by up to that much in eta-phi (used to accept truth
+// jets whose reco counterpart can still land inside the reco fiducial cut).
+// rect defaults to the standard ECAL+HCAL rectangle; pass kFiducialRectEcal
+// for EM-only reco jets.
+inline bool pass_jet_scale_cut(float jetXE, float jetYE, float cmBuffer, float etaPhiMargin,
+                                const FiducialRect &rect = kFiducialRect)
 {
-    double x_inner = cut_x_inner + cmBuffer;
-    double x_outer = cut_x_outer - cmBuffer;
-    double y_min   = cut_y_min   + cmBuffer;
-    double y_max   = cut_y_max   - cmBuffer;
+    double x_inner = rect.x_inner + cmBuffer;
+    double x_outer = rect.x_outer - cmBuffer;
+    double y_min   = rect.y_min   + cmBuffer;
+    double y_max   = rect.y_max   - cmBuffer;
 
     return etaPhiSignedDistance(jetXE, jetYE, x_inner, x_outer, y_min, y_max) >= etaPhiMargin;
 }
 
 
 // symmetric two-window acceptance at ECAL front plane, used for reco jet
-// selection (with an adjustable margin)
-inline bool pass_fiducial_cut(float jetXE, float jetYE, float buffer)
+// selection (with an adjustable margin). rect defaults to the standard
+// ECAL+HCAL rectangle; pass kFiducialRectEcal for EM-only reco jets.
+inline bool pass_fiducial_cut(float jetXE, float jetYE, float buffer,
+                               const FiducialRect &rect = kFiducialRect)
 {
     const float ax = std::fabs(jetXE);
-    const bool in_x = ax >= (cut_x_inner + buffer) && ax <= (cut_x_outer - buffer);
-    const bool in_y = jetYE >= (cut_y_min + buffer) && jetYE <= (cut_y_max - buffer);
+    const bool in_x = ax >= (rect.x_inner + buffer) && ax <= (rect.x_outer - buffer);
+    const bool in_y = jetYE >= (rect.y_min + buffer) && jetYE <= (rect.y_max - buffer);
     return in_x && in_y;
 }
 

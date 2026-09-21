@@ -177,6 +177,7 @@ Int_t StSimpleReaderMaker::Init( )
   out_tree->Branch("sigma_job", &sigma_job, "sigma_job/D");
   out_tree->Branch("N_job", &N_job, "N_job/I");
   out_tree->Branch("mc_pthatmin_gev", &mc_pthatmin_gev, "mc_pthatmin_gev/F");
+  out_tree->Branch("mc_pthatmax_gev", &mc_pthatmax_gev, "mc_pthatmax_gev/F");
 
   if ( mTrgSim ){
     mTrgBase = mTrgSim->getTriggerEmu();

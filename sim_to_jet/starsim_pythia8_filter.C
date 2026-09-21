@@ -95,7 +95,7 @@ void Pythia8( TString config="pp:W", Double_t ckin3=0.0, Double_t ckin4=-1.0, In
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
-void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t pdfSet=-1, Double_t fcsFilterEthr=50.0 )
+void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t pdfSet=-1, Double_t fcsFilterEthr=50.0, Double_t ckin4=-1.0 )
 {
 
   gROOT->ProcessLine(".L bfc.C");
@@ -132,7 +132,6 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t p
     chain -> AddBefore( "geant", _primary );
   }
 
-  double ckin4=-1.0;
   Pythia8("pp:minbias", ckin3, ckin4, pdfSet );
   command("call gstar_part");
   geometry("y2023");

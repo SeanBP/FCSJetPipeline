@@ -7,8 +7,8 @@
 
     Configurable per submission (filled in by submit_sim_to_jet.sh, see
     its -h):
-      {{GENERATOR}}        "pythia8" or "pythia6"
-      {{TUNE_PARAM}}        pythia8 PDF:pSet (8=CTEQ6L1, 5=MSTW2008LO,
+      pythia8        "pythia8" or "pythia6"
+      3        pythia8 PDF:pSet (8=CTEQ6L1, 5=MSTW2008LO,
                              3=MRST LO*, 21=NNPDF3.1sx, <=0=default);
                              pythia6 PyTune (325=Perugia STAR, 0=default)
       PTCUT_BLOCK            flat "set ptcut = N" / "set ptcutmax = N" (-p/-P),
@@ -17,28 +17,28 @@
                              pthat_distribution_optimized.json); either way
                              sets both ${ptcut} (ptHatMin) and ${ptcutmax}
                              (ptHatMax, -1 = no upper cut)
-      {{NEVENTS}}           events per job
-      {{SAVE_SIMPLETREE}}   1 = keep intermediate SimpleTree_*.root, 0 = discard
-      {{TRIGGER_FILTER}}    comma-separated FCS trigger names (FcsTriggerDefs.h);
+      20           events per job
+      1   1 = keep intermediate SimpleTree_*.root, 0 = discard
+          comma-separated FCS trigger names (FcsTriggerDefs.h);
                              jetTree entry only if one fired, empty = keep all.
                              Emulated via fcs_trg_base in readMudst.C (sim
                              events have no real trigger decision)
-      {{CALIB_RUN}}         real Run 22 run number to pin the FCS gain
+      0         real Run 22 run number to pin the FCS gain
                              calibration era to (RunNumberToDateTime() in
                              runSimBfc.C); 0 = BFC's own nominal date
-      {{FILTER_ETHR}}       FcsJetFilter's forward-flux accept threshold
+      50.0       FcsJetFilter's forward-flux accept threshold
                              (GeV, -e flag; default 50.0, its original
                              hardcoded value). Generator-level: an event is
                              kept only if projected flux onto one FCS arm
                              exceeds this. 0 disables the filter (accepts
                              every event): see StRoot/StarGenerator/FILT/.
-      {{EM_ONLY}}           1 = build reco jets from ECAL hits only (no HCAL),
+      1           1 = build reco jets from ECAL hits only (no HCAL),
                              using the ECAL-only fiducial boundary for both
                              reco and truth jets (-E flag). 0 (default) =
                              previous ECAL+HCAL behavior. See JetParameters.h's
                              kFiducialRectEcal/reco_fiducial_buffer_ecal.
-      {{OUTDIR}}            absolute output directory
-      {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
+      /star/data01/pwg/seanp/pipeline_output/em_only_smoketest            absolute output directory
+      file:/star/data01/pwg/seanp/pipeline_output/em_only_smoketest/log/simtojet_$JOBID.out/file:/star/data01/pwg/seanp/pipeline_output/em_only_smoketest/log/simtojet_$JOBID.err  per-job log destination (-k flag)
 
     star-submit must run from the pipeline root (one level up), since the
     SandBox <File> paths below are relative to it.
@@ -64,7 +64,7 @@
         cp sim_to_jet/* .
         cp shared/* .
 
-        if ( "{{GENERATOR}}" == "pythia8" ) then
+        if ( "pythia8" == "pythia8" ) then
             ln -sf starsim_pythia8_filter.C starsim.C
             set pid = "pythia8"
         else
@@ -77,25 +77,26 @@
         set run_number = ${JOBINDEX}
 
         # ptHatMin/ptHatMax for this job (see header comment)
-{{PTCUT_BLOCK}}
+        set ptcut = 10
+        set ptcutmax = 15
 
         echo "========================================"
-        echo "Generator      = {{GENERATOR}} (tune/PDF param={{TUNE_PARAM}})"
+        echo "Generator      = pythia8 (tune/PDF param=3)"
         echo "ptHatMin       = ${ptcut} GeV"
         echo "ptHatMax       = ${ptcutmax} GeV"
-        echo "FcsJetFilter Ethr = {{FILTER_ETHR}} GeV"
-        echo "EM-only        = {{EM_ONLY}}"
-        echo "nevents        = {{NEVENTS}}"
-        echo "Save SimpleTree = {{SAVE_SIMPLETREE}}"
+        echo "FcsJetFilter Ethr = 50.0 GeV"
+        echo "EM-only        = 1"
+        echo "nevents        = 20"
+        echo "Save SimpleTree = 1"
         echo "JOBINDEX       = ${JOBINDEX}"
         echo "Random seed    = ${myseed}"
         echo "========================================"
 
-        mkdir -p {{OUTDIR}}
+        mkdir -p /star/data01/pwg/seanp/pipeline_output/em_only_smoketest
 
         echo "Starting detector simulation..."
 
-        root4star -q -b starsim.C\({{NEVENTS}},${myseed},${ptcut},{{TUNE_PARAM}},{{FILTER_ETHR}},${ptcutmax}\)
+        root4star -q -b starsim.C\(20,${myseed},${ptcut},3,50.0,${ptcutmax}\)
 
         echo "Finished detector simulation."
 
@@ -112,9 +113,9 @@
         echo ""
         echo "Starting reconstruction..."
 
-        # Full positional arg list needed so {{CALIB_RUN}} (last param) can
+        # Full positional arg list needed so 0 (last param) can
         # be set -- CINT can't skip earlier args; rest are runSimBfc.C's own defaults.
-        root4star -b -q runSimBfc.C\({{NEVENTS}},1,\"${pid}\",202207,0,0,1.5,0.0,\"0.0100\",0,0,input_dir,output_dir,input_chain,0,{{CALIB_RUN}}\)
+        root4star -b -q runSimBfc.C\(20,1,\"${pid}\",202207,0,0,1.5,0.0,\"0.0100\",0,0,input_dir,output_dir,input_chain,0,0\)
         root4star -b -q readMudst.C\(0,1,\"${pid}.MuDst.root\",\".\",\"\",202209,${ptcut},${ptcutmax}\)
 
         echo "Finished reconstruction."
@@ -129,15 +130,15 @@
             `root-config --cflags --libs` -lEG \
             `fastjet-config --cxxflags --libs` -std=c++11
 
-        set TRIGGER_FILTER = "{{TRIGGER_FILTER}}"
+        set TRIGGER_FILTER = ""
 
         echo "SimpleTree_mudst.root" > single_file.list
 
-        ./JetMatcher single_file.list "${TRIGGER_FILTER}" {{EM_ONLY}}
-        mv jet_output.root jet_output_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
+        ./JetMatcher single_file.list "${TRIGGER_FILTER}" 1
+        mv jet_output.root jet_output_pythia8_3_pt${ptcut}_${run_number}.root
 
-        if ( {{SAVE_SIMPLETREE}} == 1 ) then
-            mv SimpleTree_mudst.root SimpleTree_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
+        if ( 1 == 1 ) then
+            mv SimpleTree_mudst.root SimpleTree_pythia8_3_pt${ptcut}_${run_number}.root
         else
             rm -f SimpleTree_mudst.root
         endif
@@ -171,10 +172,10 @@
         </Package>
     </SandBox>
 
-    <stdout URL="{{STDOUT_URL}}"/>
-    <stderr URL="{{STDERR_URL}}"/>
+    <stdout URL="file:/star/data01/pwg/seanp/pipeline_output/em_only_smoketest/log/simtojet_$JOBID.out"/>
+    <stderr URL="file:/star/data01/pwg/seanp/pipeline_output/em_only_smoketest/log/simtojet_$JOBID.err"/>
 
-    <output fromScratch="jet_output_*.root" toURL="file:{{OUTDIR}}/" />
-    <output fromScratch="SimpleTree_*.root" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="jet_output_*.root" toURL="file:/star/data01/pwg/seanp/pipeline_output/em_only_smoketest/" />
+    <output fromScratch="SimpleTree_*.root" toURL="file:/star/data01/pwg/seanp/pipeline_output/em_only_smoketest/" />
 
 </job>
