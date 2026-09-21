@@ -2,7 +2,7 @@
 # Generates and submits a concrete data_to_jet.xml job.
 # Usage:
 #   ./submit_data_to_jet.sh -f <listfile> -s <0|1> -o <outdir> \
-#       [-j <nprocesses>] [-l <label>] [-k <0|1>] [-t <triggers>]
+#       [-j <nprocesses>] [-l <label>] [-k <0|1>] [-t <triggers>] [-E <0|1>]
 #
 #   -f  absolute path to a file catalog list (MakeRunList.pl's
 #       "path,filename,events" format: xrootd URL or local path, event
@@ -14,6 +14,10 @@
 #   -k  1 = save stdout/stderr under <outdir>/log/, 0 = discard, default 0
 #   -t  comma-separated FCS trigger flag names (see FcsTriggerDefs.h); an
 #       event only gets a jetTree entry if one fired. Empty = keep every event.
+#   -E  1 = build reco jets from ECAL hits only (no HCAL), using the
+#       ECAL-only fiducial boundary (../shared/JetParameters.h's
+#       kFiducialRectEcal/reco_fiducial_buffer_ecal). 0/omit = previous
+#       ECAL+HCAL behavior.
 #
 # Example:
 #   ./submit_data_to_jet.sh -f /star/u/seanp/FCSJetPipeline/catalog/run22.list \
@@ -29,8 +33,9 @@ NPROC=1
 LABEL="run"
 KEEPLOGS=0
 TRIGGER_FILTER=""
+EM_ONLY=0
 
-while getopts "f:s:o:j:l:k:t:h" opt; do
+while getopts "f:s:o:j:l:k:t:E:h" opt; do
   case $opt in
     f) LISTFILE="$OPTARG" ;;
     s) SAVE_SIMPLETREE="$OPTARG" ;;
@@ -39,8 +44,9 @@ while getopts "f:s:o:j:l:k:t:h" opt; do
     l) LABEL="$OPTARG" ;;
     k) KEEPLOGS="$OPTARG" ;;
     t) TRIGGER_FILTER="$OPTARG" ;;
+    E) EM_ONLY="$OPTARG" ;;
     h|*)
-      sed -n '2,21p' "$0"
+      sed -n '2,25p' "$0"
       exit 0
       ;;
   esac
@@ -53,6 +59,11 @@ fi
 
 if [ ! -f "$LISTFILE" ]; then
     echo "Error: listfile '$LISTFILE' does not exist"
+    exit 1
+fi
+
+if [ "$EM_ONLY" != "0" ] && [ "$EM_ONLY" != "1" ]; then
+    echo "Error: -E must be 0 or 1 (got '$EM_ONLY')"
     exit 1
 fi
 
@@ -93,10 +104,11 @@ sed -e "s#{{LISTFILE}}#${LISTFILE}#g" \
     -e "s#{{STDOUT_URL}}#${STDOUT_URL}#g" \
     -e "s#{{STDERR_URL}}#${STDERR_URL}#g" \
     -e "s/{{TRIGGER_FILTER}}/${TRIGGER_FILTER}/g" \
+    -e "s/{{EM_ONLY}}/${EM_ONLY}/g" \
     "${SCRIPT_DIR}/data_to_jet.xml" > "${OUTXML}"
 
 echo "Generated ${OUTXML}"
-echo "listfile=${LISTFILE} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>}"
+echo "listfile=${LISTFILE} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} em_only=${EM_ONLY}"
 
 mkdir -p "${OUTDIR}"
 

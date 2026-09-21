@@ -16,6 +16,11 @@
       {{SAVE_SIMPLETREE}} 1 = keep intermediate SimpleTree_mudst_*.root, 0 = discard
       {{TRIGGER_FILTER}}  comma-separated FCS trigger names (FcsTriggerDefs.h);
                           jetTree entry only if one fired, empty = keep all
+      {{EM_ONLY}}         1 = build reco jets from ECAL hits only (no HCAL),
+                          using the ECAL-only fiducial boundary (-E flag).
+                          0 (default) = previous ECAL+HCAL behavior. See
+                          ../shared/JetParameters.h's
+                          kFiducialRectEcal/reco_fiducial_buffer_ecal.
       {{OUTDIR}}          absolute output directory
       {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
 
@@ -62,6 +67,7 @@
         echo "JOBINDEX = ${JOBINDEX}"
         echo "Total files = ${NTOTAL}, total jobs = ${NJOBS}"
         echo "This job's files: lines ${line_start}-${line_end} (${mycount} files)"
+        echo "EM-only = {{EM_ONLY}}"
         echo "========================================"
 
         if ( ${mycount} == 0 ) then
@@ -167,7 +173,7 @@
             echo "----------------------------------------"
 
             echo "${STFILE}" >! single_file.list
-            ./RecoJets single_file.list "${TRIGGER_FILTER}"
+            ./RecoJets single_file.list "${TRIGGER_FILTER}" {{EM_ONLY}}
             mv jet_output.root jet_output_${SUFFIX}.root
 
             @ j++

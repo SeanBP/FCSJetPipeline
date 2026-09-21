@@ -23,11 +23,18 @@ using namespace fastjet;
 int main(int argc, char** argv) {
 
     if (argc < 2) {
-        cerr << "Usage: " << argv[0] << " file_list.list [trigger_filter]" << endl;
+        cerr << "Usage: " << argv[0] << " file_list.list [trigger_filter] [em_only]" << endl;
         cerr << "  trigger_filter: comma-separated FCS trigger flag names (see FcsTriggerDefs.h)." << endl;
         cerr << "                  An event is kept if ANY of them fired. Omit/empty = keep all events." << endl;
+        cerr << "  em_only: 1 = form reco jets from ECAL hits only (no HCAL), and use the" << endl;
+        cerr << "           ECAL-only fiducial boundary. 0/omit = use both ECAL+HCAL," << endl;
+        cerr << "           the previous default behavior." << endl;
         return 1;
     }
+
+    // Optional 3rd arg: 1 = EM-only reco jets (ECAL hits only, ECAL-only
+    // fiducial boundary). Default 0 keeps the previous ECAL+HCAL behavior.
+    bool em_only = (argc >= 4) && (string(argv[3]) == "1");
 
     string list_fname = argv[1];
     ifstream infile(list_fname);
@@ -130,6 +137,12 @@ int main(int argc, char** argv) {
     outTree->Branch("sigma_job", &sigma_job, "sigma_job/D");
     outTree->Branch("N_job", &N_job, "N_job/I");
 
+    // 1 if this file's reco jets were built from ECAL hits only (no HCAL,
+    // ECAL-only fiducial boundary), 0 for the previous ECAL+HCAL default.
+    // Constant for the whole job/file -- see the em_only CLI arg above.
+    Int_t reco_em_only = em_only ? 1 : 0;
+    outTree->Branch("reco_em_only", &reco_em_only, "reco_em_only/I");
+
     const int MAX_HITS = 10000;
 
     Int_t Cal_nhits;
@@ -213,6 +226,7 @@ int main(int argc, char** argv) {
                 float e = Cal_hit_energy[i];
                 int detid = Cal_detid[i];
                 if (detid == 4 || detid == 5) continue;
+                if (em_only && (detid == 2 || detid == 3)) continue;
 
                 if (!(((detid==0||detid==1)&&e>mip_threshold*ecal_mip) ||
                       ((detid==2||detid==3)&&e>mip_threshold*hcal_mip))) continue;
@@ -239,7 +253,10 @@ int main(int argc, char** argv) {
             for (auto &jet : cs_reco.inclusive_jets()) {
                 float jetXE = z_proj*jet.px()/jet.pz();
                 float jetYE = z_proj*jet.py()/jet.pz();
-                if (pass_fiducial_cut(jetXE, jetYE, reco_fiducial_buffer)) reco_jets_selected.push_back(jet);
+                bool passesFiducial = em_only
+                    ? pass_fiducial_cut(jetXE, jetYE, reco_fiducial_buffer_ecal, kFiducialRectEcal)
+                    : pass_fiducial_cut(jetXE, jetYE, reco_fiducial_buffer);
+                if (passesFiducial) reco_jets_selected.push_back(jet);
             }
 
             // ---------------- fill reco jets ----------------
