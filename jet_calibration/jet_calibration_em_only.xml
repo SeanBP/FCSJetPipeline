@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+    EM-only jet-calibration pipeline: the EM-only counterpart of
+    jet_calibration.xml (same folder). Takes a folder of EM-only
+    jet_output_*.root (JetTrees) files and a JSON lookup table (from
+    jet_scale_em_only) and adds corrected branches (reco_E_corr,
+    reco_x_F_corr) to those files IN PLACE (TFile "UPDATE", no separate
+    output files, no undo). Uses ../shared/JetParameters.h's
+    computeFeynmanX. Differs from the ECAL+HCAL step only in the model
+    ApplyCorrections_em_only evaluates and in not writing the "uniform"
+    branches (see its header comment).
+
+    Configurable per submission (filled in by
+    submit_jet_calibration_em_only.sh, see its -h):
+      {{JETTREES_DIR}}    folder of jet_output_*.root files, split evenly
+                          across {{NPROCESSES}} jobs (contiguous ranges)
+      {{CALIB_JSON}}      absolute path to the calibration JSON lookup table
+      {{NPROCESSES}}      number of parallel jobs
+      {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
+
+    star-submit must run from the pipeline root, since the SandBox
+    <File> paths below are relative to it.
+-->
+
+<job nProcesses="{{NPROCESSES}}">
+
+    <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
+
+    <command>
+
+        stardev
+
+        module purge
+        module load fastjet-3.3.4
+        module load root-5.34.38
+
+        # Flatten jet_calibration/ and shared/ into the job's working dir.
+        cp jet_calibration/* .
+        cp shared/* .
+
+        echo "Compiling ApplyCorrections_em_only..."
+        g++ -m64 ApplyCorrections_em_only.cpp VectorDict.cxx -o ApplyCorrections_em_only \
+            `root-config --cflags --libs` -std=c++11
+
+        set INDIR = "{{JETTREES_DIR}}"
+        if ( "${INDIR}" !~ */ ) then
+            set INDIR = "${INDIR}/"
+        endif
+
+        # Evenly split every .root file across NPROCESSES jobs (contiguous
+        # ranges) so no two jobs ever open the same file.
+        ls ${INDIR}*.root | sort > all_files.list
+        set NTOTAL = `wc -l &lt; all_files.list`
+        set NJOBS = {{NPROCESSES}}
+
+        @ base = ${NTOTAL} / ${NJOBS}
+        @ rem = ${NTOTAL} % ${NJOBS}
+
+        if ( ${JOBINDEX} &lt; ${rem} ) then
+            @ mycount = ${base} + 1
+            @ mystart = ${JOBINDEX} * ${mycount}
+        else
+            @ mycount = ${base}
+            @ mystart = ( ${rem} * ( ${base} + 1 ) ) + ( ( ${JOBINDEX} - ${rem} ) * ${base} )
+        endif
+
+        @ line_start = ${mystart} + 1
+        @ line_end = ${mystart} + ${mycount}
+
+        echo "========================================"
+        echo "JOBINDEX    = ${JOBINDEX}"
+        echo "Total files = ${NTOTAL}, total jobs = ${NJOBS}"
+        echo "This job's files: lines ${line_start}-${line_end} (${mycount} files)"
+        echo "========================================"
+
+        sed -n "${line_start},${line_end}p" all_files.list > my_files.list
+        cat my_files.list
+
+        if ( ${mycount} == 0 ) then
+            echo "No files assigned to this job (nProcesses exceeds file count); nothing to do."
+        else
+            echo "Running ApplyCorrections_em_only..."
+            ./ApplyCorrections_em_only my_files.list {{CALIB_JSON}}
+        endif
+
+        # Temporary, job-local only; never meant to leave scratch.
+        rm -f all_files.list my_files.list
+
+        echo "Done."
+
+    </command>
+
+    <SandBox installer="ZIP">
+        <Package>
+            <File>file:./jet_calibration/ApplyCorrections_em_only.cpp</File>
+            <File>file:./shared/VectorDict.cxx</File>
+            <File>file:./shared/VectorDict.h</File>
+            <File>file:./shared/VectorDictClass.h</File>
+            <File>file:./shared/VectorDictLinkDef.h</File>
+            <File>file:./shared/JetParameters.h</File>
+        </Package>
+    </SandBox>
+
+    <stdout URL="{{STDOUT_URL}}"/>
+    <stderr URL="{{STDERR_URL}}"/>
+
+</job>

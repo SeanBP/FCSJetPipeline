@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+    EM-only jet-energy-scale calibration pipeline: the EM-only counterpart
+    of jet_scale.xml (same folder). Takes a folder of EM-only sim_to_jet
+    JetTrees (built with -E 1) and produces the JSON lookup table used to
+    correct reco jet energies. Two steps, one job:
+      1. JetEnergyScaleFineGrid_em_only: matches reco/truth jets and takes
+         the per-bin MEDIAN scale/response on a fine (E,x,y) grid ->
+         jet_calibration.root (uses ../shared/JetParameters.h for the
+         ECAL-only fiducial-cut geometry; EM-only is hardwired, no flag)
+      2. CalibrationMap_em_only: fits a smooth model (inverse-power
+         background + asymmetric skew Gaussian) per (x,y) bin from that
+         tree, writes the final JSON lookup. The JSON has the EM-only schema
+         (sigmaL/sigmaR): apply it with jet_calibration_em_only.xml, not
+         jet_calibration.xml.
+
+    Configurable per submission (filled in by submit_jet_scale_em_only.sh,
+    see its -h):
+      {{JETTREES_DIR}}           folder of jet_output_*.root files
+      {{OUTDIR}}                 absolute output directory
+      {{JSON_NAME}}              output lookup table filename
+      {{SAVE_CALIBRATION_ROOT}}  1 = keep intermediate jet_calibration.root, 0 = discard
+      {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
+
+    star-submit must run from the pipeline root, since the SandBox
+    <File> paths below are relative to it.
+
+    Single job (nProcesses=1): memory/CPU-bound (whole-folder scan + a
+    Minuit2 fit per position bin), not IO-bound, so not split across many
+    jobs; can also be compiled and run directly on the login node.
+    JetEnergyScaleFineGrid's peak memory scales with total matched-jet
+    count (each jet is duplicated across every nearby fine-grid point), so
+    a large input folder can exceed condor's default 2048 MB cgroup limit:
+    <ResourceUsage><Memory> below requests more headroom for every submission.
+-->
+
+<job nProcesses="1">
+
+    <ResourceUsage>
+        <Memory>
+            <MinMemory>4000</MinMemory>
+            <MaxMemory>8000</MaxMemory>
+        </Memory>
+    </ResourceUsage>
+
+    <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
+
+    <command>
+
+        stardev
+
+        module purge
+        module load fastjet-3.3.4
+        module load root-5.34.38
+
+        # Flatten jet_scale/ and shared/ into the job's working dir.
+        cp jet_scale/* .
+        cp shared/* .
+
+        set INDIR = "{{JETTREES_DIR}}"
+        if ( "${INDIR}" !~ */ ) then
+            set INDIR = "${INDIR}/"
+        endif
+
+        echo "========================================"
+        echo "JetTrees input dir = ${INDIR}"
+        echo "Output JSON name   = {{JSON_NAME}}"
+        echo "========================================"
+
+        echo "Compiling JetEnergyScaleFineGrid_em_only..."
+        g++ -m64 JetEnergyScaleFineGrid_em_only.cpp VectorDict.cxx -o JetEnergyScaleFineGrid_em_only \
+            `root-config --cflags --libs` \
+            `fastjet-config --cxxflags --libs` -std=c++11
+
+        echo "Running JetEnergyScaleFineGrid_em_only..."
+        ./JetEnergyScaleFineGrid_em_only "${INDIR}"
+
+        echo "Compiling CalibrationMap_em_only..."
+        g++ -m64 CalibrationMap_em_only.cpp -o CalibrationMap_em_only \
+            `root-config --cflags --libs` -lMinuit2 -std=c++11
+
+        echo "Running CalibrationMap_em_only..."
+        ./CalibrationMap_em_only jet_calibration.root {{JSON_NAME}}
+
+        if ( {{SAVE_CALIBRATION_ROOT}} == 0 ) then
+            rm -f jet_calibration.root
+        endif
+
+        echo "Files in scratch:"
+        ls -l
+
+    </command>
+
+    <SandBox installer="ZIP">
+        <Package>
+            <File>file:./jet_scale/JetEnergyScaleFineGrid_em_only.cpp</File>
+            <File>file:./jet_scale/CalibrationMap_em_only.cpp</File>
+            <File>file:./shared/VectorDict.cxx</File>
+            <File>file:./shared/VectorDict.h</File>
+            <File>file:./shared/VectorDictClass.h</File>
+            <File>file:./shared/VectorDictLinkDef.h</File>
+            <File>file:./shared/JetParameters.h</File>
+        </Package>
+    </SandBox>
+
+    <stdout URL="{{STDOUT_URL}}"/>
+    <stderr URL="{{STDERR_URL}}"/>
+
+    <output fromScratch="jet_calibration.root" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="{{JSON_NAME}}" toURL="file:{{OUTDIR}}/" />
+
+</job>

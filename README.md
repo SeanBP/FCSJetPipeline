@@ -42,9 +42,10 @@ FCSJetPipeline/
 ├── data_to_jet/              MuDst -> SimpleTree -> jet finding (real production data)
 │   └── data_to_jet.xml, submit_data_to_jet.sh, MakeRunList.pl
 ├── jet_scale/                 builds a JES calibration JSON from a folder of JetTrees
-│   └── jet_scale.xml, submit_jet_scale.sh
+│   └── jet_scale.xml, submit_jet_scale.sh   (+ the *_em_only.* counterparts: EM-only JetTrees, median-based, own fit model)
 ├── jet_calibration/             applies a calibration JSON to JetTrees, in place
-│   └── jet_calibration.xml, submit_jet_calibration.sh
+│   └── jet_calibration.xml, submit_jet_calibration.sh   (+ the *_em_only.* counterparts: reads the EM-only JSON schema)
+├── JetScalePlayground/          JES calibration diagnostics/exploration, not part of the pipeline
 ├── pico_analysis/                 PicoDst diagnostics utility, not part of the jet-finding chain
 │   └── pico_analysis.xml, submit_pico_analysis.sh, mip_ana.C, pico_to_root.C
 └── output/                       default scratch space; jobs are usually pointed at an explicit -o instead
@@ -74,8 +75,8 @@ single generated SimpleTree file.
 
 ```
 ./submit_sim_to_jet.sh -g <pythia8|pythia6> -t <tune_param> -p <ptcut> \
-    -n <nevents> -s <0|1> -o <outdir> [-j <nprocesses>] [-l <label>] \
-    [-w <json>] [-k <0|1>] [-f <triggers>]
+    -n <nevents> -s <0|1> -o <outdir> [-P <ptcutmax>] [-j <nprocesses>] \
+    [-l <label>] [-w <json>] [-k <0|1>] [-f <triggers>] [-E <0|1>]
 ```
 
 | Flag | Meaning |
@@ -83,14 +84,16 @@ single generated SimpleTree file.
 | `-g` | generator: `pythia8` or `pythia6` |
 | `-t` | pythia8: `PDF:pSet` integer (8=CTEQ6L1, 5=MSTW2008LO, 3=MRST LO*, 21=NNPDF3.1sx, <=0=default). pythia6: `PyTune` integer (325=Perugia STAR, 0=default) |
 | `-p` | pTHatMin cut, GeV -- a single flat value used by every job; ignored if `-w` is given |
+| `-P` | pTHatMax cut, GeV -- a single flat value used by every job, default `-1` (no upper cut); ignored if `-w` is given (put a `"ptcutmax"` key in each bin of the JSON instead) |
 | `-n` | events to generate per job |
 | `-s` | `1` to keep the intermediate `SimpleTree_*.root`, `0` to discard it after jet finding runs |
 | `-o` | output directory (created if missing) |
 | `-j` | total number of parallel jobs, default 1 |
-| `-w` | optional: absolute path to a JSON file of relative ptHatMin proportions to sample across the `-j` jobs, instead of one flat `-p` value -- overrides `-p` |
+| `-w` | optional: absolute path to a JSON file of relative ptHatMin (and optionally ptHatMax) proportions to sample across the `-j` jobs, instead of flat `-p`/`-P` values -- overrides `-p`/`-P` entirely |
 | `-l` | short label used in the generated XML's filename, default `run` |
 | `-k` | `1` to save stdout/stderr under `<outdir>/log/`, `0` to discard them, default `0` |
 | `-f` | comma-separated FCS trigger flag names (see FCS trigger flags below); an event only gets a jetTree entry if at least one of them fired. Omit/empty (default) keeps every event. Called `-f` here, not `-t` like `data_to_jet`'s equivalent flag, since `-t` is already taken by the tune/PDF param above |
+| `-E` | `1` to build reco jets from ECAL hits only (no HCAL), using the ECAL-only fiducial boundary for both reco and truth jets; `0` (default) keeps the previous ECAL+HCAL behavior. See "EM-only reco jets" below |
 
 Example -- 500 pythia8/CTEQ6L1 events at ptHatMin=10 GeV, discard the SimpleTree:
 
@@ -104,20 +107,20 @@ Each run produces `jet_output_<generator>_<tune>_pt<ptcut>_<run_number>.root`
 `run_number` is `JOBINDEX`, so raising `-j` above 1 runs that many
 independent jobs in parallel without filename collisions.
 
-**Weighted pT-cut sampling (`-w`).** Instead of one flat `-p` cut, `-w
-<json>` draws each job's ptHatMin from a table of relative proportions,
-so low-pT (bulk of the cross section) and high-pT (rare tail) both get
-proportionate statistics instead of either flooding or starving the
-sample. `pthat_distribution_optimized.json` ships with the table
-currently in use (fit to `pythia8_nnpdf23lo`'s reference distribution);
-format:
+**Weighted pT-cut sampling (`-w`).** Instead of flat `-p`/`-P` cuts, `-w
+<json>` draws each job's ptHatMin (and optionally ptHatMax) from a table
+of relative proportions, so low-pT (bulk of the cross section) and
+high-pT (rare tail) both get proportionate statistics instead of either
+flooding or starving the sample. `pthat_distribution_optimized.json`
+ships with the table currently in use (fit to `pythia8_nnpdf23lo`'s
+reference distribution); format:
 
 ```json
 {
   "reference_total": 20000,
   "bins": [
     { "ptcut": 0, "count": 21 },
-    { "ptcut": 2, "count": 218 },
+    { "ptcut": 2, "count": 218, "ptcutmax": 4 },
     ...
   ]
 }
@@ -125,9 +128,11 @@ format:
 
 `count` is that bin's share out of `reference_total`; `submit_sim_to_jet.sh`
 scales the proportion to however many jobs `-j` actually submits (does
-not require submitting `reference_total` jobs at once). Since this
-substitution is multi-line csh, not a single value, the wrapper generates
-it with Python rather than `sed`.
+not require submitting `reference_total` jobs at once). `ptcutmax` is
+optional per bin -- omitted/absent means `-1` (no upper cut), the same
+sentinel used everywhere else in this codebase. Since this substitution
+is multi-line csh, not a single value, the wrapper generates it with
+Python rather than `sed`.
 
 **FCS trigger flags.** Both the SimpleTree (`data`, written by
 `StSimpleReaderMaker`) and the JetTree (`jetTree`, written by
@@ -216,14 +221,55 @@ override took effect as expected.
 `cut_x_outer`/`cut_y_min`/`cut_y_max` (used by both `data_to_jet` and
 `sim_to_jet`, and by `jet_scale`/`jet_calibration` downstream) are
 reproducible directly from the STAR conditions DB via a standalone tool in
-`../../GeometryPlayground/`: `run_number_to_fiducial.sh <run_number>` pulls
+`GeometryPlayground/`: `run_number_to_fiducial.sh <run_number>` pulls
 `StFcsDb`'s detector-position geometry for that run's era and computes the
 ECAL/HCAL fiducial rectangle from it. See the comment above `cut_x_inner`
 in `JetParameters.h` for provenance. Detector position is constant across
 essentially all of Run 22 (one transition, 2021-12-21), so a single
 hardcoded rectangle is valid pipeline-wide -- re-run the tool only if
 there's reason to think the geometry changed (a different run period, a
-documented detector move).
+documented detector move). `cut_x_inner_ecal`/`cut_x_outer_ecal`/
+`cut_y_min_ecal`/`cut_y_max_ecal` are the same idea but for ECAL's own raw
+footprint (not clipped down to HCAL's smaller projected one) -- see
+"EM-only reco jets" below for when that rectangle applies instead. Both
+rectangles are exposed as `FiducialRect` structs (`kFiducialRect`/
+`kFiducialRectEcal`) that `pass_fiducial_cut()`/`pass_jet_scale_cut()`
+take as an optional last argument, defaulting to `kFiducialRect` so every
+pre-existing call site is unaffected.
+
+**EM-only reco jets (`-E`).** `submit_sim_to_jet.sh -E 1` and
+`submit_data_to_jet.sh -E 1` build reco jets from ECAL hits only (FCS
+Cal_detid 0/1), skipping HCAL hits (detid 2/3) entirely instead of the
+previous default of clustering both together. Two things change together
+when `-E 1` is set, both in `JetMatcher.cpp`/`RecoJets.cpp`:
+1. The HCAL-hit skip happens before clustering, so reco jets are built
+   from ECAL energy deposits alone.
+2. Reco jet (and, in `sim_to_jet`, truth jet) fiducial selection switches
+   from the default rectangle (`kFiducialRect`, `reco_fiducial_buffer`) to
+   the ECAL-only one (`kFiducialRectEcal`, `reco_fiducial_buffer_ecal`) --
+   there's no reason to clip EM-only reco jets down to HCAL's smaller
+   acceptance. Truth jets get the same outward dilation as before (the
+   `-R/2` `etaPhiMargin` trick in `pass_jet_scale_cut`), just applied to
+   the ECAL-only boundary. `reco_fiducial_buffer_ecal` is `20.0f`,
+   characterized via the EM-only JES calibration diagnostics fork
+   (`JetScalePlayground/`): high-chi2 fit failures concentrated within
+   ~20cm of the fiducial edge, comparable to the default rectangle's
+   characterized `10.0f`.
+
+Every JetTree carries a `reco_em_only` int branch (0/1, constant for the
+whole file) recording which mode built it, same provenance convention as
+`mc_pthatmin_gev`/`sigma_job`/etc. `jet_scale` (`submit_jet_scale.sh -E 1`)
+must be told separately whether its input JetTrees are EM-only, since it
+re-derives its own fit grid from `JetParameters.h` rather than reading
+`reco_em_only` back out of the trees -- passing the wrong `-E` value there
+silently fits against the wrong rectangle. `jet_calibration` needs no such
+flag: `ApplyCorrections.cpp` only ever reads back whatever (E,x,y) grid is
+already baked into the calibration JSON, so it's agnostic to which
+rectangle produced that JSON.
+
+For EM-only JetTrees the dedicated calibration chain is `jet_scale_em_only`
+followed by `jet_calibration_em_only` (below), which have their own fit
+model and JSON schema.
 
 ## data_to_jet
 
@@ -252,7 +298,7 @@ script needs its `use lib` line updated.
 
 ```
 ./submit_data_to_jet.sh -f <listfile> -s <0|1> -o <outdir> \
-    [-j <nprocesses>] [-l <label>] [-k <0|1>]
+    [-j <nprocesses>] [-l <label>] [-k <0|1>] [-t <triggers>] [-E <0|1>]
 ```
 
 | Flag | Meaning |
@@ -263,6 +309,8 @@ script needs its `use lib` line updated.
 | `-j` | number of parallel jobs to evenly split the list's lines across, default 1 |
 | `-l` | short label used in the generated XML's filename, default `run` |
 | `-k` | `1` to save each job's stdout/stderr under `<outdir>/log/`, `0` to discard them, default `0` |
+| `-t` | comma-separated FCS trigger flag names (see FCS trigger flags below); an event only gets a jetTree entry if at least one of them fired. Omit/empty (default) keeps every event |
+| `-E` | `1` to build reco jets from ECAL hits only (no HCAL), using the ECAL-only fiducial boundary; `0` (default) keeps the previous ECAL+HCAL behavior. See "EM-only reco jets" under sim_to_jet above |
 
 Each job fetches its assigned files (`xrdcp` if xrootd URLs, plain `cp`
 otherwise) and runs `runMudst.C` on each to get its SimpleTree. Runs
@@ -325,7 +373,7 @@ only the intermediate fit tree).
 
 ```
 ./submit_jet_scale.sh -i <jettrees_dir> -o <outdir> [-n <json_name>] \
-    [-s <0|1>] [-l <label>] [-k <0|1>]
+    [-s <0|1>] [-l <label>] [-k <0|1>] [-E <0|1>]
 ```
 
 | Flag | Meaning |
@@ -336,6 +384,7 @@ only the intermediate fit tree).
 | `-s` | `1` to keep the intermediate `jet_calibration.root`, `0` to discard it (default `0`) |
 | `-l` | short label used in the generated XML's filename, default `run` |
 | `-k` | `1` to save stdout/stderr under `<outdir>/log/`, `0` to discard them, default `0` |
+| `-E` | `1` if the input JetTrees are EM-only (built with `sim_to_jet -E 1`) -- fits against the ECAL-only fiducial rectangle/buffer instead of the default; `0` (default) for ordinary ECAL+HCAL JetTrees. Must match how the input was actually built |
 
 Example:
 
@@ -349,6 +398,62 @@ It can also just be compiled and run directly on the login node instead
 of through SUMS, if preferred (see the two `g++`/`./` lines in
 `jet_scale.xml`'s `<command>`).
 
+## jet_scale_em_only
+
+The EM-only counterpart of `jet_scale`, in the same `jet_scale/` folder as
+separate `_em_only` files so the ECAL+HCAL chain is untouched: the same four
+files (`jet_scale_em_only.xml`, `submit_jet_scale_em_only.sh`,
+`JetEnergyScaleFineGrid_em_only.cpp`, `CalibrationMap_em_only.cpp`), the
+same single-job structure, and the same flags minus `-E`. Use it for
+JetTrees built with `sim_to_jet -E 1` (ECAL hits only). Anything beyond
+this one-to-one set (closure tests, the sharded condor fit, plotting) is a
+diagnostic, not part of the pipeline, and lives in `JetScalePlayground/`
+and in the separate analysis directory `/star/u/seanp/FCSJetAnalysis/`
+(outside this repository).
+
+It differs from `jet_scale` in three ways, all hardwired:
+
+1. **Median, not Gaussian-fit mode.** Per-(E,x,y) scale/response are plain
+   medians. Numerical inversion with a mode/mean has a proven, non-zero
+   closure bias wherever the response curve is curved (Cukierman &
+   Nachman, arXiv:1609.05195, Eq. 24; it showed up here as a ~8% undershoot
+   at 8-15 GeV); the median closes exactly regardless of the curve's
+   shape (their Eq. 35). The correction is applied once per jet, at its
+   own measured `E_reco` -- no iteration.
+2. **Own fit model.** Inverse-power background `A + B/E + C/E^2` plus an
+   asymmetric skew Gaussian (`sigmaL` below `E0`, `sigmaR` above),
+   smoothed over the grid and masked to the ECAL fiducial acceptance. The
+   JSON's bins carry `sigmaL`/`sigmaR`, not `jet_scale`'s single `sigma`.
+3. **EM-only defaults:** ECAL-only fiducial rectangle/buffer, truth-energy
+   bins from 3 to 100 GeV, `match_radius` 5 cm.
+
+```
+./submit_jet_scale_em_only.sh -i <jettrees_dir> -o <outdir> [-n <json_name>] \
+    [-s <0|1>] [-l <label>] [-k <0|1>]
+```
+
+| Flag | Meaning |
+|---|---|
+| `-i` | absolute path to a folder of EM-only `jet_output_*.root` files |
+| `-o` | output directory (created if missing) |
+| `-n` | filename for the output JSON lookup table, default `JetEnergyScale_lookup_em_only.json` |
+| `-s` | `1` to keep the intermediate `jet_calibration.root`, `0` to discard it (default `0`) |
+| `-l` | short label used in the generated XML's filename, default `run` |
+| `-k` | `1` to save stdout/stderr under `<outdir>/log/`, `0` to discard them, default `0` |
+
+Example:
+
+```
+./submit_jet_scale_em_only.sh -i /star/data01/pwg/seanp/pipeline_output/em_only_production \
+    -o /star/data01/pwg/seanp/em_only_cal
+```
+
+On the 1500-file / 9.8M matched-jet EM-only production sample, the
+resulting map gives a post-correction median scale within 0.994-1.005 of
+unity across 3-58 GeV, with 95.3% of jets landing in a defined map cell and
+a mean per-position reduced chi2 of 1.33 (measured with the closure test in
+`/star/u/seanp/FCSJetAnalysis/`, outside this repository).
+
 ## jet_calibration
 
 Takes a folder of `jet_output_*.root` (JetTrees) files and a calibration
@@ -357,7 +462,11 @@ JSON (from `jet_scale`) and adds the corrected branches (`reco_E_corr`,
 the files in place** -- `ApplyCorrections` opens each with `TFile
 "UPDATE"` and overwrites the tree; there are no separate output files and
 no undo. References the shared `shared/JetParameters.h`
-(`computeFeynmanX`, for `reco_x_F_corr`).
+(`computeFeynmanX`, for `reco_x_F_corr`). Unlike `jet_scale`, this step
+needs no EM-only flag: it only ever looks up whatever (E,x,y) grid is
+already baked into the input calibration JSON, so it's agnostic to
+whether that JSON (and the JetTrees it's applied to) came from an
+EM-only or ordinary ECAL+HCAL run.
 
 `ApplyCorrections.cpp` reflects `reco_x` to positive before looking it up
 in the JES JSON grid (`fabs(x)`), matching `jet_scale`'s
@@ -386,6 +495,31 @@ is destructive. Example:
 ./submit_jet_calibration.sh -i /star/data01/pwg/seanp/tunes/pythia8_mstw2008lo/JetTrees \
     -c /star/data01/pwg/seanp/tunes/pythia8_mstw2008lo/JetEnergyScale_lookup_pythia8_mstw2008lo.json \
     -j 10
+```
+
+## jet_calibration_em_only
+
+The EM-only counterpart of `jet_calibration`, in the same `jet_calibration/`
+folder: `ApplyCorrections_em_only.cpp`, `jet_calibration_em_only.xml`,
+`submit_jet_calibration_em_only.sh`, same flags and same job-splitting. Like `jet_calibration` it **modifies the
+files in place** (`TFile "UPDATE"`, no undo) and asks for a `y`/`N`
+confirmation before submitting. Use it with a JSON from `jet_scale_em_only`
+-- the ECAL+HCAL `ApplyCorrections` cannot read that schema (it exits with
+"bin missing field sigma" rather than misapplying it), and this one cannot
+read the ECAL+HCAL schema.
+
+Differences from `jet_calibration`: it evaluates the EM-only model
+(`A + B/E + C/E^2` + asymmetric skew Gaussian) once per jet at its own
+`E_reco`, and it writes only `reco_E_corr` and `reco_x_F_corr` -- there are
+no `*_uniform_corr` branches, since the uniform-correction constants were
+tuned for ECAL+HCAL jets. Jets at (x,y) where the map is undefined
+(outside the buffer-restricted fiducial acceptance) keep `reco_E_corr =
+reco_E` and are counted under "Invalid entries", exactly as in the
+ECAL+HCAL step.
+
+```
+./submit_jet_calibration_em_only.sh -i <jettrees_dir> -c <calib_json> -j <nprocesses> \
+    [-l <label>] [-k <0|1>]
 ```
 
 ## pico_analysis
