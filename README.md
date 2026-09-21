@@ -258,18 +258,13 @@ when `-E 1` is set, both in `JetMatcher.cpp`/`RecoJets.cpp`:
 
 Every JetTree carries a `reco_em_only` int branch (0/1, constant for the
 whole file) recording which mode built it, same provenance convention as
-`mc_pthatmin_gev`/`sigma_job`/etc. `jet_scale` (`submit_jet_scale.sh -E 1`)
-must be told separately whether its input JetTrees are EM-only, since it
-re-derives its own fit grid from `JetParameters.h` rather than reading
-`reco_em_only` back out of the trees -- passing the wrong `-E` value there
-silently fits against the wrong rectangle. `jet_calibration` needs no such
-flag: `ApplyCorrections.cpp` only ever reads back whatever (E,x,y) grid is
-already baked into the calibration JSON, so it's agnostic to which
-rectangle produced that JSON.
-
-For EM-only JetTrees the dedicated calibration chain is `jet_scale_em_only`
-followed by `jet_calibration_em_only` (below), which have their own fit
-model and JSON schema.
+`mc_pthatmin_gev`/`sigma_job`/etc. `jet_scale` and `jet_calibration` must be
+told separately whether their input JetTrees are EM-only, since they don't
+read `reco_em_only` back out of the trees: `submit_jet_scale.sh -E 1` and
+`submit_jet_calibration.sh -E 1` hand off to the dedicated EM-only scripts
+(`submit_jet_scale_em_only.sh` then `submit_jet_calibration_em_only.sh`,
+below), which have their own fit model and JSON schema. Passing the wrong `-E`
+value there runs the wrong calibration for the input.
 
 ## data_to_jet
 
@@ -384,7 +379,7 @@ only the intermediate fit tree).
 | `-s` | `1` to keep the intermediate `jet_calibration.root`, `0` to discard it (default `0`) |
 | `-l` | short label used in the generated XML's filename, default `run` |
 | `-k` | `1` to save stdout/stderr under `<outdir>/log/`, `0` to discard them, default `0` |
-| `-E` | `1` if the input JetTrees are EM-only (built with `sim_to_jet -E 1`) -- fits against the ECAL-only fiducial rectangle/buffer instead of the default; `0` (default) for ordinary ECAL+HCAL JetTrees. Must match how the input was actually built |
+| `-E` | `1` if the input JetTrees are EM-only (built with `sim_to_jet -E 1`): hands off to `submit_jet_scale_em_only.sh` with the same arguments (see `jet_scale_em_only` below); `0` (default) for ordinary ECAL+HCAL JetTrees. Must match how the input was actually built |
 
 Example:
 
@@ -404,8 +399,9 @@ The EM-only counterpart of `jet_scale`, in the same `jet_scale/` folder as
 separate `_em_only` files so the ECAL+HCAL chain is untouched: the same four
 files (`jet_scale_em_only.xml`, `submit_jet_scale_em_only.sh`,
 `JetEnergyScaleFineGrid_em_only.cpp`, `CalibrationMap_em_only.cpp`), the
-same single-job structure, and the same flags minus `-E`. Use it for
-JetTrees built with `sim_to_jet -E 1` (ECAL hits only). Anything beyond
+same single-job structure, and the same flags minus `-E` (`submit_jet_scale.sh
+-E 1` simply forwards here). Use it for JetTrees built with `sim_to_jet -E 1`
+(ECAL hits only). Anything beyond
 this one-to-one set (closure tests, the sharded condor fit, plotting) is a
 diagnostic, not part of the pipeline, and lives in `JetScalePlayground/`
 and in the separate analysis directory `/star/u/seanp/FCSJetAnalysis/`
@@ -462,11 +458,11 @@ JSON (from `jet_scale`) and adds the corrected branches (`reco_E_corr`,
 the files in place** -- `ApplyCorrections` opens each with `TFile
 "UPDATE"` and overwrites the tree; there are no separate output files and
 no undo. References the shared `shared/JetParameters.h`
-(`computeFeynmanX`, for `reco_x_F_corr`). Unlike `jet_scale`, this step
-needs no EM-only flag: it only ever looks up whatever (E,x,y) grid is
-already baked into the input calibration JSON, so it's agnostic to
-whether that JSON (and the JetTrees it's applied to) came from an
-EM-only or ordinary ECAL+HCAL run.
+(`computeFeynmanX`, for `reco_x_F_corr`). It only ever looks up
+whatever (E,x,y) grid is baked into the input calibration JSON, and that
+JSON's schema differs between the ECAL+HCAL and EM-only calibrations, so
+`-E 1` hands off to `submit_jet_calibration_em_only.sh` (see
+`jet_calibration_em_only` below) for an EM-only JSON and EM-only JetTrees.
 
 `ApplyCorrections.cpp` reflects `reco_x` to positive before looking it up
 in the JES JSON grid (`fabs(x)`), matching `jet_scale`'s
@@ -477,7 +473,7 @@ folding it here would look up the wrong cell for every negative-y jet.
 
 ```
 ./submit_jet_calibration.sh -i <jettrees_dir> -c <calib_json> -j <nprocesses> \
-    [-l <label>] [-k <0|1>]
+    [-l <label>] [-k <0|1>] [-E <0|1>]
 ```
 
 | Flag | Meaning |
@@ -487,6 +483,7 @@ folding it here would look up the wrong cell for every negative-y jet.
 | `-j` | number of parallel jobs to evenly split the folder's files across |
 | `-l` | short label used in the generated XML's filename, default `run` |
 | `-k` | `1` to save each job's stdout/stderr under `<jettrees_dir>/log/`, `0` to discard them, default `0` |
+| `-E` | `1` if the JetTrees are EM-only and `-c` is an EM-only JSON: hands off to `submit_jet_calibration_em_only.sh` with the same arguments; `0` (default) for ECAL+HCAL |
 
 The wrapper asks for a `y`/`N` confirmation before submitting, since this
 is destructive. Example:
@@ -501,7 +498,8 @@ is destructive. Example:
 
 The EM-only counterpart of `jet_calibration`, in the same `jet_calibration/`
 folder: `ApplyCorrections_em_only.cpp`, `jet_calibration_em_only.xml`,
-`submit_jet_calibration_em_only.sh`, same flags and same job-splitting. Like `jet_calibration` it **modifies the
+`submit_jet_calibration_em_only.sh` (which `submit_jet_calibration.sh -E 1`
+forwards to), same flags minus `-E` and same job-splitting. Like `jet_calibration` it **modifies the
 files in place** (`TFile "UPDATE"`, no undo) and asks for a `y`/`N`
 confirmation before submitting. Use it with a JSON from `jet_scale_em_only`
 -- the ECAL+HCAL `ApplyCorrections` cannot read that schema (it exits with

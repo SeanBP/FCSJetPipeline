@@ -1,7 +1,7 @@
 #!/bin/bash
 # Generates and submits a concrete jet_scale.xml job.
 # Usage:
-#   ./submit_jet_scale.sh -i <jettrees_dir> -o <outdir> [-n <json_name>] [-s <0|1>] [-l <label>] [-k <0|1>]
+#   ./submit_jet_scale.sh -i <jettrees_dir> -o <outdir> [-n <json_name>] [-s <0|1>] [-l <label>] [-k <0|1>] [-E <0|1>]
 #
 #   -i  absolute path to a folder of jet_output_*.root (JetTrees) files
 #   -o  output directory (created if missing)
@@ -9,6 +9,11 @@
 #   -s  1 = keep intermediate jet_calibration.root, 0 = discard, default 0
 #   -l  short label for the generated XML's filename, default "run"
 #   -k  1 = save stdout/stderr under <outdir>/log/, 0 = discard, default 0
+#   -E  1 = the input JetTrees are EM-only (built with sim_to_jet -E 1): hand
+#       off to submit_jet_scale_em_only.sh (same folder) with the same
+#       arguments, which runs the EM-only calibration instead (its own
+#       default JSON name is JetEnergyScale_lookup_em_only.json unless -n is
+#       given). 0/omit = the ECAL+HCAL calibration below, unchanged.
 #
 # Example:
 #   ./submit_jet_scale.sh -i /star/data01/pwg/seanp/tunes/pythia8_mstw2008lo/JetTrees \
@@ -23,21 +28,35 @@ JSON_NAME="JetEnergyScale_lookup.json"
 SAVE_CALIBRATION_ROOT="0"
 LABEL="run"
 KEEPLOGS=0
+EM_ONLY=0
+# every option except -E, forwarded verbatim if -E 1 hands off to the
+# EM-only script (so an omitted -n keeps *that* script's own default)
+FORWARD=()
 
-while getopts "i:o:n:s:l:k:h" opt; do
+while getopts "i:o:n:s:l:k:E:h" opt; do
   case $opt in
-    i) JETTREES_DIR="$OPTARG" ;;
-    o) OUTDIR="$OPTARG" ;;
-    n) JSON_NAME="$OPTARG" ;;
-    s) SAVE_CALIBRATION_ROOT="$OPTARG" ;;
-    l) LABEL="$OPTARG" ;;
-    k) KEEPLOGS="$OPTARG" ;;
+    i) JETTREES_DIR="$OPTARG"; FORWARD+=(-i "$OPTARG") ;;
+    o) OUTDIR="$OPTARG"; FORWARD+=(-o "$OPTARG") ;;
+    n) JSON_NAME="$OPTARG"; FORWARD+=(-n "$OPTARG") ;;
+    s) SAVE_CALIBRATION_ROOT="$OPTARG"; FORWARD+=(-s "$OPTARG") ;;
+    l) LABEL="$OPTARG"; FORWARD+=(-l "$OPTARG") ;;
+    k) KEEPLOGS="$OPTARG"; FORWARD+=(-k "$OPTARG") ;;
+    E) EM_ONLY="$OPTARG" ;;
     h|*)
-      sed -n '2,16p' "$0"
+      sed -n '2,22p' "$0"
       exit 0
       ;;
   esac
 done
+
+if [ "$EM_ONLY" != "0" ] && [ "$EM_ONLY" != "1" ]; then
+    echo "Error: -E must be 0 or 1 (got '$EM_ONLY')"
+    exit 1
+fi
+
+if [ "$EM_ONLY" = "1" ]; then
+    exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/submit_jet_scale_em_only.sh" "${FORWARD[@]}"
+fi
 
 if [ -z "$JETTREES_DIR" ] || [ -z "$OUTDIR" ]; then
     echo "Missing required argument. Run with -h for usage."
