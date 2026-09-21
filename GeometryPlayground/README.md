@@ -27,7 +27,12 @@ to re-derive/verify them if the detector position ever changes.
   fiducial rectangle (HCAL's own projected footprint -- see the file's
   header comment for why that, rather than the true ECAL/HCAL overlap
   polygon, is the right definition, and for the built-in cross-check that
-  would flag it if that assumption ever stopped holding).
+  would flag it if that assumption ever stopped holding). Also reports
+  each side's ECAL-only rectangle (ECAL's own raw corners, not projected
+  or clipped to HCAL) -- this is `JetParameters.h`'s
+  `cut_x_inner_ecal`/`cut_x_outer_ecal`/`cut_y_min_ecal`/`cut_y_max_ecal`,
+  used when reco jets are built from ECAL hits only (EM-only mode, see the
+  pipeline README's "EM-only reco jets" section).
 - **`run_number_to_fiducial.sh`** -- Runs both stages end to end.
 - **`fcs_corners_run22.txt`** -- saved stage-1 output (corner positions) for
   the one geometry that covers essentially all of Run 22, produced from run

@@ -8,7 +8,13 @@
 //   1. Read the 4 corners each of ECAL north/south (det 0,1) and HCAL
 //      north/south (det 2,3), in STAR global cm.
 //   2. Project HCAL corners onto the ECAL plane (z = min ECAL corner z)
-//      via simple radial scaling (x*z_plane/z, y*z_plane/z).
+//      via simple radial scaling (x*z_plane/z, y*z_plane/z). ECAL's own
+//      corners get the same projection: its front face is tilted, not
+//      perpendicular to z (confirmed from real corner data -- the inner
+//      column, nearest the beam pipe, sits at larger z than the outer
+//      column), so only the corners already at z_ecal (the outer column,
+//      by construction -- see z_ecal's definition below) can be used
+//      as-is; every other corner must be projected too, same as HCAL's.
 //   3. Per side (north/south), report HCAL's own projected footprint as
 //      the fiducial rectangle (see the "Legacy-matching method" comment
 //      below for why), plus a diagnostic cross-check against the true
@@ -156,6 +162,25 @@ int main(int argc, char **argv) {
         }
     }
 
+    // Project ECAL's OWN corners onto z_ecal too. ECAL's front face is
+    // tilted, not perpendicular to z -- confirmed from real corner data,
+    // where the inner-column (nearest beam pipe) corners sit at larger z
+    // than the outer-column ones. z_ecal is defined as the closest-to-origin
+    // edge of that tilted face (min corner z), so a corner's raw (x,y) is
+    // only where the origin-ray through it crosses z_ecal if that corner
+    // already IS at z_ecal (true for the outer column here, not the inner
+    // one). Every other corner must be radially projected from the origin,
+    // same as HCAL's corners above -- this matches how jet positions
+    // themselves get projected (z_proj in JetParameters.h).
+    std::vector<Pt2> ecalProj[2]; // [0]=det0, [1]=det1
+    for (int side = 0; side < 2; side++) {
+        int det = side;
+        for (size_t i = 0; i < corners2d[det].size(); i++) {
+            double x = corners2d[det][i].x, y = corners2d[det][i].y, z = cornersZ[det][i];
+            ecalProj[side].push_back(Pt2{x * z_ecal / z, y * z_ecal / z});
+        }
+    }
+
     const char *sideNames[2] = {"north (left)", "south (right)"};
 
     // Legacy-matching method (confirmed against production JetParameters.h
@@ -173,6 +198,13 @@ int main(int argc, char **argv) {
     // single reflected rectangle (as this tool originally did) silently
     // discards any north/south asymmetry in the real detector position.
     double side_x_inner[2], side_x_outer[2], side_y_min[2], side_y_max[2];
+
+    // ECAL's own footprint (from ecalProj, corners projected onto z_ecal --
+    // see the projection comment above), used for the ECAL-only fiducial
+    // boundary (EM-only reco jets, no HCAL). Same col1/colMax-column,
+    // min/max-row bounding-box convention as the HCAL-footprint rectangle
+    // above.
+    double side_x_inner_ecal[2], side_x_outer_ecal[2], side_y_min_ecal[2], side_y_max_ecal[2];
 
     // corner index order is col1,row1=0 ; colMax,row1=1 ; colMax,rowMax=2 ; col1,rowMax=3
     const int COL1_ROW1 = 0, COLMAX_ROW1 = 1, COLMAX_ROWMAX = 2, COL1_ROWMAX = 3;
@@ -221,6 +253,26 @@ int main(int argc, char **argv) {
         side_x_outer[side] = ax_outer;
         side_y_min[side] = ymin;
         side_y_max[side] = ymax;
+
+        // ECAL's own footprint, from its corners projected onto z_ecal
+        // (ecalProj, not the raw corners2d -- see the projection comment
+        // above; the outer column happens to already sit at z_ecal so it's
+        // unaffected, but the inner column does not and must be projected).
+        printPoly("ECAL projected", ecalProj[side]);
+        double ex_in  = ecalProj[side][COL1_ROW1].x;
+        double ex_out = ecalProj[side][COLMAX_ROW1].x;
+        double ey_at_col1_row1   = ecalProj[side][COL1_ROW1].y;
+        double ey_at_col1_rowMax = ecalProj[side][COL1_ROWMAX].y;
+        double eax_inner = std::min(std::fabs(ex_in), std::fabs(ex_out));
+        double eax_outer = std::max(std::fabs(ex_in), std::fabs(ex_out));
+        double eymin = std::min(ey_at_col1_row1, ey_at_col1_rowMax);
+        double eymax = std::max(ey_at_col1_row1, ey_at_col1_rowMax);
+        printf("  ECAL-only rectangle:      |x| in [%.8f, %.8f], y in [%.8f, %.8f]\n", eax_inner, eax_outer, eymin, eymax);
+
+        side_x_inner_ecal[side] = eax_inner;
+        side_x_outer_ecal[side] = eax_outer;
+        side_y_min_ecal[side] = eymin;
+        side_y_max_ecal[side] = eymax;
     }
 
     printf("\n=== Asymmetric fiducial rectangles, per side (JetParameters.h units, cm) ===\n");
@@ -240,6 +292,23 @@ int main(int argc, char **argv) {
         std::fabs(side_y_min[0] - side_y_min[1]) > 1e-3 ||
         std::fabs(side_y_max[0] - side_y_max[1]) > 1e-3) {
         printf("\nNote: north and south differ (as expected -- do not average/reflect them).\n");
+    }
+
+    printf("\n=== ECAL-only fiducial rectangles, per side (JetParameters.h units, cm) ===\n");
+    printf("static const float cut_x_inner_ecal_north = %.8ff;\n", side_x_inner_ecal[0]);
+    printf("static const float cut_x_outer_ecal_north = %.8ff;\n", side_x_outer_ecal[0]);
+    printf("static const float cut_y_min_ecal_north   = %.8ff;\n", side_y_min_ecal[0]);
+    printf("static const float cut_y_max_ecal_north   = %.8ff;\n", side_y_max_ecal[0]);
+    printf("static const float cut_x_inner_ecal_south = %.8ff;\n", side_x_inner_ecal[1]);
+    printf("static const float cut_x_outer_ecal_south = %.8ff;\n", side_x_outer_ecal[1]);
+    printf("static const float cut_y_min_ecal_south   = %.8ff;\n", side_y_min_ecal[1]);
+    printf("static const float cut_y_max_ecal_south   = %.8ff;\n", side_y_max_ecal[1]);
+
+    if (std::fabs(side_x_inner_ecal[0] - side_x_inner_ecal[1]) > 1e-3 ||
+        std::fabs(side_x_outer_ecal[0] - side_x_outer_ecal[1]) > 1e-3 ||
+        std::fabs(side_y_min_ecal[0] - side_y_min_ecal[1]) > 1e-3 ||
+        std::fabs(side_y_max_ecal[0] - side_y_max_ecal[1]) > 1e-3) {
+        printf("\nNote: ECAL-only north and south differ (as expected -- do not average/reflect them).\n");
     }
 
     return 0;
