@@ -38,6 +38,12 @@
                              reco and truth jets (-E flag). 0 (default) =
                              previous ECAL+HCAL behavior. See JetParameters.h's
                              kFiducialRectEcal/reco_fiducial_buffer_ecal.
+      {{USE_POINTS}}        1 = build reco jets from FCS points (StMuFcsPoint)
+                             instead of tower hits (-F flag). 0 (default) =
+                             hits, the previous behavior. Truth jets are
+                             unaffected. HCAL currently produces no points at
+                             all, so this is ECAL-only input regardless of
+                             EM_ONLY when enabled.
       {{OUTDIR}}            absolute output directory
       {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
 
@@ -88,6 +94,7 @@
         echo "ptHatMax       = ${ptcutmax} GeV"
         echo "FcsJetFilter Ethr = {{FILTER_ETHR}} GeV"
         echo "EM-only        = {{EM_ONLY}}"
+        echo "Use points     = {{USE_POINTS}}"
         echo "nevents        = {{NEVENTS}}"
         echo "Save SimpleTree = {{SAVE_SIMPLETREE}}"
         echo "JOBINDEX       = ${JOBINDEX}"
@@ -136,7 +143,7 @@
 
         echo "SimpleTree_mudst.root" > single_file.list
 
-        ./JetMatcher single_file.list "${TRIGGER_FILTER}" {{EM_ONLY}}
+        ./JetMatcher single_file.list "${TRIGGER_FILTER}" {{EM_ONLY}} {{USE_POINTS}}
         mv jet_output.root jet_output_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
 
         if ( {{SAVE_SIMPLETREE}} == 1 ) then

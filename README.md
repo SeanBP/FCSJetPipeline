@@ -76,7 +76,7 @@ single generated SimpleTree file.
 ```
 ./submit_sim_to_jet.sh -g <pythia8|pythia6> -t <tune_param> -p <ptcut> \
     -n <nevents> -s <0|1> -o <outdir> [-P <ptcutmax>] [-j <nprocesses>] \
-    [-l <label>] [-w <json>] [-k <0|1>] [-f <triggers>] [-E <0|1>]
+    [-l <label>] [-w <json>] [-k <0|1>] [-f <triggers>] [-E <0|1>] [-F <0|1>]
 ```
 
 | Flag | Meaning |
@@ -94,6 +94,7 @@ single generated SimpleTree file.
 | `-k` | `1` to save stdout/stderr under `<outdir>/log/`, `0` to discard them, default `0` |
 | `-f` | comma-separated FCS trigger flag names (see FCS trigger flags below); an event only gets a jetTree entry if at least one of them fired. Omit/empty (default) keeps every event. Called `-f` here, not `-t` like `data_to_jet`'s equivalent flag, since `-t` is already taken by the tune/PDF param above |
 | `-E` | `1` to build reco jets from ECAL hits only (no HCAL), using the ECAL-only fiducial boundary for both reco and truth jets; `0` (default) keeps the previous ECAL+HCAL behavior. See "EM-only reco jets" below |
+| `-F` | `1` to build reco jets from FCS points instead of tower hits; `0` (default) keeps the previous hit-based behavior. See "Point-based reco jets" below |
 
 Example -- 500 pythia8/CTEQ6L1 events at ptHatMin=10 GeV, discard the SimpleTree:
 
@@ -266,6 +267,35 @@ read `reco_em_only` back out of the trees: `submit_jet_scale.sh -E 1` and
 below), which have their own fit model and JSON schema. Passing the wrong `-E`
 value there runs the wrong calibration for the input.
 
+**Point-based reco jets (`-F`).** `submit_sim_to_jet.sh -F 1` and
+`submit_data_to_jet.sh -F 1` build reco jets from FCS points (`StMuFcsPoint`,
+the single-photon-candidate level -- see `Cal_pt_*` in
+`StSimpleReaderMaker.h`) instead of raw tower hits, in both
+`JetMatcher.cpp`/`RecoJets.cpp`. Truth jets are never affected (they're
+already generator-level). The per-candidate energy floor
+(`mip_threshold*ecal_mip`/`hcal_mip`) and the (x,y,z)-direction PseudoJet
+construction are otherwise identical to the hit-based path -- only the
+source arrays (`Cal_pt_*` vs `Cal_hit_*`) change. **HCAL currently produces
+no points at all** (checked directly against real data), so `-F 1` is
+ECAL-only input regardless of `-E`; combine with `-E 1` to also get the
+ECAL-only fiducial boundary, or leave `-E 0` to keep the wider default
+rectangle over effectively the same ECAL-only input. Note that with `-F 1`,
+the `reco_nphotons` branch (points with E>1 GeV inside deltaR<R of the jet
+axis) becomes largely redundant with `reco_nconst`, since the jet's own
+constituents and the points counted as "photons near the jet axis" are now
+mostly the same set -- same relationship as `truth_nphotons`/`truth_nconst`
+in `sim_to_jet`'s `-E 1` mode. Every JetTree carries a `reco_from_points`
+int branch (0/1, constant for the whole file) recording which mode built it.
+
+**Run parameters file.** Both `submit_sim_to_jet.sh` and
+`submit_data_to_jet.sh` write `<outdir>/run_params_<label>_<REQID>.txt`
+alongside the job output, right after the condor request id is known --
+every resolved CLI flag, the submission timestamp (UTC), the generated
+XML's path, and the pipeline repo's git commit hash at submission time.
+This is the reference for "what produced this output" months later;
+it's written once per submission (one file per `-l` label + REQID pair),
+not per job, since all jobs in one submission share the same parameters.
+
 ## data_to_jet
 
 Real STAR MuDst data has already been through official offline production
@@ -293,7 +323,8 @@ script needs its `use lib` line updated.
 
 ```
 ./submit_data_to_jet.sh -f <listfile> -s <0|1> -o <outdir> \
-    [-j <nprocesses>] [-l <label>] [-k <0|1>] [-t <triggers>] [-E <0|1>]
+    [-j <nprocesses>] [-l <label>] [-k <0|1>] [-t <triggers>] [-E <0|1>] \
+    [-F <0|1>]
 ```
 
 | Flag | Meaning |
@@ -306,6 +337,7 @@ script needs its `use lib` line updated.
 | `-k` | `1` to save each job's stdout/stderr under `<outdir>/log/`, `0` to discard them, default `0` |
 | `-t` | comma-separated FCS trigger flag names (see FCS trigger flags below); an event only gets a jetTree entry if at least one of them fired. Omit/empty (default) keeps every event |
 | `-E` | `1` to build reco jets from ECAL hits only (no HCAL), using the ECAL-only fiducial boundary; `0` (default) keeps the previous ECAL+HCAL behavior. See "EM-only reco jets" under sim_to_jet above |
+| `-F` | `1` to build reco jets from FCS points instead of tower hits; `0` (default) keeps the previous hit-based behavior. See "Point-based reco jets" below |
 
 Each job fetches its assigned files (`xrdcp` if xrootd URLs, plain `cp`
 otherwise) and runs `runMudst.C` on each to get its SimpleTree. Runs

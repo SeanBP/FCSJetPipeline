@@ -2,7 +2,8 @@
 # Generates and submits a concrete data_to_jet.xml job.
 # Usage:
 #   ./submit_data_to_jet.sh -f <listfile> -s <0|1> -o <outdir> \
-#       [-j <nprocesses>] [-l <label>] [-k <0|1>] [-t <triggers>] [-E <0|1>]
+#       [-j <nprocesses>] [-l <label>] [-k <0|1>] [-t <triggers>] [-E <0|1>] \
+#       [-F <0|1>]
 #
 #   -f  absolute path to a file catalog list (MakeRunList.pl's
 #       "path,filename,events" format: xrootd URL or local path, event
@@ -18,6 +19,10 @@
 #       ECAL-only fiducial boundary (../shared/JetParameters.h's
 #       kFiducialRectEcal/reco_fiducial_buffer_ecal). 0/omit = previous
 #       ECAL+HCAL behavior.
+#   -F  1 = build reco jets from FCS points (StMuFcsPoint, the single-
+#       photon-candidate level) instead of tower hits. 0/omit = hits, the
+#       previous default behavior. HCAL currently produces no points at
+#       all, so this is ECAL-only input regardless of -E when enabled.
 #
 # Example:
 #   ./submit_data_to_jet.sh -f /star/u/seanp/FCSJetPipeline/catalog/run22.list \
@@ -34,8 +39,9 @@ LABEL="run"
 KEEPLOGS=0
 TRIGGER_FILTER=""
 EM_ONLY=0
+USE_POINTS=0
 
-while getopts "f:s:o:j:l:k:t:E:h" opt; do
+while getopts "f:s:o:j:l:k:t:E:F:h" opt; do
   case $opt in
     f) LISTFILE="$OPTARG" ;;
     s) SAVE_SIMPLETREE="$OPTARG" ;;
@@ -45,8 +51,9 @@ while getopts "f:s:o:j:l:k:t:E:h" opt; do
     k) KEEPLOGS="$OPTARG" ;;
     t) TRIGGER_FILTER="$OPTARG" ;;
     E) EM_ONLY="$OPTARG" ;;
+    F) USE_POINTS="$OPTARG" ;;
     h|*)
-      sed -n '2,25p' "$0"
+      sed -n '2,30p' "$0"
       exit 0
       ;;
   esac
@@ -64,6 +71,11 @@ fi
 
 if [ "$EM_ONLY" != "0" ] && [ "$EM_ONLY" != "1" ]; then
     echo "Error: -E must be 0 or 1 (got '$EM_ONLY')"
+    exit 1
+fi
+
+if [ "$USE_POINTS" != "0" ] && [ "$USE_POINTS" != "1" ]; then
+    echo "Error: -F must be 0 or 1 (got '$USE_POINTS')"
     exit 1
 fi
 
@@ -105,10 +117,11 @@ sed -e "s#{{LISTFILE}}#${LISTFILE}#g" \
     -e "s#{{STDERR_URL}}#${STDERR_URL}#g" \
     -e "s/{{TRIGGER_FILTER}}/${TRIGGER_FILTER}/g" \
     -e "s/{{EM_ONLY}}/${EM_ONLY}/g" \
+    -e "s/{{USE_POINTS}}/${USE_POINTS}/g" \
     "${SCRIPT_DIR}/data_to_jet.xml" > "${OUTXML}"
 
 echo "Generated ${OUTXML}"
-echo "listfile=${LISTFILE} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} em_only=${EM_ONLY}"
+echo "listfile=${LISTFILE} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} em_only=${EM_ONLY} use_points=${USE_POINTS}"
 
 mkdir -p "${OUTDIR}"
 
@@ -124,6 +137,32 @@ mkdir -p "${SUBMIT_DIR}"
 # this submission's own jobs are done, in the background.
 REPORT=$(find "${PIPELINE_ROOT}" -maxdepth 1 -name 'sched*.report' -newer "${MARKER}")
 REQID=$(basename "${REPORT}" .report | sed 's/^sched//')
+
+# Provenance: one text file per submission in the output directory, so a
+# jet_output_*.root file sitting there months later can be traced back to
+# exactly what produced it (listfile, every resolved flag, the pipeline's
+# git commit, submission time, condor request id) without having to dig
+# through shell history or the (overwritable) generated XML itself.
+GITHASH=$(git -C "${PIPELINE_ROOT}" rev-parse HEAD 2>/dev/null || echo "unknown")
+cat > "${OUTDIR}/run_params_${LABEL}_${REQID}.txt" <<EOF
+# data_to_jet run parameters -- see FCSJetPipeline/README.md
+submitted_utc=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+label=${LABEL}
+request_id=${REQID}
+pipeline_commit=${GITHASH}
+generated_xml=${OUTXML}
+listfile=${LISTFILE}
+listfile_lines=$(wc -l < "${LISTFILE}")
+save_simpletree=${SAVE_SIMPLETREE}
+outdir=${OUTDIR}
+nProcesses=${NPROC}
+keep_logs=${KEEPLOGS}
+trigger_filter=${TRIGGER_FILTER:-<none>}
+em_only=${EM_ONLY}
+use_points=${USE_POINTS}
+EOF
+echo "Wrote run parameters to ${OUTDIR}/run_params_${LABEL}_${REQID}.txt"
+
 # Read the real Log path from the .condor file rather than assuming
 # /tmp/$USER/... -- a wrong guess makes condor_wait fail immediately, so
 # also gate the sweep on its exit status.

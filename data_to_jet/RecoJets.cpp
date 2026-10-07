@@ -23,18 +23,28 @@ using namespace fastjet;
 int main(int argc, char** argv) {
 
     if (argc < 2) {
-        cerr << "Usage: " << argv[0] << " file_list.list [trigger_filter] [em_only]" << endl;
+        cerr << "Usage: " << argv[0] << " file_list.list [trigger_filter] [em_only] [use_points]" << endl;
         cerr << "  trigger_filter: comma-separated FCS trigger flag names (see FcsTriggerDefs.h)." << endl;
         cerr << "                  An event is kept if ANY of them fired. Omit/empty = keep all events." << endl;
         cerr << "  em_only: 1 = form reco jets from ECAL hits only (no HCAL), and use the" << endl;
         cerr << "           ECAL-only fiducial boundary. 0/omit = use both ECAL+HCAL," << endl;
         cerr << "           the previous default behavior." << endl;
+        cerr << "  use_points: 1 = build reco jets from FCS points (StMuFcsPoint, the" << endl;
+        cerr << "              single-photon-candidate level) instead of raw tower hits." << endl;
+        cerr << "              0/omit = hits, the previous default behavior. HCAL currently" << endl;
+        cerr << "              produces no points at all (checked directly), so this is" << endl;
+        cerr << "              ECAL-only input regardless of em_only when enabled." << endl;
         return 1;
     }
 
     // Optional 3rd arg: 1 = EM-only reco jets (ECAL hits only, ECAL-only
     // fiducial boundary). Default 0 keeps the previous ECAL+HCAL behavior.
     bool em_only = (argc >= 4) && (string(argv[3]) == "1");
+
+    // Optional 4th arg: 1 = build reco jets from FCS points instead of
+    // tower hits (see Usage above). Default 0 keeps the previous
+    // hit-based behavior.
+    bool use_points = (argc >= 5) && (string(argv[4]) == "1");
 
     string list_fname = argv[1];
     ifstream infile(list_fname);
@@ -124,7 +134,12 @@ int main(int argc, char** argv) {
     // the jet axis, same E>1 GeV / deltaR<R convention as the FMS EM-jet
     // analyses' photon definition. ECAL points only (det 0/1) -- points
     // are reconstructed FCS-wide, but a "photon" count should not include
-    // HCAL showers.
+    // HCAL showers. NOTE: when use_points=1 below, the jet itself is built
+    // from these same points, so reco_nphotons becomes largely redundant
+    // with reco_nconst (every point inside the jet's own clustering radius
+    // is both a constituent and, almost always, within the (wider) R used
+    // here) -- same relationship as truth_nphotons/truth_nconst in
+    // JetMatcher.cpp's em_only mode.
     outTree->Branch("reco_nphotons", &reco_nphotons);
 
     // Per-event FCS trigger flags, passed through from the SimpleTree (FcsTriggerDefs.h)
@@ -170,6 +185,12 @@ int main(int argc, char** argv) {
     Int_t reco_em_only = em_only ? 1 : 0;
     outTree->Branch("reco_em_only", &reco_em_only, "reco_em_only/I");
 
+    // 1 if this file's reco jets were built from FCS points instead of
+    // tower hits, 0 for the previous hit-based default. Constant for the
+    // whole job/file -- see the use_points CLI arg above.
+    Int_t reco_from_points = use_points ? 1 : 0;
+    outTree->Branch("reco_from_points", &reco_from_points, "reco_from_points/I");
+
     const int MAX_HITS = 10000;
     const int MAX_PTS = 200; // matches StSimpleReaderMaker.h's Cal_pt_* array size
 
@@ -178,7 +199,7 @@ int main(int argc, char** argv) {
     Int_t Cal_detid[MAX_HITS];
 
     Int_t Cal_npts;
-    Float_t Cal_pt_energy[MAX_PTS], Cal_pt_x[MAX_PTS], Cal_pt_y[MAX_PTS];
+    Float_t Cal_pt_energy[MAX_PTS], Cal_pt_x[MAX_PTS], Cal_pt_y[MAX_PTS], Cal_pt_z[MAX_PTS];
     Int_t Cal_pt_detid[MAX_PTS];
 
     Long64_t cumulative_event = 0;
@@ -240,7 +261,11 @@ int main(int argc, char** argv) {
             tree->SetBranchAddress("Cal_pt_energy", Cal_pt_energy);
             tree->SetBranchAddress("Cal_pt_x", Cal_pt_x);
             tree->SetBranchAddress("Cal_pt_y", Cal_pt_y);
+            tree->SetBranchAddress("Cal_pt_z", Cal_pt_z);
             tree->SetBranchAddress("Cal_pt_detid", Cal_pt_detid);
+        } else if (use_points) {
+            cerr << "Warning: use_points=1 but file has no Cal_npts branch -- "
+                 << "0 reco jets will be built for this file." << endl;
         }
 
         Long64_t nentries = tree->GetEntries();
@@ -281,19 +306,26 @@ int main(int argc, char** argv) {
             vector<PseudoJet> reco_particles;
             vector<int> reco_detid;
 
-            for (int i=0; i<Cal_nhits; i++) {
+            // Either tower hits (default) or FCS points (use_points=1,
+            // see the CLI arg above) feed the same anti-kt clustering
+            // below -- same per-candidate energy floor and (x,y,z)
+            // direction-vector construction either way, just swapping
+            // which arrays are read.
+            int nSource = use_points ? Cal_npts : Cal_nhits;
 
-                float e = Cal_hit_energy[i];
-                int detid = Cal_detid[i];
+            for (int i=0; i<nSource; i++) {
+
+                float e = use_points ? Cal_pt_energy[i] : Cal_hit_energy[i];
+                int detid = use_points ? Cal_pt_detid[i] : Cal_detid[i];
                 if (detid == 4 || detid == 5) continue;
                 if (em_only && (detid == 2 || detid == 3)) continue;
 
                 if (!(((detid==0||detid==1)&&e>mip_threshold*ecal_mip) ||
                       ((detid==2||detid==3)&&e>mip_threshold*hcal_mip))) continue;
 
-                float x=Cal_hit_posx[i];
-                float y=Cal_hit_posy[i];
-                float z=Cal_hit_posz[i];
+                float x = use_points ? Cal_pt_x[i] : Cal_hit_posx[i];
+                float y = use_points ? Cal_pt_y[i] : Cal_hit_posy[i];
+                float z = use_points ? Cal_pt_z[i] : Cal_hit_posz[i];
 
                 float norm = sqrt(x*x+y*y+z*z);
 

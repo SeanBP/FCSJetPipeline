@@ -4,7 +4,7 @@
 #   ./submit_sim_to_jet.sh -g <pythia8|pythia6> -t <tune_param> -p <ptcut> \
 #       -n <nevents> -s <0|1> -o <outdir> [-P <ptcutmax>] [-j <nprocesses>] \
 #       [-l <label>] [-k <0|1>] [-f <triggers>] [-c <run_number>] \
-#       [-e <filter_ethr>] [-E <0|1>] [-T <tune_pp>]
+#       [-e <filter_ethr>] [-E <0|1>] [-T <tune_pp>] [-F <0|1>]
 #
 #   -g  generator: pythia8 or pythia6
 #   -t  tune/PDF: pythia8 PDF:pSet (8=CTEQ6L1, 5=MSTW2008LO, 3=MRST LO*,
@@ -42,6 +42,11 @@
 #       none. Pass -t -1 with it to keep the preset's own PDF. Caveat:
 #       STAR's StarPythia8::Init() re-applies Detroit's MPI/CR values after
 #       the preset, so only those five differ from the preset for non-33.
+#   -F  1 = build reco jets from FCS points (StMuFcsPoint, the single-
+#       photon-candidate level) instead of tower hits. Truth jets are
+#       unaffected. 0/omit = hits, the previous default behavior. HCAL
+#       currently produces no points at all, so this is ECAL-only input
+#       regardless of -E when enabled.
 #
 # Example:
 #   ./submit_sim_to_jet.sh -g pythia8 -t 8 -p 10 -n 500 -s 0 \
@@ -67,8 +72,9 @@ TRIGGER_FILTER=""
 CALIB_RUN=0
 FILTER_ETHR=50.0
 EM_ONLY=0
+USE_POINTS=0
 
-while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:T:h" opt; do
+while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:T:F:h" opt; do
   case $opt in
     g) GENERATOR="$OPTARG" ;;
     t) TUNE_PARAM="$OPTARG" ;;
@@ -86,8 +92,9 @@ while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:T:h" opt; do
     e) FILTER_ETHR="$OPTARG" ;;
     E) EM_ONLY="$OPTARG" ;;
     T) PP_TUNE="$OPTARG" ;;
+    F) USE_POINTS="$OPTARG" ;;
     h|*)
-      sed -n '2,44p' "$0"
+      sed -n '2,55p' "$0"
       exit 0
       ;;
   esac
@@ -132,6 +139,11 @@ if [ "$PP_TUNE" -gt 0 ] && [ "$GENERATOR" != "pythia8" ]; then
     exit 1
 fi
 
+if [ "$USE_POINTS" != "0" ] && [ "$USE_POINTS" != "1" ]; then
+    echo "Error: -F must be 0 or 1 (got '$USE_POINTS')"
+    exit 1
+fi
+
 # SandBox <File> paths in sim_to_jet.xml are pipeline-root-relative, so
 # star-submit must run from there, not from here.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -164,7 +176,7 @@ fi
 
 export XML_IN="${SCRIPT_DIR}/sim_to_jet.xml"
 export XML_OUT="${OUTXML}"
-export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR EM_ONLY PP_TUNE
+export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR EM_ONLY PP_TUNE USE_POINTS
 
 python3 << 'PYEOF'
 import json
@@ -219,6 +231,7 @@ xml = xml.replace("{{CALIB_RUN}}", os.environ.get("CALIB_RUN", "0"))
 xml = xml.replace("{{FILTER_ETHR}}", os.environ.get("FILTER_ETHR", "50.0"))
 xml = xml.replace("{{EM_ONLY}}", os.environ.get("EM_ONLY", "0"))
 xml = xml.replace("{{PP_TUNE}}", os.environ.get("PP_TUNE", "-1"))
+xml = xml.replace("{{USE_POINTS}}", os.environ.get("USE_POINTS", "0"))
 
 with open(os.environ["XML_OUT"], "w") as f:
     f.write(xml)
@@ -226,9 +239,9 @@ PYEOF
 
 echo "Generated ${OUTXML}"
 if [ -n "$PTCUT_JSON" ]; then
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS}"
 else
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS}"
 fi
 
 mkdir -p "${OUTDIR}"
@@ -245,6 +258,39 @@ mkdir -p "${SUBMIT_DIR}"
 # this submission's own jobs are done, in the background.
 REPORT=$(find "${PIPELINE_ROOT}" -maxdepth 1 -name 'sched*.report' -newer "${MARKER}")
 REQID=$(basename "${REPORT}" .report | sed 's/^sched//')
+
+# Provenance: one text file per submission in the output directory, so a
+# jet_output_*.root file sitting there months later can be traced back to
+# exactly what produced it (every resolved simulation flag, the pipeline's
+# git commit, submission time, condor request id) without having to dig
+# through shell history or the (overwritable) generated XML itself.
+GITHASH=$(git -C "${PIPELINE_ROOT}" rev-parse HEAD 2>/dev/null || echo "unknown")
+cat > "${OUTDIR}/run_params_${LABEL}_${REQID}.txt" <<EOF
+# sim_to_jet run parameters -- see FCSJetPipeline/README.md
+submitted_utc=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+label=${LABEL}
+request_id=${REQID}
+pipeline_commit=${GITHASH}
+generated_xml=${OUTXML}
+generator=${GENERATOR}
+tune_param=${TUNE_PARAM}
+pp_tune=${PP_TUNE}
+ptcut=${PTCUT}
+ptcutmax=${PTCUTMAX}
+ptcut_json=${PTCUT_JSON:-<none>}
+nevents=${NEVENTS}
+save_simpletree=${SAVE_SIMPLETREE}
+outdir=${OUTDIR}
+nProcesses=${NPROC}
+keep_logs=${KEEPLOGS}
+trigger_filter=${TRIGGER_FILTER:-<none>}
+calib_run=${CALIB_RUN}
+filter_ethr=${FILTER_ETHR}
+em_only=${EM_ONLY}
+use_points=${USE_POINTS}
+EOF
+echo "Wrote run parameters to ${OUTDIR}/run_params_${LABEL}_${REQID}.txt"
+
 # Read the real Log path from the .condor file rather than assuming
 # /tmp/$USER/... -- a wrong guess makes condor_wait fail immediately, so
 # also gate the sweep on its exit status.

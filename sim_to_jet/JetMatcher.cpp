@@ -25,12 +25,18 @@ using namespace fastjet;
 int main(int argc, char** argv) {
 
     if (argc < 2) {
-        cerr << "Usage: " << argv[0] << " file_list.list [trigger_filter] [em_only]" << endl;
+        cerr << "Usage: " << argv[0] << " file_list.list [trigger_filter] [em_only] [use_points]" << endl;
         cerr << "  trigger_filter: comma-separated FCS trigger flag names (see FcsTriggerDefs.h)." << endl;
         cerr << "                  An event is kept if ANY of them fired. Omit/empty = keep all events." << endl;
         cerr << "  em_only: 1 = form reco jets from ECAL hits only (no HCAL), and use the" << endl;
         cerr << "           ECAL-only fiducial boundary for both reco and truth jets." << endl;
         cerr << "           0/omit = use both ECAL+HCAL, the previous default behavior." << endl;
+        cerr << "  use_points: 1 = build reco jets from FCS points (StMuFcsPoint, the" << endl;
+        cerr << "              single-photon-candidate level) instead of raw tower hits." << endl;
+        cerr << "              Truth jets are unaffected (they're generator-level already)." << endl;
+        cerr << "              0/omit = hits, the previous default behavior. HCAL currently" << endl;
+        cerr << "              produces no points at all, so this is ECAL-only input" << endl;
+        cerr << "              regardless of em_only when enabled." << endl;
         return 1;
     }
 
@@ -38,6 +44,11 @@ int main(int argc, char** argv) {
     // fiducial boundary for reco and truth jets alike). Default 0 keeps
     // the previous ECAL+HCAL behavior unchanged.
     bool em_only = (argc >= 4) && (string(argv[3]) == "1");
+
+    // Optional 4th arg: 1 = build reco jets from FCS points instead of
+    // tower hits (see Usage above). Default 0 keeps the previous
+    // hit-based behavior. Truth jets are never affected by this flag.
+    bool use_points = (argc >= 5) && (string(argv[4]) == "1");
 
     ifstream infile(argv[1]);
     vector<string> file_names;
@@ -97,6 +108,7 @@ int main(int argc, char** argv) {
     vector<float> truth_x_F, reco_x_F;
     vector<int> reco_side;
     vector<int> reco_nphotons;
+    vector<int> truth_nphotons;
 
     outTree->Branch("truth_pt", &truth_pt);
     outTree->Branch("truth_eta", &truth_eta);
@@ -141,8 +153,22 @@ int main(int argc, char** argv) {
     // sim_to_jet's chain already produces real points (StFcsPointMaker
     // runs in runSimBfc.C's chain alongside fcsSim/fcsCluster -- checked
     // directly, same StMuFcsPoint schema as real data), so this works
-    // identically here.
+    // identically here. NOTE: when use_points=1 below, reco jets are built
+    // from these same points, so reco_nphotons becomes largely redundant
+    // with reco_nconst -- same relationship as truth_nphotons/truth_nconst
+    // in em_only mode above.
     outTree->Branch("reco_nphotons", &reco_nphotons);
+
+    // Truth-level counterpart to reco_nphotons, for unfolding: the number
+    // of a truth jet's own generator-level constituents that are photons
+    // (pid==22), i.e. an exact particle-level count -- not a point-matched
+    // one like reco_nphotons, since there's no detector to match against
+    // here. In em_only mode this is trivially == truth_nconst (the
+    // pre-clustering truth filter already keeps photons only, see
+    // EM_ONLY_TRUTH_PIDS below), kept anyway for schema consistency with
+    // the default (ECAL+HCAL) mode, where truth jets include non-photon
+    // constituents too and this genuinely differs from truth_nconst.
+    outTree->Branch("truth_nphotons", &truth_nphotons);
 
     outTree->Branch("truth_const_px", &truth_const_px);
     outTree->Branch("truth_const_py", &truth_const_py);
@@ -189,6 +215,12 @@ int main(int argc, char** argv) {
     // Constant for the whole job/file -- see the em_only CLI arg above.
     Int_t reco_em_only = em_only ? 1 : 0;
     outTree->Branch("reco_em_only", &reco_em_only, "reco_em_only/I");
+
+    // 1 if this file's reco jets were built from FCS points instead of
+    // tower hits, 0 for the previous hit-based default. Constant for the
+    // whole job/file -- see the use_points CLI arg above.
+    Int_t reco_from_points = use_points ? 1 : 0;
+    outTree->Branch("reco_from_points", &reco_from_points, "reco_from_points/I");
 
     TDatabasePDG* pdgDB = TDatabasePDG::Instance();
 
@@ -245,7 +277,7 @@ int main(int argc, char** argv) {
 
     const int MAX_PTS = 200; // matches StSimpleReaderMaker.h's Cal_pt_* array size
     Int_t Cal_npts;
-    Float_t Cal_pt_energy[MAX_PTS], Cal_pt_x[MAX_PTS], Cal_pt_y[MAX_PTS];
+    Float_t Cal_pt_energy[MAX_PTS], Cal_pt_x[MAX_PTS], Cal_pt_y[MAX_PTS], Cal_pt_z[MAX_PTS];
     Int_t Cal_pt_detid[MAX_PTS];
 
     struct Candidate { int t, r; double dr; };
@@ -308,7 +340,11 @@ int main(int argc, char** argv) {
             tree->SetBranchAddress("Cal_pt_energy", Cal_pt_energy);
             tree->SetBranchAddress("Cal_pt_x", Cal_pt_x);
             tree->SetBranchAddress("Cal_pt_y", Cal_pt_y);
+            tree->SetBranchAddress("Cal_pt_z", Cal_pt_z);
             tree->SetBranchAddress("Cal_pt_detid", Cal_pt_detid);
+        } else if (use_points) {
+            cerr << "Warning: use_points=1 but file has no Cal_npts branch -- "
+                 << "0 reco jets will be built for this file." << endl;
         }
 
         Long64_t nentries = tree->GetEntries();
@@ -336,7 +372,7 @@ int main(int argc, char** argv) {
             reco_tau1.clear(); reco_tau2.clear();
 
             truth_nconst.clear(); reco_nconst.clear();
-            reco_nphotons.clear();
+            reco_nphotons.clear(); truth_nphotons.clear();
 
             reco_const_px.clear(); reco_const_py.clear(); reco_const_pz.clear(); reco_const_E.clear();
             reco_const_jetIndex.clear(); reco_const_detid.clear();
@@ -486,10 +522,17 @@ int main(int argc, char** argv) {
             vector<PseudoJet> reco_particles;
             vector<int> reco_detid;
 
-            for (int i = 0; i < Cal_nhits; i++) {
+            // Either tower hits (default) or FCS points (use_points=1,
+            // see the CLI arg above) feed the same anti-kt clustering
+            // below -- same per-candidate energy floor and (x,y,z)
+            // direction-vector construction either way, just swapping
+            // which arrays are read. Truth jets never use this switch.
+            int nSource = use_points ? Cal_npts : Cal_nhits;
 
-                float e = Cal_hit_energy[i];
-                int det = Cal_detid[i];
+            for (int i = 0; i < nSource; i++) {
+
+                float e = use_points ? Cal_pt_energy[i] : Cal_hit_energy[i];
+                int det = use_points ? Cal_pt_detid[i] : Cal_detid[i];
 
                 if (det == 4 || det == 5) continue;
                 if (em_only && (det == 2 || det == 3)) continue;
@@ -498,9 +541,9 @@ int main(int argc, char** argv) {
                       ((det == 2 || det == 3) && e > mip_threshold * hcal_mip)))
                     continue;
 
-                float x = Cal_hit_posx[i];
-                float y = Cal_hit_posy[i];
-                float z = Cal_hit_posz[i];
+                float x = use_points ? Cal_pt_x[i] : Cal_hit_posx[i];
+                float y = use_points ? Cal_pt_y[i] : Cal_hit_posy[i];
+                float z = use_points ? Cal_pt_z[i] : Cal_hit_posz[i];
 
                 float norm = sqrt(x*x + y*y + z*z);
 
@@ -564,6 +607,7 @@ int main(int argc, char** argv) {
                 auto consts = jet.constituents();
 
                 double E_em = 0, E_tot = 0;
+                int nphotons_truth = 0;
 
                 truth_pt.push_back(jet.perp());
                 truth_eta.push_back(jet.eta());
@@ -588,7 +632,9 @@ int main(int argc, char** argv) {
 
                     E_tot += c.E();
                     if (EM_PIDS.count(pid)) E_em += c.E();
+                    if (pid == 22) nphotons_truth++;
                 }
+                truth_nphotons.push_back(nphotons_truth);
 
                 // In em_only mode every truth constituent is already EM by
                 // construction (see the truth-particle filter above), so
