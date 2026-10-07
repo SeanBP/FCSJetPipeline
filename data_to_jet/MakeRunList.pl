@@ -64,6 +64,65 @@ GetOptions(
     ) or HelpMessage(1);
 
 
+# Runs excluded from the wave-1 window below for known data-quality
+# reasons (per the 2026-10 investigation writeup):
+#   23003063-23004033: FEE low-voltage problem (below the wave-1 start,
+#                       kept here only so this list stays correct if the
+#                       start is ever widened back below 23005044)
+#   23007067-23007076: beam and luminosity tests
+#   23027046-23027048: 56-bunch and calibration runs
+# ECAL is only calibrated from run 23005043 (the LED reference run)
+# onward, hence the wave-1 start at 23005044.
+my @EXCLUDED_RANGES = (
+    [23003063, 23004033],
+    [23007067, 23007076],
+    [23027046, 23027048],
+);
+
+sub IsExcludedRun
+{
+    my $run = shift;
+    foreach my $range (@EXCLUDED_RANGES){
+        return 1 if ($run >= $range->[0] && $run <= $range->[1]);
+    }
+    return 0;
+}
+
+# RunLog.runStatus's shift-crew assessment, queried live so this covers
+# whatever run range is actually requested (not just wave 1) without
+# needing a hardcoded list maintained by hand. Good-run rule matches
+# STAR's own production tooling (packages/scripts/RunDAQ.pm):
+# rtsStatus=0 AND shiftLeaderStatus<=1. Checked directly against wave 1
+# (23005044-23027047): 517/519 runs pass, only 23023038/23023039 fail
+# (both already low-file-count/incomplete runs, not otherwise flagged) --
+# this is a genuinely separate signal from the EXCLUDED_RANGES above, not
+# a duplicate of it. Falls back to an empty bad-run set (no runs dropped
+# by this check) if the DB is unreachable, e.g. from a SUMS worker node,
+# same lenient-fallback convention as RunNumberToDateTime() elsewhere in
+# this project -- a transient DB outage here shouldn't block list
+# generation entirely.
+sub GetBadRunsFromRunLog
+{
+    my ($runMin, $runMax) = @_;
+    my %badRuns = ();
+    my $cmd = "mysql -h db04.star.bnl.gov --port=3421 --connect-timeout=10 -N -s -e " .
+        "\"SELECT runNumber, rtsStatus, shiftLeaderStatus FROM runStatus " .
+        "WHERE runNumber BETWEEN $runMin AND $runMax AND deactive=0 AND flavor='ofl'\" RunLog 2>/dev/null";
+    my @lines = `$cmd`;
+    if( $? != 0 || !@lines ){
+        print "WARNING: MakeRunList.pl::GetBadRunsFromRunLog - could not query RunLog.runStatus " .
+              "(unreachable?) -- skipping the shift-crew run-status filter entirely\n";
+        return %badRuns;
+    }
+    foreach my $line (@lines){
+        chomp $line;
+        my ($run, $rts, $sl) = split(/\t/, $line);
+        next unless defined $run;
+        if( !($rts == 0 && $sl <= 1) ){ $badRuns{$run} = 1; }
+    }
+    return %badRuns;
+}
+
 my $FileList = new StarFileList();
 $FileList->Keys($KEYS);
 $FileList->Storage("=local");
@@ -75,7 +134,9 @@ $FileList->Sname2("=st_fwd");
 #$FileList->Runnumber("=23007011");
 $FileList->AddExtraOpts("-limit $LIMIT");
 
-$FileList->Runnumber("[]22359013-23027047");
+# Wave 1 only (23005044-23027047); wave 2 (23027048-23048036) needs its
+# own deliberate change here once that production is actually run.
+$FileList->Runnumber("[]23005044-23027047");
 
 #Get Time
 #my $epochtime = time();            #UNIX time (seconds from Jan 1, 1970)
@@ -89,6 +150,26 @@ if( $VERBOSE>=1 ){
 }
 
 my $FileArrRef = $FileList->RetrieveModFiles();
+
+my %BadRunLogRuns = GetBadRunsFromRunLog(23005044, 23027047);
+if( $VERBOSE>=1 && %BadRunLogRuns ){
+    print "RunLog shift-crew bad runs in range: ", join(",", sort keys %BadRunLogRuns), "\n";
+}
+
+# Post-filter the excluded sub-ranges above, plus RunLog's shift-crew bad
+# runs -- StarFileList's Runnumber() only holds one range/condition at a
+# time, so neither is expressible in the catalog query itself.
+my @KeptFiles = ();
+foreach my $file ( @{$FileArrRef} ){
+    if( $file =~ m/(\d{8})_\w*_\d{7}\.MuDst\.root/ ){
+        my $run = $1;
+        next if IsExcludedRun($run);
+        next if exists $BadRunLogRuns{$run};
+    }
+    push @KeptFiles, $file;
+}
+$FileList->Files(\@KeptFiles);
+$FileArrRef = $FileList->Files();
 
 $FileList->SortByRunNumber();
 
