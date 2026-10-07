@@ -82,7 +82,7 @@ single generated SimpleTree file.
 | Flag | Meaning |
 |---|---|
 | `-g` | generator: `pythia8` or `pythia6` |
-| `-t` | pythia8: `PDF:pSet` integer (8=CTEQ6L1, 5=MSTW2008LO, 3=MRST LO*, 21=NNPDF3.1sx, <=0=default). pythia6: `PyTune` integer (325=Perugia STAR, 0=default) |
+| `-t` | pythia8: `PDF:pSet` integer (8=CTEQ6L1, 5=MSTW2008LO, 3=MRST LO*, 21=NNPDF3.1sx, <=0=default). pythia6: `PyTune` integer (325=Perugia X [MRST LO*], 0=default) |
 | `-p` | pTHatMin cut, GeV -- a single flat value used by every job; ignored if `-w` is given |
 | `-P` | pTHatMax cut, GeV -- a single flat value used by every job, default `-1` (no upper cut); ignored if `-w` is given (put a `"ptcutmax"` key in each bin of the JSON instead) |
 | `-n` | events to generate per job |

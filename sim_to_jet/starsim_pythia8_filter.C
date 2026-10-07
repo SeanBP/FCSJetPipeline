@@ -40,7 +40,7 @@ void trig( Int_t n=1 )
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
-void Pythia8( TString config="pp:W", Double_t ckin3=0.0, Double_t ckin4=-1.0, Int_t pdfSet=-1 )
+void Pythia8( TString config="pp:W", Double_t ckin3=0.0, Double_t ckin4=-1.0, Int_t pdfSet=-1, Int_t ppTune=-1 )
 {
 
   StarPythia8 *pythia8 = new StarPythia8();
@@ -84,6 +84,15 @@ void Pythia8( TString config="pp:W", Double_t ckin3=0.0, Double_t ckin4=-1.0, In
   pythia8 -> Set(Form("PhaseSpace:ptHatMin=%f", ckin3 ));
   pythia8 -> Set(Form("PhaseSpace:ptHatMax=%f", ckin4 ));
 
+  // Pythia8 Tune:pp preset (e.g. 14=Monash, 33=Detroit, 3=Tune 2C, 5=Tune
+  // 4C -- see pythia8.web.cern.ch/manuals/pythia8317/Tunes.html). Applied
+  // before the PDF override below so an explicit pdfSet still wins. NOTE:
+  // StarPythia8::Init() re-Sets Detroit's MPI/ColourReconnection values
+  // after this, so for presets other than 33 those five parameters are
+  // Detroit's, not the preset's (see PRODUCTION_TRACKER.md section 8.5).
+  if ( ppTune > 0 )
+    pythia8 -> Set(Form("Tune:pp = %d", ppTune));
+
   // PDF tune override (see Pythia8 PDF:pSet options). pdfSet<=0 leaves
   // Pythia8's internal default PDF in place.
   if ( pdfSet > 0 )
@@ -95,7 +104,7 @@ void Pythia8( TString config="pp:W", Double_t ckin3=0.0, Double_t ckin4=-1.0, In
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
-void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t pdfSet=-1, Double_t fcsFilterEthr=50.0, Double_t ckin4=-1.0 )
+void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t pdfSet=-1, Double_t fcsFilterEthr=50.0, Double_t ckin4=-1.0, Int_t ppTune=-1 )
 {
 
   gROOT->ProcessLine(".L bfc.C");
@@ -132,7 +141,7 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t p
     chain -> AddBefore( "geant", _primary );
   }
 
-  Pythia8("pp:minbias", ckin3, ckin4, pdfSet );
+  Pythia8("pp:minbias", ckin3, ckin4, pdfSet, ppTune );
   command("call gstar_part");
   geometry("y2023");
 

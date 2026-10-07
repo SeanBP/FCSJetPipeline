@@ -4,7 +4,7 @@
 #   ./submit_sim_to_jet.sh -g <pythia8|pythia6> -t <tune_param> -p <ptcut> \
 #       -n <nevents> -s <0|1> -o <outdir> [-P <ptcutmax>] [-j <nprocesses>] \
 #       [-l <label>] [-k <0|1>] [-f <triggers>] [-c <run_number>] \
-#       [-e <filter_ethr>] [-E <0|1>]
+#       [-e <filter_ethr>] [-E <0|1>] [-T <tune_pp>]
 #
 #   -g  generator: pythia8 or pythia6
 #   -t  tune/PDF: pythia8 PDF:pSet (8=CTEQ6L1, 5=MSTW2008LO, 3=MRST LO*,
@@ -36,6 +36,12 @@
 #       ECAL-only fiducial boundary for both reco and truth jets
 #       (JetParameters.h's kFiducialRectEcal/reco_fiducial_buffer_ecal).
 #       0/omit = previous ECAL+HCAL behavior.
+#   -T  pythia8 only: Tune:pp preset number (14=Monash, 33=Detroit, 5=4C,
+#       3=2C, 21=A14-NNPDF2.3LO, 18=CUETP8M1, 2=Skands2009, see
+#       pythia8.web.cern.ch/manuals/pythia8317/Tunes.html). Default -1 =
+#       none. Pass -t -1 with it to keep the preset's own PDF. Caveat:
+#       STAR's StarPythia8::Init() re-applies Detroit's MPI/CR values after
+#       the preset, so only those five differ from the preset for non-33.
 #
 # Example:
 #   ./submit_sim_to_jet.sh -g pythia8 -t 8 -p 10 -n 500 -s 0 \
@@ -55,13 +61,14 @@ OUTDIR=""
 NPROC=1
 PTCUT_JSON=""
 LABEL="run"
+PP_TUNE=-1
 KEEPLOGS=0
 TRIGGER_FILTER=""
 CALIB_RUN=0
 FILTER_ETHR=50.0
 EM_ONLY=0
 
-while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:h" opt; do
+while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:T:h" opt; do
   case $opt in
     g) GENERATOR="$OPTARG" ;;
     t) TUNE_PARAM="$OPTARG" ;;
@@ -78,6 +85,7 @@ while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:h" opt; do
     c) CALIB_RUN="$OPTARG" ;;
     e) FILTER_ETHR="$OPTARG" ;;
     E) EM_ONLY="$OPTARG" ;;
+    T) PP_TUNE="$OPTARG" ;;
     h|*)
       sed -n '2,44p' "$0"
       exit 0
@@ -115,6 +123,15 @@ if [ "$EM_ONLY" != "0" ] && [ "$EM_ONLY" != "1" ]; then
     exit 1
 fi
 
+if ! [[ "$PP_TUNE" =~ ^-?[0-9]+$ ]]; then
+    echo "Error: -T must be an integer (got '$PP_TUNE')"
+    exit 1
+fi
+if [ "$PP_TUNE" -gt 0 ] && [ "$GENERATOR" != "pythia8" ]; then
+    echo "Error: -T (Tune:pp) applies to pythia8 only; use -t for a pythia6 PyTune"
+    exit 1
+fi
+
 # SandBox <File> paths in sim_to_jet.xml are pipeline-root-relative, so
 # star-submit must run from there, not from here.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -147,7 +164,7 @@ fi
 
 export XML_IN="${SCRIPT_DIR}/sim_to_jet.xml"
 export XML_OUT="${OUTXML}"
-export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR EM_ONLY
+export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR EM_ONLY PP_TUNE
 
 python3 << 'PYEOF'
 import json
@@ -201,6 +218,7 @@ xml = xml.replace("{{TRIGGER_FILTER}}", os.environ.get("TRIGGER_FILTER", ""))
 xml = xml.replace("{{CALIB_RUN}}", os.environ.get("CALIB_RUN", "0"))
 xml = xml.replace("{{FILTER_ETHR}}", os.environ.get("FILTER_ETHR", "50.0"))
 xml = xml.replace("{{EM_ONLY}}", os.environ.get("EM_ONLY", "0"))
+xml = xml.replace("{{PP_TUNE}}", os.environ.get("PP_TUNE", "-1"))
 
 with open(os.environ["XML_OUT"], "w") as f:
     f.write(xml)
@@ -208,9 +226,9 @@ PYEOF
 
 echo "Generated ${OUTXML}"
 if [ -n "$PTCUT_JSON" ]; then
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE}"
 else
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE}"
 fi
 
 mkdir -p "${OUTDIR}"
