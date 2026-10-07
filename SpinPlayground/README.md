@@ -69,15 +69,39 @@ time (via `RunLog.runDescriptor`) and checks it against each entry's
   short-duration) entry. `spinBXmask` is excluded -- it has zero genuine
   Run 22 entries and always resolves via a stale 2013 default.
 
-Known stale-fallback traps (both flagged automatically by the script's
-`>7 day` duration heuristic): `spinBXmask`'s 2013 open-ended default, and
-one `spinStar` entry (`dataID 22639`, inserted 2025, comment
-"Run23091017, oleg") backdated to cover 2022-04-01 onward.
+Known stale-fallback traps (all three flagged automatically by the
+script's `>7 day` duration heuristic): `spinBXmask`'s 2013 open-ended
+default, a `spinStar` entry (`dataID 4162`, entryTime 2009-09-23)
+open-ended from 2009-01-01, and a second `spinStar` entry (`dataID
+22639`, inserted 2025, comment "Run23091017, oleg") backdated to cover
+2022-04-01 onward -- i.e. **two** stale `spinStar` fallbacks are live over
+Run 22's dates, not one. `spinV124` has no such entries (checked
+directly), so it's the more reliable of the two to trust at face value.
 
 ## Finding this tool established (Aug 2026)
 
 Real per-fill coverage in `spinV124`/`spinStar` exists only for
-**2021-12-14 through 2022-04-18**, with no gap in that window. Zero
-coverage either side of it, for the rest of Run 22. Verified: run
-22359013 -> covered; run 23101043 -> not covered (falls in the post-04-18
-gap).
+**2021-12-14 through 2022-04-18** -- zero coverage either side of it, for
+the rest of Run 22. *Within* that window, coverage is not gap-free at the
+single-run level: `spinV124`/`spinStar` entries are narrow, fill-scoped
+windows (a few hours each, see "Why a direct timestamp check" above) with
+real gaps *between* fills, so an individual run whose start time happens
+to land in one of those gaps is correctly reported NOT COVERED even
+though its date sits comfortably inside the envelope. (Bulk-checked
+2026-10: of the 3368 real Run 22 forward-production runs, 98.1% of runs /
+99.4% of events resolve to real coverage; the ~2% that don't are
+scattered between-fill gaps like this one, not one single hole.)
+
+Verified: run 22359013 -> covered. Run 23101043 -> **NOT COVERED, but not
+because it falls after 2022-04-18 as an earlier version of this note
+said** -- its real RunLog start time is **2022-04-11 15:47:21 UTC**
+(`RunNumberToDateTime`'s day-of-year arithmetic, day 101 of 2022, checks
+out), squarely inside the window. The real reason: `spinV124` has a
+~10.3-hour gap between two fills that day (prior entry ends 12:25:22,
+next begins 22:44:52), and `spinStar` only resolves via the dataID-22639
+stale fallback above -- a genuine between-fill gap, not an edge-of-window
+case. (Separately: run 23101043 itself turns out to be an FCS LED/TCD
+calibration run -- `sname2=st_physics`, `trgsetupname=fcs_led_tcd_only`,
+1001 events, not even MuDst -- so it was never going to be part of the
+real forward-production run list either way; a mildly misleading example
+to have picked, independent of the date bug above.)

@@ -444,6 +444,11 @@ int main(int argc, char** argv)
         tree->SetBranchAddress("reco_y",&reco_y);
         tree->SetBranchAddress("reco_eta",&reco_eta);
 
+        // Per-event sqrt(s) for x_F below -- see ApplyCorrections.cpp's
+        // identical guard/comment.
+        Double_t event_sqrt_s_gev = kSqrtS_MainRun22_GeV;
+        if (tree->GetBranch("event_sqrt_s_gev")) tree->SetBranchAddress("event_sqrt_s_gev",&event_sqrt_s_gev);
+
         std::vector<float> reco_E_corr;
         std::vector<float>* reco_E_corr_ptr = &reco_E_corr;
         TBranch* b_corr =
@@ -539,7 +544,7 @@ int main(int argc, char** argv)
 
                 reco_E_corr.push_back(E_corr_val);
                 reco_x_F_corr.push_back(
-                    (float)computeFeynmanX(E_corr_val, reco_eta->at(j)));
+                    (float)computeFeynmanX(E_corr_val, reco_eta->at(j), event_sqrt_s_gev));
             }
 
             b_corr->Fill();

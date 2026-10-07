@@ -99,7 +99,38 @@ static const float reco_fiducial_buffer = 10.0f;
 static const float reco_fiducial_buffer_ecal = 20.0f;
 
 // ------------------ Feynman x / detector side ------------------
-static const double SQRT_S = 500.0; // GeV, pp sqrt(s) for this dataset
+// Real Run 22 pp sqrt(s), GeV -- confirmed from RunLog.beamInfo (the
+// authoritative real-time beam-energy readback DB), investigated
+// 2026-10. Run 22's forward-production period actually had TWO distinct
+// beam energies, not one constant: blueEnergy=yellowEnergy=254.867 GeV
+// for runs <=23002045 (~2021-12-15 to 2022-01-02, 321/3368 forward
+// runs / ~8.3% of events) and =254.213 GeV for runs >=23002052
+// (2022-01-02 onward, 3047/3368 runs / ~91.7% of events) -- cross-checked
+// externally against 2022 IPAC accelerator-physics proceedings, which
+// describe RHIC changing the Run 22 collision energy from ~255 to 254.2
+// GeV mid-run (snake-magnet damage mitigation). No production runs fall
+// between those two run numbers, so there's no real ambiguity right at
+// the threshold. kSqrtS_MainRun22_GeV is also what sim_to_jet's
+// generator-level SetFrame("CMS",508.4) already uses (fixed previously;
+// see starsim_pythia8_filter.C/starsim_pythia6_filter.C) -- sim has no
+// real per-event run number, so it always uses this one fixed value
+// rather than the per-run lookup below.
+//
+// The OLD SQRT_S=500.0 constant below is kept only so any code that
+// hasn't been updated to pass a real sqrt(s) into computeFeynmanX() yet
+// fails loudly (no default parameter) rather than silently reusing a
+// value that was wrong by ~1.7-1.9% for every x_F this pipeline has ever
+// written (sim and real data both) -- see PRODUCTION_TRACKER.md / the
+// 2026-10 x_F investigation for the full writeup. Do not reintroduce a
+// default here.
+static const double kSqrtS_EarlyRun22_GeV = 509.734; // runs <= 23002045
+static const double kSqrtS_MainRun22_GeV  = 508.426; // runs >= 23002052 (and sim's fixed value)
+static const int    kSqrtSRunThreshold    = 23002045;
+
+inline double computeSqrtSForRun(int runNumber)
+{
+    return (runNumber <= kSqrtSRunThreshold) ? kSqrtS_EarlyRun22_GeV : kSqrtS_MainRun22_GeV;
+}
 
 // ------------------ Shared functions ------------------
 
@@ -107,11 +138,13 @@ static const double SQRT_S = 500.0; // GeV, pp sqrt(s) for this dataset
 // correction applied downstream (see ApplyCorrections.cpp) propagates into
 // a genuinely different corrected x_F rather than reproducing the
 // uncorrected value -- pT and eta are unaffected by the energy-only
-// correction, but E*tanh(eta) is not.
-inline double computeFeynmanX(double E, double eta)
+// correction, but E*tanh(eta) is not. sqrtS is a required argument (no
+// default) -- call with computeSqrtSForRun(runNumber) for real data, or
+// kSqrtS_MainRun22_GeV for simulation; see the comment above.
+inline double computeFeynmanX(double E, double eta, double sqrtS)
 {
     double pz = E * std::tanh(eta);
-    return 2.0 * pz / SQRT_S;
+    return 2.0 * pz / sqrtS;
 }
 
 // Detector side from the ECAL-front-plane x position (same north/south

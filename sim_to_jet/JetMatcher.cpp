@@ -96,6 +96,7 @@ int main(int argc, char** argv) {
 
     vector<float> truth_x_F, reco_x_F;
     vector<int> reco_side;
+    vector<int> reco_nphotons;
 
     outTree->Branch("truth_pt", &truth_pt);
     outTree->Branch("truth_eta", &truth_eta);
@@ -133,6 +134,15 @@ int main(int argc, char** argv) {
     outTree->Branch("reco_const_jetIndex", &reco_const_jetIndex);
     outTree->Branch("reco_const_detid", &reco_const_detid);
     outTree->Branch("reco_nconst", &reco_nconst);
+
+    // Per-jet photon count: FCS points (StMuFcsPoint) with energy > 1 GeV
+    // inside deltaR < R of the jet axis -- same convention as
+    // data_to_jet/RecoJets.cpp's reco_nphotons (see its branch comment).
+    // sim_to_jet's chain already produces real points (StFcsPointMaker
+    // runs in runSimBfc.C's chain alongside fcsSim/fcsCluster -- checked
+    // directly, same StMuFcsPoint schema as real data), so this works
+    // identically here.
+    outTree->Branch("reco_nphotons", &reco_nphotons);
 
     outTree->Branch("truth_const_px", &truth_const_px);
     outTree->Branch("truth_const_py", &truth_const_py);
@@ -233,6 +243,11 @@ int main(int argc, char** argv) {
     Float_t Cal_hit_energy[MAX], Cal_hit_posx[MAX], Cal_hit_posy[MAX], Cal_hit_posz[MAX];
     Int_t Cal_detid[MAX];
 
+    const int MAX_PTS = 200; // matches StSimpleReaderMaker.h's Cal_pt_* array size
+    Int_t Cal_npts;
+    Float_t Cal_pt_energy[MAX_PTS], Cal_pt_x[MAX_PTS], Cal_pt_y[MAX_PTS];
+    Int_t Cal_pt_detid[MAX_PTS];
+
     struct Candidate { int t, r; double dr; };
 
     for (auto &fname : file_names) {
@@ -284,6 +299,18 @@ int main(int argc, char** argv) {
             tree->SetBranchAddress("mc_pthatmax_gev", &mc_pthatmax_gev);
         }
 
+        // Backward-compat: older SimpleTrees don't have points -- falls
+        // back to Cal_npts=0 (reco_nphotons stays 0 for every jet), same
+        // as RecoJets.cpp's identical guard.
+        Cal_npts = 0;
+        if ( tree->GetBranch("Cal_npts") ) {
+            tree->SetBranchAddress("Cal_npts", &Cal_npts);
+            tree->SetBranchAddress("Cal_pt_energy", Cal_pt_energy);
+            tree->SetBranchAddress("Cal_pt_x", Cal_pt_x);
+            tree->SetBranchAddress("Cal_pt_y", Cal_pt_y);
+            tree->SetBranchAddress("Cal_pt_detid", Cal_pt_detid);
+        }
+
         Long64_t nentries = tree->GetEntries();
 
         for (Long64_t ev = 0; ev < nentries; ev++) {
@@ -309,6 +336,7 @@ int main(int argc, char** argv) {
             reco_tau1.clear(); reco_tau2.clear();
 
             truth_nconst.clear(); reco_nconst.clear();
+            reco_nphotons.clear();
 
             reco_const_px.clear(); reco_const_py.clear(); reco_const_pz.clear(); reco_const_E.clear();
             reco_const_jetIndex.clear(); reco_const_detid.clear();
@@ -545,7 +573,7 @@ int main(int argc, char** argv) {
 
                 truth_x.push_back(z_proj*jet.px()/jet.pz());
                 truth_y.push_back(z_proj*jet.py()/jet.pz());
-                truth_x_F.push_back(computeFeynmanX(jet.E(), jet.eta()));
+                truth_x_F.push_back(computeFeynmanX(jet.E(), jet.eta(), kSqrtS_MainRun22_GeV));
 
                 for (auto &c : consts) {
                     int idx = c.user_index();
@@ -594,8 +622,21 @@ int main(int argc, char** argv) {
                 float rx = z_proj*jet.px()/jet.pz();
                 reco_x.push_back(rx);
                 reco_y.push_back(z_proj*jet.py()/jet.pz());
-                reco_x_F.push_back(computeFeynmanX(jet.E(), jet.eta()));
+                reco_x_F.push_back(computeFeynmanX(jet.E(), jet.eta(), kSqrtS_MainRun22_GeV));
                 reco_side.push_back(computeSide(rx));
+
+                int nphotons = 0;
+                for (int p = 0; p < Cal_npts; p++) {
+                    if (Cal_pt_detid[p] != 0 && Cal_pt_detid[p] != 1) continue;
+                    if (Cal_pt_energy[p] <= 1.0) continue;
+                    double pEta, pPhi;
+                    computeEtaPhi(Cal_pt_x[p], Cal_pt_y[p], pEta, pPhi);
+                    double dPhi = fabs(pPhi - jet.phi());
+                    if (dPhi > M_PI) dPhi = 2 * M_PI - dPhi;
+                    double dEta = pEta - jet.eta();
+                    if (sqrt(dEta * dEta + dPhi * dPhi) < R) nphotons++;
+                }
+                reco_nphotons.push_back(nphotons);
 
                 for (auto &c : consts) {
                     int idx = c.user_index();

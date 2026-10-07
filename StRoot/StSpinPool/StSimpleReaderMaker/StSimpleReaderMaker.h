@@ -52,6 +52,25 @@ class StSimpleReaderMaker : public StMaker
   float Cal_clus_y[100];
   float Cal_clus_z[100];
 
+  // FCS "points" (StMuFcsPoint): the official single-photon-candidate
+  // level, one level finer than clusters -- a cluster may resolve into
+  // one or more points. Not previously read here; added to support a
+  // per-jet photon count downstream (JetMatcher.cpp/RecoJets.cpp), the
+  // same object the FMS EM-jet analyses build their photon multiplicity
+  // from. 200-entry arrays: observed up to ~50 clusters/event in real
+  // Run 22 data and up to ~35 points/event in a quick sim check, with
+  // real-data points consistently fewer than clusters -- generous margin
+  // over both.
+  int Cal_npts;
+  int Cal_pt_detid[200];
+  float Cal_pt_energy[200];
+  float Cal_pt_loc_x[200];
+  float Cal_pt_loc_y[200];
+  float Cal_pt_x[200];
+  float Cal_pt_y[200];
+  float Cal_pt_z[200];
+  int Cal_pt_parentClusterId[200];
+
   int Trk_ntrks;
   float Trk_px[500];
   float Trk_py[500];
@@ -127,6 +146,31 @@ class StSimpleReaderMaker : public StMaker
   StSpinDbMaker* mSpinDb = 0 ;
   Int_t mSpinLastRunNumber = -1 ;
   int Spin_config ;
+
+  // Event-level z-vertex, real data only (sim has no reconstructed
+  // vertex to read). -9999 is the "not resolved" sentinel, same
+  // convention as Trk_proj_ecal_x/etc below. Picked by priority --
+  // TPC primary vertex (ranking()>0) first, then VPD, then BBC,
+  // whichever is the first with |z|<80cm -- see event_vertex_source for
+  // which one actually won on a given event, and Make()'s comment for
+  // why this priority order and cut. Checked directly (2026-10) on P24ia
+  // (st_fwd): TPC and VPD are 0% populated at every run sampled
+  // (22359013, 23060001) -- P24ia was produced with TPC tracking off and
+  // ZDC-only vertexing before run 23050001, and ZDC vertex itself is
+  // known bad, so it isn't read here at all; BBC is the only source with
+  // real data in P24ia (~18-34% of events, run-dependent). P25ib
+  // (st_physics, not st_fwd -- see data_to_jet/MakeRunList.pl's
+  // Sname2 condition) was still being checked as of this writing for
+  // whether its TPC/VPD population differs.
+  Float_t event_vertex_z = -9999;
+  Int_t event_vertex_source = 0; // 0=none, 1=TPC, 2=VPD, 3=BBC
+
+  // Per-run beam energy -> sqrt(s), GeV, so downstream x_F
+  // (computeFeynmanX in JetParameters.h) uses the real value instead of
+  // the stale SQRT_S=500 constant. See JetParameters.h's
+  // computeSqrtSForRun() for the two real Run 22 values and the run
+  // threshold between them (RunLog.beamInfo-derived).
+  Double_t event_sqrt_s_gev = -1;
 
   // MC job-level generator bookkeeping (sim_to_jet only -- see
   // SetMCJobStats()). Constant for the whole job/file (one generator run =

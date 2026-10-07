@@ -424,6 +424,16 @@ int main(int argc, char** argv)
         tree->SetBranchAddress("reco_y",&reco_y);
         tree->SetBranchAddress("reco_eta",&reco_eta);
 
+        // Per-event sqrt(s) for x_F below (see JetParameters.h's
+        // computeSqrtSForRun()). Only real-data JetTrees (RecoJets.cpp)
+        // carry this branch; sim_to_jet's JetMatcher.cpp uses a fixed
+        // value directly instead (no per-event run number), so falls
+        // back to that same fixed value here when the branch is absent --
+        // correct either way, not just a placeholder.
+        Double_t event_sqrt_s_gev = kSqrtS_MainRun22_GeV;
+        bool haveSqrtSBranch = (tree->GetBranch("event_sqrt_s_gev") != 0);
+        if (haveSqrtSBranch) tree->SetBranchAddress("event_sqrt_s_gev",&event_sqrt_s_gev);
+
         std::vector<float> reco_E_corr;
         std::vector<float>* reco_E_corr_ptr = &reco_E_corr;
         TBranch* b_corr =
@@ -544,7 +554,7 @@ int main(int argc, char** argv)
 
                 reco_E_corr.push_back(E_corr_val);
                 reco_x_F_corr.push_back(
-                    (float)computeFeynmanX(E_corr_val, reco_eta->at(j)));
+                    (float)computeFeynmanX(E_corr_val, reco_eta->at(j), event_sqrt_s_gev));
 
                 if(USE_UNIFORM_CORRECTION)
                 {
@@ -567,7 +577,7 @@ int main(int argc, char** argv)
 
                     reco_E_uniform_corr.push_back(E_uni_val);
                     reco_x_F_uniform_corr.push_back(
-                        (float)computeFeynmanX(E_uni_val, reco_eta->at(j)));
+                        (float)computeFeynmanX(E_uni_val, reco_eta->at(j), event_sqrt_s_gev));
                 }
             }
 

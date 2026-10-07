@@ -12,6 +12,8 @@
 #include "StMuDSTMaker/COMMON/StMuMcVertex.h"
 #include "StMuDSTMaker/COMMON/StMuEvent.h"
 #include "StMuDSTMaker/COMMON/StMuFwdTrack.h"
+#include "StMuDSTMaker/COMMON/StMuFcsPoint.h"
+#include "StMuDSTMaker/COMMON/StMuPrimaryVertex.h"
 
 #include "StFcsDbMaker/StFcsDbMaker.h"
 #include "StFcsDbMaker/StFcsDb.h"
@@ -28,6 +30,7 @@
 #include "FcsTriggerDefs.h"
 
 #include <cstring>
+#include <cmath>
 #include <stdint.h>
 #include <fstream>
 #include <sstream>
@@ -49,6 +52,22 @@ static const char* kSimTrgName[kNSimTrgLocal] = {
     "fcsDiJP","fcsDiJPAsy","fcsDY","fcsJPsi","DYNoEpd","fcsDYAsy",
     "fcsHad2","fcsHad1","fcsHad0","fcsEM2","fcsEM1","fcsEM0","fcsELE2","fcsEM3"
 };
+
+// Per-run beam energy -> sqrt(s), GeV. Mirrors shared/JetParameters.h's
+// computeSqrtSForRun() -- StRoot/ is compiled standalone via cons/stardev
+// and can't reach outside its own tree at build time, so this small
+// lookup is duplicated here by hand rather than included, same
+// three-copy convention already used for FcsTriggerDefs.h (see
+// FCSJetPipeline/README.md). Source: RunLog.beamInfo, investigated
+// 2026-10 -- blueEnergy=yellowEnergy=254.867 GeV (sqrt(s)=509.734) for
+// runs <=23002045 (~2021-12-15 to 2022-01-02, 321/3368 Run 22 forward
+// runs), =254.213 GeV (sqrt(s)=508.426) for runs >=23002052 (2022-01-02
+// onward, 3047/3368 runs, matches sim_to_jet's generator-level
+// SetFrame("CMS",508.4)) -- no production runs fall between those two
+// numbers, so there's no real ambiguity right at the boundary.
+static double SqrtSForRun(int runNumber) {
+    return (runNumber <= 23002045) ? 509.734 : 508.426;
+}
 
 static void DecodeSimTrg(unsigned int dsm_out, bool simTrg[kNSimTrgLocal]){
     for (int i = 0; i < kNSimTrgLocal; i++) simTrg[i] = false;
@@ -125,7 +144,17 @@ Int_t StSimpleReaderMaker::Init( )
   out_tree->Branch("Cal_clus_x",Cal_clus_x,"Cal_clus_x[Cal_nclus]/F");
   out_tree->Branch("Cal_clus_y",Cal_clus_y,"Cal_clus_y[Cal_nclus]/F");
   out_tree->Branch("Cal_clus_z",Cal_clus_z,"Cal_clus_z[Cal_nclus]/F");
-	
+
+  out_tree->Branch("Cal_npts",&Cal_npts,"Cal_npts/I");
+  out_tree->Branch("Cal_pt_detid",Cal_pt_detid,"Cal_pt_detid[Cal_npts]/I");
+  out_tree->Branch("Cal_pt_energy",Cal_pt_energy,"Cal_pt_energy[Cal_npts]/F");
+  out_tree->Branch("Cal_pt_loc_x",Cal_pt_loc_x,"Cal_pt_loc_x[Cal_npts]/F");
+  out_tree->Branch("Cal_pt_loc_y",Cal_pt_loc_y,"Cal_pt_loc_y[Cal_npts]/F");
+  out_tree->Branch("Cal_pt_x",Cal_pt_x,"Cal_pt_x[Cal_npts]/F");
+  out_tree->Branch("Cal_pt_y",Cal_pt_y,"Cal_pt_y[Cal_npts]/F");
+  out_tree->Branch("Cal_pt_z",Cal_pt_z,"Cal_pt_z[Cal_npts]/F");
+  out_tree->Branch("Cal_pt_parentClusterId",Cal_pt_parentClusterId,"Cal_pt_parentClusterId[Cal_npts]/I");
+
   out_tree->Branch("Trk_ntrks",&Trk_ntrks,"Trk_ntrks/I");
   out_tree->Branch("Trk_px",Trk_px,"Trk_px[Trk_ntrks]/F");
   out_tree->Branch("Trk_py",Trk_py,"Trk_py[Trk_ntrks]/F");
@@ -173,6 +202,9 @@ Int_t StSimpleReaderMaker::Init( )
   }
 
   out_tree->Branch("Spin_config", &Spin_config, "Spin_config/I");
+  out_tree->Branch("event_vertex_z", &event_vertex_z, "event_vertex_z/F");
+  out_tree->Branch("event_vertex_source", &event_vertex_source, "event_vertex_source/I");
+  out_tree->Branch("event_sqrt_s_gev", &event_sqrt_s_gev, "event_sqrt_s_gev/D");
 
   out_tree->Branch("sigma_job", &sigma_job, "sigma_job/D");
   out_tree->Branch("N_job", &N_job, "N_job/I");
@@ -202,9 +234,12 @@ Int_t StSimpleReaderMaker::Make( )
 { // Do each event
 
   // Reset variables
-  Cal_nhits = 0; Cal_nclus = 0; mcpart_num = 0;
+  Cal_nhits = 0; Cal_nclus = 0; Cal_npts = 0; mcpart_num = 0;
   for (int i = 0; i < kNTrigFlags; i++) Trig_flag[i] = 0;
   Spin_config = -1; // "no data" until proven otherwise below
+  event_vertex_z = -9999;
+  event_vertex_source = 0;
+  event_sqrt_s_gev = -1;
 
   // -----------
   // Get 'event' data
@@ -297,6 +332,50 @@ Int_t StSimpleReaderMaker::Make( )
       unsigned int bx7 = muEvent->l0Trigger().bunchCrossingId7bit(runNumber);
       Spin_config = mSpinDb->spin4usingBX7((int)bx7); // itself -1 if this bx wasn't resolved
     }
+
+    // Event-level vertex and per-run sqrt(s), real data only -- gated on
+    // mSpinDb the same way Spin_config itself is (only data_to_jet
+    // attaches it), since both need a real muEvent with a real Run 22
+    // run number. sim_to_jet leaves both at their -1/-9999 "not set"
+    // sentinels and uses a fixed sqrt(s) directly at the point of use
+    // (JetMatcher.cpp) instead, matching its generator-level assumption.
+    //
+    // Vertex priority: TPC primary vertex (ranking()>0) first, then VPD,
+    // then BBC -- first one found with |z|<80cm wins. See
+    // event_vertex_z's header comment for why TPC/VPD are expected to be
+    // empty in P24ia specifically (tracking off, ZDC-only and known bad
+    // before run 23050001) -- the cascade is still checked in this order
+    // regardless, so it does the right thing automatically on any input
+    // where TPC/VPD genuinely are populated (e.g. P25ib, still being
+    // evaluated) without needing a separate code path.
+    const double kVertexZMax = 80.0;
+    event_vertex_z = -9999; event_vertex_source = 0;
+    StMuDst* muDst = mMuDstMaker->muDst();
+    if ( muDst->numberOfPrimaryVertices() > 0 ){
+      StMuPrimaryVertex* vtx0 = muDst->primaryVertex(0);
+      if ( vtx0 && vtx0->ranking() > 0 && std::fabs(vtx0->position().z()) < kVertexZMax ){
+        event_vertex_z = vtx0->position().z();
+        event_vertex_source = 1; // TPC
+      }
+    }
+    if ( event_vertex_source == 0 &&
+         (muEvent->numberOfVpdEastHits() > 0 || muEvent->numberOfVpdWestHits() > 0) &&
+         std::fabs(muEvent->vpdVz()) < kVertexZMax ){
+      event_vertex_z = muEvent->vpdVz();
+      event_vertex_source = 2; // VPD
+    }
+    if ( event_vertex_source == 0 ){
+      double bbcVz = muEvent->bbcTriggerDetector().zVertex();
+      // bbcVz's own "not resolved" sentinel is -9999 -- excluded by the
+      // |z|<80 cut below same as any other out-of-range value, no
+      // separate check needed.
+      if ( std::fabs(bbcVz) < kVertexZMax ){
+        event_vertex_z = bbcVz;
+        event_vertex_source = 3; // BBC
+      }
+    }
+
+    event_sqrt_s_gev = SqrtSForRun(runNumber);
   }
 
   // Resolved once per event (not per hit) for the retroactive HCAL
@@ -394,6 +473,35 @@ Int_t StSimpleReaderMaker::Make( )
 		Cal_nclus++;
 	}
   } // Loop over FCS clusters
+
+  // Loop over FCS points (StMuFcsPoint -- the single-photon-candidate
+  // level; one or more points make up a cluster, see StMuFcsPoint.h).
+  // Unlike clusters, a point's xyz() is already in global STAR
+  // coordinates (set by the official StFcsPointMaker reconstruction),
+  // so no mFcsDb projection is needed here the way clusters need
+  // getStarXYZfromColumnRow().
+  for(UInt_t ipt = 0 ; ipt < fcs_coll->numberOfPoints() && Cal_npts < 200 ; ipt++){
+
+        StMuFcsPoint* pt = fcs_coll->getPoint(ipt); // Pointer to a point
+
+        int det = pt->detectorId();
+
+        if( det < kFcsNDet ){ // same guard as hits/clusters above
+
+                Cal_pt_detid[Cal_npts] = det;
+                Cal_pt_energy[Cal_npts] = pt->energy();
+                Cal_pt_loc_x[Cal_npts] = pt->x();
+                Cal_pt_loc_y[Cal_npts] = pt->y();
+
+                const TVector3& xyz = pt->xyz();
+                Cal_pt_x[Cal_npts] = xyz.X();
+                Cal_pt_y[Cal_npts] = xyz.Y();
+                Cal_pt_z[Cal_npts] = xyz.Z();
+                Cal_pt_parentClusterId[Cal_npts] = pt->parentClusterId();
+
+                Cal_npts++;
+        }
+  } // Loop over FCS points
 
   // -----------
   // Get Fwd track data

@@ -88,6 +88,7 @@ int main(int argc, char** argv) {
     vector<int> reco_side;
     vector<float> reco_EMF;
     vector<float> reco_tau1, reco_tau2;
+    vector<int> reco_nphotons;
 
     // Flat constituent storage
     vector<float> reco_const_px, reco_const_py, reco_const_pz, reco_const_E;
@@ -117,6 +118,15 @@ int main(int argc, char** argv) {
     outTree->Branch("reco_tau1", &reco_tau1);
     outTree->Branch("reco_tau2", &reco_tau2);
 
+    // Per-jet photon count: FCS points (StMuFcsPoint, the single-photon-
+    // candidate level -- see StSimpleReaderMaker.cxx's Cal_pt_* branches)
+    // with energy > 1 GeV whose (x,y) position falls within deltaR < R of
+    // the jet axis, same E>1 GeV / deltaR<R convention as the FMS EM-jet
+    // analyses' photon definition. ECAL points only (det 0/1) -- points
+    // are reconstructed FCS-wide, but a "photon" count should not include
+    // HCAL showers.
+    outTree->Branch("reco_nphotons", &reco_nphotons);
+
     // Per-event FCS trigger flags, passed through from the SimpleTree (FcsTriggerDefs.h)
     Int_t Trig_flag[kNTrigFlags];
     for (int i = 0; i < kNTrigFlags; i++){
@@ -126,6 +136,23 @@ int main(int argc, char** argv) {
     // Per-event spin config, passed through from the SimpleTree; -1 = no spin-DB coverage
     Int_t Spin_config;
     outTree->Branch("Spin_config", &Spin_config, "Spin_config/I");
+
+    // Event-level z-vertex, passed through from the SimpleTree:
+    // TPC-primary-vertex-first, then VPD, then BBC, whichever is first
+    // with |z|<80cm (see StSimpleReaderMaker.h's event_vertex_z comment
+    // for the full population comparison and why). -9999 = none of the
+    // three resolved. event_vertex_source says which one won: 0=none,
+    // 1=TPC, 2=VPD, 3=BBC.
+    Float_t event_vertex_z;
+    Int_t event_vertex_source;
+    outTree->Branch("event_vertex_z", &event_vertex_z, "event_vertex_z/F");
+    outTree->Branch("event_vertex_source", &event_vertex_source, "event_vertex_source/I");
+
+    // Per-event sqrt(s), GeV, passed through from the SimpleTree and used
+    // below for reco_x_F instead of the old fixed SQRT_S=500 constant
+    // (see JetParameters.h's computeSqrtSForRun()).
+    Double_t event_sqrt_s_gev;
+    outTree->Branch("event_sqrt_s_gev", &event_sqrt_s_gev, "event_sqrt_s_gev/D");
 
     // Per-event MC job-level weighting branches, passed through from the
     // SimpleTree for schema parity with sim_to_jet's jetTree (see
@@ -144,10 +171,15 @@ int main(int argc, char** argv) {
     outTree->Branch("reco_em_only", &reco_em_only, "reco_em_only/I");
 
     const int MAX_HITS = 10000;
+    const int MAX_PTS = 200; // matches StSimpleReaderMaker.h's Cal_pt_* array size
 
     Int_t Cal_nhits;
     Float_t Cal_hit_energy[MAX_HITS], Cal_hit_posx[MAX_HITS], Cal_hit_posy[MAX_HITS], Cal_hit_posz[MAX_HITS];
     Int_t Cal_detid[MAX_HITS];
+
+    Int_t Cal_npts;
+    Float_t Cal_pt_energy[MAX_PTS], Cal_pt_x[MAX_PTS], Cal_pt_y[MAX_PTS];
+    Int_t Cal_pt_detid[MAX_PTS];
 
     Long64_t cumulative_event = 0;
 
@@ -184,6 +216,33 @@ int main(int argc, char** argv) {
             tree->SetBranchAddress("N_job", &N_job);
         }
 
+        // Backward-compat: older SimpleTrees (produced before this
+        // investigation) don't have these branches. event_vertex_z/
+        // event_vertex_source fall back to the same -9999/0 "not
+        // resolved" sentinels StSimpleReaderMaker itself uses;
+        // event_sqrt_s_gev falls back to the main-period real value (not
+        // the old wrong 500) since that's right for the overwhelming
+        // majority (91.7%) of Run 22 events either way, and Cal_npts
+        // falls back to 0 (reco_nphotons stays 0 for every jet in that
+        // file, same as if the file genuinely had no points).
+        event_vertex_z = -9999; event_vertex_source = 0;
+        if ( tree->GetBranch("event_vertex_z") ) {
+            tree->SetBranchAddress("event_vertex_z", &event_vertex_z);
+            tree->SetBranchAddress("event_vertex_source", &event_vertex_source);
+        }
+        event_sqrt_s_gev = kSqrtS_MainRun22_GeV;
+        if ( tree->GetBranch("event_sqrt_s_gev") ) {
+            tree->SetBranchAddress("event_sqrt_s_gev", &event_sqrt_s_gev);
+        }
+        Cal_npts = 0;
+        if ( tree->GetBranch("Cal_npts") ) {
+            tree->SetBranchAddress("Cal_npts", &Cal_npts);
+            tree->SetBranchAddress("Cal_pt_energy", Cal_pt_energy);
+            tree->SetBranchAddress("Cal_pt_x", Cal_pt_x);
+            tree->SetBranchAddress("Cal_pt_y", Cal_pt_y);
+            tree->SetBranchAddress("Cal_pt_detid", Cal_pt_detid);
+        }
+
         Long64_t nentries = tree->GetEntries();
         cout << "Processing file: " << fname << " with " << nentries << " events." << endl;
 
@@ -217,6 +276,7 @@ int main(int argc, char** argv) {
             reco_tau1.clear();
             reco_tau2.clear();
             reco_nconst.clear();
+            reco_nphotons.clear();
 
             vector<PseudoJet> reco_particles;
             vector<int> reco_detid;
@@ -276,8 +336,24 @@ int main(int argc, char** argv) {
                 float rx = z_proj*jet.px()/jet.pz();
                 reco_x.push_back(rx);
                 reco_y.push_back(z_proj*jet.py()/jet.pz());
-                reco_x_F.push_back(computeFeynmanX(jet.E(), jet.eta()));
+                reco_x_F.push_back(computeFeynmanX(jet.E(), jet.eta(), event_sqrt_s_gev));
                 reco_side.push_back(computeSide(rx));
+
+                // Photon count: ECAL FCS points (det 0/1) with E>1 GeV
+                // inside deltaR<R of the jet axis -- see
+                // reco_nphotons' branch comment above.
+                int nphotons = 0;
+                for (int p = 0; p < Cal_npts; p++) {
+                    if (Cal_pt_detid[p] != 0 && Cal_pt_detid[p] != 1) continue;
+                    if (Cal_pt_energy[p] <= 1.0) continue;
+                    double pEta, pPhi;
+                    computeEtaPhi(Cal_pt_x[p], Cal_pt_y[p], pEta, pPhi);
+                    double dPhi = fabs(pPhi - jet.phi());
+                    if (dPhi > M_PI) dPhi = 2 * M_PI - dPhi;
+                    double dEta = pEta - jet.eta();
+                    if (sqrt(dEta * dEta + dPhi * dPhi) < R) nphotons++;
+                }
+                reco_nphotons.push_back(nphotons);
 
                 for (auto &c : consts) {
                     int idx = c.user_index();
