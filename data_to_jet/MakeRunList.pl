@@ -26,6 +26,10 @@ MakeRunList.pl
   --limit, -l    Number of files to return (default is 10)
   --print, -p    Just print to terminal the commands or file list, will not create a file  (1=command, 2=command and list)
   --verbose, -v  Set the printout level (default is 0)
+  --skip-status-check  Proceed even if RunLog.runStatus is unreachable, skipping
+                        the shift-crew bad-run filter instead of dying. Default
+                        is to die on an unreachable DB, since that filter is a
+                        correctness gate, not a best-effort lookup.
   --help, -h     Print this help
 
 =head1 VERSION
@@ -53,6 +57,7 @@ my $FILE = "test.list";
 my $LIMIT = 10;
 my $PRINTLEVEL = 0;
 my $VERBOSE = 0;
+my $SKIP_STATUS_CHECK = 0;
 
 GetOptions(
     'keys|k=s'    => \$KEYS,
@@ -60,6 +65,7 @@ GetOptions(
     'limit|l=i'   => \$LIMIT,
     'print|p=i'   => \$PRINTLEVEL,
     'verbose|v=i' => \$VERBOSE,
+    'skip-status-check' => \$SKIP_STATUS_CHECK,
     'help|h'      => sub { HelpMessage() }
     ) or HelpMessage(1);
 
@@ -96,23 +102,36 @@ sub IsExcludedRun
 # (23005044-23027047): 517/519 runs pass, only 23023038/23023039 fail
 # (both already low-file-count/incomplete runs, not otherwise flagged) --
 # this is a genuinely separate signal from the EXCLUDED_RANGES above, not
-# a duplicate of it. Falls back to an empty bad-run set (no runs dropped
-# by this check) if the DB is unreachable, e.g. from a SUMS worker node,
-# same lenient-fallback convention as RunNumberToDateTime() elsewhere in
-# this project -- a transient DB outage here shouldn't block list
-# generation entirely.
+# a duplicate of it.
+#
+# Unlike RunNumberToDateTime() elsewhere in this project (which falls
+# back silently to day-of-year arithmetic), an unreachable DB here is
+# fatal by default: this filter is a correctness gate (dropping runs the
+# shift crew marked bad), not a best-effort date lookup, so silently
+# proceeding without it would risk quietly shipping a run list that
+# includes known-bad runs. Pass --skip-status-check to proceed anyway
+# (e.g. from a worker node with no DB access) -- the run list will then
+# NOT have this filter applied, which is loudly reported either way.
 sub GetBadRunsFromRunLog
 {
-    my ($runMin, $runMax) = @_;
+    my ($runMin, $runMax, $skipCheck) = @_;
     my %badRuns = ();
     my $cmd = "mysql -h db04.star.bnl.gov --port=3421 --connect-timeout=10 -N -s -e " .
         "\"SELECT runNumber, rtsStatus, shiftLeaderStatus FROM runStatus " .
         "WHERE runNumber BETWEEN $runMin AND $runMax AND deactive=0 AND flavor='ofl'\" RunLog 2>/dev/null";
     my @lines = `$cmd`;
     if( $? != 0 || !@lines ){
-        print "WARNING: MakeRunList.pl::GetBadRunsFromRunLog - could not query RunLog.runStatus " .
-              "(unreachable?) -- skipping the shift-crew run-status filter entirely\n";
-        return %badRuns;
+        if( $skipCheck ){
+            print "WARNING: MakeRunList.pl::GetBadRunsFromRunLog - could not query RunLog.runStatus " .
+                  "(unreachable?) -- --skip-status-check was given, proceeding WITHOUT the " .
+                  "shift-crew run-status filter. No runs dropped by this check (it did not run).\n";
+            return (\%badRuns, 1);
+        }
+        else{
+            die "ERROR: MakeRunList.pl::GetBadRunsFromRunLog - could not query RunLog.runStatus " .
+                "(unreachable?) -- refusing to generate a run list without the shift-crew " .
+                "run-status filter. Pass --skip-status-check to proceed anyway.\n";
+        }
     }
     foreach my $line (@lines){
         chomp $line;
@@ -120,7 +139,7 @@ sub GetBadRunsFromRunLog
         next unless defined $run;
         if( !($rts == 0 && $sl <= 1) ){ $badRuns{$run} = 1; }
     }
-    return %badRuns;
+    return (\%badRuns, 0);
 }
 
 my $FileList = new StarFileList();
@@ -151,9 +170,17 @@ if( $VERBOSE>=1 ){
 
 my $FileArrRef = $FileList->RetrieveModFiles();
 
-my %BadRunLogRuns = GetBadRunsFromRunLog(23005044, 23027047);
-if( $VERBOSE>=1 && %BadRunLogRuns ){
-    print "RunLog shift-crew bad runs in range: ", join(",", sort keys %BadRunLogRuns), "\n";
+my ($BadRunLogRunsRef, $StatusCheckSkipped) = GetBadRunsFromRunLog(23005044, 23027047, $SKIP_STATUS_CHECK);
+my %BadRunLogRuns = %{$BadRunLogRunsRef};
+if( $StatusCheckSkipped ){
+    print "RunLog shift-crew bad runs dropped: check skipped (DB unreachable, --skip-status-check given)\n";
+}
+elsif( %BadRunLogRuns ){
+    print "RunLog shift-crew bad runs dropped (", scalar(keys %BadRunLogRuns), "): ",
+          join(",", sort keys %BadRunLogRuns), "\n";
+}
+else{
+    print "RunLog shift-crew bad runs dropped: none\n";
 }
 
 # Post-filter the excluded sub-ranges above, plus RunLog's shift-crew bad
