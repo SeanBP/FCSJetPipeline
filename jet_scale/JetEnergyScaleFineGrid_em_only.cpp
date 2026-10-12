@@ -32,6 +32,7 @@
 #include <algorithm>
 
 #include "JetParameters.h"
+#include "JetXSecWeights.h"
 
 // CONFIGURATION
 
@@ -157,10 +158,13 @@ struct BinData
           resp_mu_err(re) {}
 };
 
+// w_vals is each entry's MC cross-section weight (see JetXSecWeights.h),
+// parallel to resp_vals/scale_vals.
 struct BinAccum
 {
     std::vector<float> resp_vals;
     std::vector<float> scale_vals;
+    std::vector<float> w_vals;
 };
 
 // f_med(x) = median[Y|X=x], R_med(x) = median[Y/x|X=x] (Cukierman & Nachman,
@@ -177,27 +181,42 @@ struct BinAccum
 // Median is a strictly stronger fix than the median/MAD-SEEDED Gaussian
 // fit this replaces: that only fixed the seed against tail bias, it didn't
 // change which central-tendency definition was actually being reported.
-double median_of(std::vector<double> v)
+//
+// Each entry v[i] carries its MC cross-section weight w[i] (see
+// JetXSecWeights.h), so this is the WEIGHTED median: the value at which the
+// cumulative weight, in order of increasing v, reaches half the total. With
+// equal weights it reduces to the ordinary median (including the midpoint
+// average for an even count).
+double median_of(const std::vector<double> &v, const std::vector<double> &w)
 {
-    size_t mid = v.size() / 2;
-    std::nth_element(v.begin(), v.begin() + mid, v.end());
-    double median = v[mid];
-    if (v.size() % 2 == 0)
+    std::vector<size_t> order(v.size());
+    for (size_t i = 0; i < order.size(); i++)
+        order[i] = i;
+    std::sort(order.begin(), order.end(),
+              [&v](size_t a, size_t b) { return v[a] < v[b]; });
+
+    double half = 0.5 * std::accumulate(w.begin(), w.end(), 0.0);
+
+    double cum = 0.0;
+    for (size_t i = 0; i < order.size(); i++)
     {
-        std::nth_element(v.begin(), v.begin() + mid - 1, v.end());
-        median = 0.5 * (median + v[mid - 1]);
+        cum += w[order[i]];
+        if (cum > half)
+            return v[order[i]];
+        if (cum == half && i + 1 < order.size())
+            return 0.5 * (v[order[i]] + v[order[i + 1]]);
     }
-    return median;
+    return v[order.back()];
 }
 
-FitResult median_fit(const std::vector<double> &v)
+FitResult median_fit(const std::vector<double> &v, const std::vector<double> &w)
 {
     FitResult r;
 
     if (v.size() < (size_t)min_total_entries)
         return r;
 
-    double med = median_of(v);
+    double med = median_of(v, w);
 
     // MAD-based robust sigma, used only to get an approximate standard
     // error on the median below (Kenney & Keeping's asymptotic result for
@@ -205,17 +224,20 @@ FitResult median_fit(const std::vector<double> &v)
     // sqrt(pi/2)*sigma/sqrt(n) = 1.2533*sigma/sqrt(n)) -- this feeds
     // CalibrationMap.cpp's downstream fit only as a relative point weight,
     // not as a rigorous confidence interval, so the Gaussian-core
-    // approximation is good enough here.
+    // approximation is good enough here. A bin where one entry holds over
+    // half the total weight gets mad_sigma = 0 and is rejected just below.
     std::vector<double> absdev(v.size());
     for (size_t i = 0; i < v.size(); i++)
         absdev[i] = std::fabs(v[i] - med);
-    double mad_sigma = 1.4826 * median_of(absdev);
+    double mad_sigma = 1.4826 * median_of(absdev, w);
 
     if (!std::isfinite(mad_sigma) || mad_sigma <= 0.0)
         return r;
 
     r.mu = med;
-    r.mu_err = 1.2533 * mad_sigma / std::sqrt((double)v.size());
+    // n is the Kish effective count, not v.size(): unequal weights carry
+    // less statistical power than the same number of equal-weight entries.
+    r.mu_err = 1.2533 * mad_sigma / std::sqrt(EffectiveEntries(w));
     r.sigma = mad_sigma;
     // sigma_err/chi2_ndf are meaningless for a plain median (no fit was
     // performed) and aren't consumed downstream -- left at their NaN
@@ -302,12 +324,21 @@ int main(int argc, char** argv)
         grid_valid[ix][iy] = pass_fiducial_cut((float)x_grid[ix], (float)y_grid[iy], fid_buffer, rect);
     }
 
+    // Per-file MC cross-section weight; every jet below is weighted by its
+    // file's value instead of counting evenly (see JetXSecWeights.h).
+    std::vector<float> file_weight;
+    if (!ComputeXSecWeights(root_files, tree_name, file_weight))
+        return 1;
+
     // Accumulate per-bin values directly (memory-efficient)
 
     std::unordered_map<BinKey, BinAccum, BinKeyHash> bin_accum;
 
     for (size_t fidx = 0; fidx < root_files.size(); fidx++)
     {
+        if (file_weight[fidx] < 0)
+            continue;
+
         TFile *f = TFile::Open(root_files[fidx].c_str());
         if (!f || f->IsZombie())
             continue;
@@ -381,8 +412,11 @@ int main(int argc, char** argv)
 
                     BinKey key = {q, ix, iy, eb};
 
-                    bin_accum[key].resp_vals.push_back((float)reco);
-                    bin_accum[key].scale_vals.push_back((float)scale);
+                    BinAccum &acc = bin_accum[key];
+
+                    acc.resp_vals.push_back((float)reco);
+                    acc.scale_vals.push_back((float)scale);
+                    acc.w_vals.push_back(file_weight[fidx]);
                 }
             }
         }
@@ -399,15 +433,17 @@ int main(int argc, char** argv)
     {
         const std::vector<float> &resp_f = it->second.resp_vals;
         const std::vector<float> &scale_f = it->second.scale_vals;
+        const std::vector<float> &w_f = it->second.w_vals;
 
         if (resp_f.size() < (size_t)min_total_entries)
             continue;
 
         std::vector<double> resp_vals(resp_f.begin(), resp_f.end());
         std::vector<double> scale_vals(scale_f.begin(), scale_f.end());
+        std::vector<double> w_vals(w_f.begin(), w_f.end());
 
-        FitResult resp = median_fit(resp_vals);
-        FitResult sc = median_fit(scale_vals);
+        FitResult resp = median_fit(resp_vals, w_vals);
+        FitResult sc = median_fit(scale_vals, w_vals);
 
         if (!std::isfinite(sc.mu) || !std::isfinite(resp.mu))
             continue;
@@ -427,6 +463,7 @@ int main(int argc, char** argv)
     double scale_mu, resp_mu;
     double scale_mu_err, resp_mu_err;
     int n_entries;
+    double n_eff;
 
     t.Branch("E_low", &E_low);
     t.Branch("E_high", &E_high);
@@ -440,7 +477,10 @@ int main(int argc, char** argv)
     t.Branch("scale_mu_err", &scale_mu_err);
     t.Branch("response_mu_err", &resp_mu_err);
 
+    // n_entries is the raw (unweighted) jet count; n_eff is the Kish
+    // effective count under the cross-section weights, (sum w)^2 / sum w^2
     t.Branch("n_entries", &n_entries);
+    t.Branch("n_eff", &n_eff);
 
     for (int ie = 0; ie < n_bins_E; ie++)
     for (int ix = 0; ix < n_grid_x; ix++)
@@ -451,6 +491,9 @@ int main(int argc, char** argv)
 
         auto it_acc = bin_accum.find(key);
         n_entries = (it_acc != bin_accum.end()) ? (int)it_acc->second.resp_vals.size() : 0;
+        n_eff = 0.0;
+        if (it_acc != bin_accum.end())
+            n_eff = EffectiveEntries(std::vector<double>(it_acc->second.w_vals.begin(), it_acc->second.w_vals.end()));
 
         E_low = e_bins[ie];
         E_high = e_bins[ie + 1];

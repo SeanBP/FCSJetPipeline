@@ -95,6 +95,7 @@
     <SandBox installer="ZIP">
         <Package>
             <File>file:./jet_scale/JetEnergyScaleFineGrid_em_only.cpp</File>
+            <File>file:./jet_scale/JetXSecWeights.h</File>
             <File>file:./jet_scale/CalibrationMap_em_only.cpp</File>
             <File>file:./shared/VectorDict.cxx</File>
             <File>file:./shared/VectorDict.h</File>

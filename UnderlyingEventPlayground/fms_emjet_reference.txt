@@ -1,0 +1,316 @@
+FMS EM-jet analysis parameters (BrightSTAR) -- reference for the FCS study
+==========================================================================
+
+Source:   https://github.com/latifkabir/BrightSTAR  branch emjet-gpc
+Commit:   67e8b34 (2026-10-01)
+Read on:  2026-10-12
+Analysis: STAR FMS EM-jet A_N, Run 15 pp 200 GeV (Run 17 pp 510 partly wired in)
+
+Each entry gives the value and the file it was read from. Paths are relative to
+the repository root. "NOT VERIFIED" marks things that could not be confirmed
+from this repository alone.
+
+
+1. JET FINDING (reco and particle level)
+----------------------------------------
+Algorithm                 anti-kT
+R                         0.7                     emJetAnalysis/src/EjAna.cxx (kRMax)
+Recombination scheme      E-scheme
+Strategy                  Best
+Jet area                  on; ghost area 0.04, ghost max rapidity 5.0
+                          (area type set in STAR's stock StJetFinder, which is
+                          not in this repository -- NOT VERIFIED whether active
+                          or passive)
+Jet pT min at jet finding 2.0 GeV (reco)          EjAna.cxx (kPtMin)
+                          1.0 GeV (particle)      starSim/src/RunFmsJetFinderPro.cxx
+Jet eta cut at jet finding  -1 < eta < 5 (data), 1 < eta < 5 (sim reco)
+Config files              emJetAnalysis/src/EjRunEmJetTreeMaker.cxx   (data)
+                          starSim/src/RunFmsJetFinderPro.cxx          (simulation)
+
+
+2. RECO INPUT
+-------------
+Input objects             FMS points (photon candidates), not tower hits.
+                          Hits are an option (useFmsHit) that is commented out.
+                          StRoot/StJetMaker/mudst/StjFMSMuDst.cxx
+Detectors                 FMS only (detId 8-11); useEmJetMode = true drops all
+                          TPC tracks from the jet input; BEMC off
+Point energy cut          1.0 < E < 100 GeV       EjAna.cxx (kFmsEngMin/Max)
+                          - 0.5 GeV used for a cross-check against another analysis
+                          - simulation config uses 1.0 < E < 200 GeV
+                          - their comment: the 1 GeV cut rejects low-energy
+                            photons / hadronic contributions and matches data
+                            much better; 3 GeV was the earlier calibration-era value
+                          - StjFMSMuDst also has a hard floor of 0.1 GeV
+Point four-vector         massless, direction = (point position) - (event vertex)
+                          StRoot/StJetMaker/towers/StjTowerEnergyToTLorentzVector.cxx
+Hadronic correction       none in effect (no tracks in EM-jet mode)
+Gain correction           Run 15: fmsGainCorr-BNL-C from DB, plus a manual
+                          hot/bad channel mask per run (TStFmsHotChDB)
+                          Run 17: local text file
+                          Simulation: fmsGainCorr-BNL-C
+
+
+3. VERTEX
+---------
+Priority                  TPC primary vertex (ranking > 0), else VPD z,
+                          else BBC z with slewing correction, else BBC z
+                          without slewing, else 0
+                          StRoot/StJetMaker/StJetMaker2015.cxx
+                          StRoot/StJetMaker/StEmVertexMaker.cxx
+x, y                      0 when no TPC vertex
+Simulation                GEANT vertex (g2t_vertex) when no TPC vertex;
+                          generated z read from a file of real-data vertices
+                          (starSim/vertex.txt, pythia.kumac "gvertex")
+Use                       jet constituent directions are computed from this vertex
+
+
+4. TRUTH (PARTICLE-LEVEL) JETS
+------------------------------
+Species                   photons only (pdg == 22). Electrons/positrons are NOT
+                          included.
+                          StRoot/StJetMaker/mudst/StjMCMuDst.cxx (getMCPhotonList)
+Status                    PYTHIA status 1 (final state) only
+Source                    PYTHIA event record ("particle" table), i.e. before
+                          GEANT
+Particle eta cut          1 < eta < 5, applied before clustering
+Particle energy cut       none (open comment in the code: "How to apply MC
+                          particle energy cut to match FMS photons??")
+Decays                    pi0 and eta forced to decay in PYTHIA
+                          (MDCY(102,1)=1, MDCY(109,1)=1), so their photons are
+                          in the truth jets. Which other particles PYTHIA
+                          leaves stable was NOT VERIFIED.
+Jet finding               same anti-kT R=0.7 E-scheme, pT min 1.0 GeV
+Config                    starSim/src/RunFmsJetFinderPro.cxx (branch
+                          "AntiKtR070Particle", useEmJetMode = true)
+
+
+5. UNDERLYING-EVENT SUBTRACTION
+-------------------------------
+Method                    off-axis cones (STAR method, G. Webb)
+                          StRoot/StJetMaker/StJetMaker2012.cxx (addJetUe)
+Cones                     2 per jet, at the jet's eta, phi = phi_jet +/- pi/2
+Cone radius               0.7 (same as jet R)     StOffAxisConesPars(kRMax)
+Cone contents             the same particle list given to the jet finder
+                          (after the input cuts of section 2, or the truth
+                          photons of section 4). A particle is assigned to
+                          cone 0 if within its radius, otherwise tested
+                          against cone 1.
+Density                   rho = mean over the 2 cones of
+                                (sum of constituent pT in cone) / (pi * R^2)
+Correction                dpT = rho * (jet area);  pT_corr = pT - dpT
+                          StRoot/BrJetMaker/TStNanoJetTreeMaker.cxx (SetUedPt)
+                          emJetAnalysis/src/EjCreateBinnedHist.cxx
+What is corrected         jet pT only. Jet energy is not UE-subtracted.
+Levels                    applied to detector AND particle jets; the pT
+                          response matrix is filled with (pT - dpT) on both axes
+                          starSim/src/FmsSimMakeResponseMatrix.cxx
+Order                     UE subtraction -> pT/E correction (section 7) ->
+                          pT > 2 GeV cut
+EEMC                      not applied for the EEMC version of the analysis
+QA range                  dpT histogrammed over 0-2 GeV
+
+
+6. JET AND EVENT SELECTION (analysis level)
+-------------------------------------------
+Files                     emJetAnalysis/src/EjCreateBinnedHist.cxx
+                          emJetAnalysis/src/EjCreateBinnedHistExtended.cxx
+Jet axis                  2.8 < eta < 3.8         (nano-tree skim keeps 0.8-4.5)
+Jet pT                    > 2.0 GeV after UE subtraction and correction
+Trigger-dependent pT      jet pT must exceed the threshold of a trigger that
+                          fired, set 15% above nominal:
+                            FMS-JP0 1.84   FMS-JP1 2.76   FMS-JP2 3.68
+                            sm-bs1  1.15   sm-bs2  1.84   sm-bs3  2.18
+                            lg-bs1  1.15   lg-bs2  1.84   lg-bs3  2.76
+                          for runs < 16069040: sm-bs1 1.26, sm-bs3 2.53,
+                          lg-bs1 1.26
+                          (base version compares corrected pT; the extended
+                          version compares raw pT)
+Triggers used             FMS-JP0/1/2, FMS-sm-bs1/2/3, FMS-lg-bs1/2/3;
+                          FMS-LED vetoed
+Vertex                    |vz| < 80 cm
+Bunch crossing            abort gaps removed: bx7 in (30,40) or (110,120)
+Spin                      both beams polarized (spin4 = 5, 6, 9, 10)
+x_F                       0 <= |x_F| <= 1
+Jet energy                E < sqrt(s)/2
+Photon multiplicity       number of points in the jet, must be >= 1; results
+                          are binned in it (1-2, 3, >= N; or 1..5, 6+)
+Energy bins               20 GeV wide, 0-100 GeV
+pT bins                   2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0, 10.0
+Excluded fill             18764 (wrong spin pattern)
+Ring of fire              BBC east multiplicity and TOF multiplicity are stored
+                          for a cut (bbcMult > 0.5 and tofTrayMult > 2.5); the
+                          cut itself is commented out in the versions read
+x_F definition            2 * pz / sqrt(s), pz from the four-vector built with
+                          corrected pT, eta, phi, corrected E
+Jet position              x, y projected to z = 735 cm from the vertex
+
+
+7. JET ENERGY / pT CORRECTION (detector -> particle level)
+----------------------------------------------------------
+File                      emJetAnalysis/src/EjCreateBinnedHistExtended.cxx
+Energy, E <= 60 GeV       E' = -8.482 + 4.069 E - 0.3063 E^2 + 0.01401 E^3
+                               - 0.0003243 E^4 + 3.729e-6 E^5 - 1.697e-8 E^6
+Energy, E > 60 GeV        E' = 8.248 + 0.9365 E
+pT, pT <= 5.8 GeV         pT' = 1.486 + 0.07337 pT + 0.215 pT^2 - 0.01525 pT^3
+pT, pT > 5.8 GeV          pT' = 0.4478 + 0.9685 pT
+Input                     pT is the UE-subtracted pT; the function takes E but
+                          does not use it
+Dependence                1D only (no position dependence)
+
+
+8. RESPONSE MATRIX AND UNFOLDING
+--------------------------------
+File                      starSim/src/FmsSimMakeResponseMatrix.cxx
+Matching                  for each detector jet, the nearest particle jet in
+                          eta-phi; accepted if dR < 0.2. Not one-to-one, and
+                          dphi is not wrapped.
+Detector jets considered  2.0 < eta < 4.5
+Events                    simulated events with no FMS trigger fired are skipped
+Matrices                  E (0-70 GeV, 50 bins), pT - dpT (2-6 GeV, 40 bins),
+                          photon multiplicity (1-5)
+Unfolding                 SVD / RooUnfold
+                          emJetAnalysis/src/EjUnfolding.C, EjRooUnfolding.C
+
+
+9. SIMULATION
+-------------
+Generation -- starSim/pythia.kumac, run through starsim
+Generator                 PYTHIA 6.4.28 (libPythia6_4_28s.so)
+Tune                      370 (Perugia 2012) via CALL PyTUNE(370), then
+                          overridden: PARP(90) = 0.213, PARP(91) = 1
+                          (the same PARP(90) override is in
+                          starSim/pythia6FmsFastSim.C)
+PDF                       via LHAPDF; the shipped lhapdf/ folder holds cteq6l1
+Process                   MSEL 1 (hard QCD)
+ptHat                     2 to 80 GeV (ckin 3, ckin 4), one flat range, no
+                          ptHat binning or weighting
+sqrt(s)                   200 GeV, frame CMS, beam p p
+Decays                    MDCY(102,1)=1 (pi0) and MDCY(109,1)=1 (eta) set
+                          explicitly; lines for K0S, K0L, Lambda, Sigma, Xi,
+                          Omega, pi+-, K+- are commented out, and the
+                          "decayed by geant instead of pythia" block of
+                          select_pythia is empty
+Vertex                    read per event from starSim/vertex.txt: 1000 lines,
+                          x = y = 0, z taken from data (values out to ~200 cm)
+Geometry / field          y2015a, field = -5.0 kG
+Seed                      ranlux [RUN]*[PTmin]+[CYCLE]
+ETAmin / ETAmax           +1.0 / +5.0 defined in the kumac header but not
+                          applied anywhere in it
+
+Generator-level filter -- StRoot/StMCFilter/StFmsJetFilter.cxx ("GFILTER
+exampleFmsJet", RejectEG)
+Particles                 status 1, 2.4 < eta < 4.4
+Sum                       particle ENERGY in 8 overlapping phi sectors, each
+                          pi/2 wide, centred every pi/4
+Weighting                 EM (pdg 111, 221, 22, 11) counted fully, everything
+                          else at 0.75
+Accept                    largest sector sum >= 30 GeV
+Note                      starSim/README.md says the filter was changed to six
+                          phi bins and E_T sums; the RejectEG code on this
+                          branch still uses eight sectors and energy. The
+                          muon/neutrino skip in the code is written as
+                          TMath::Abs(pdg == 13), which does not do what its
+                          comment suggests.
+
+Detector simulation / reconstruction -- starSim/src/FmsSimRunBfc.C (the chain
+used by the automated job FmsSimRunStarsimAndBfc)
+BFC chain                 ry2015a agml usexgeom MakeEvent McEvent vfmce Idst
+                          BAna l0 l3 Tree logger fmsSim fmspoint evout -dstout
+                          IdTruth bigbig fzin geantout clearmem
+                          sdt20150417.193427
+                          - fmsSim = full StFmsSimulatorMaker (not fast sim)
+                          - vfmce  = vertex taken from MC truth
+                          - no TPC tracking in this chain (an alternative
+                            chain with Sti/TPC is in starSim/runBfcFms.C)
+                          - no pile-up or embedding option
+FMS gains                 fmsGainCorr-BNL-C; hot/bad channel mask of run
+                          16080020 applied (TStFmsHotChDB)
+BFC-level filter          StFmsEtFilterMaker after fmsSim, threshold passed in
+                          per job (default 1, described as "1 GeV in E_T";
+                          an earlier energy threshold of 30 was "too high")
+Outputs kept              MuDst, geant.root, pythia.root (the .fzd is deleted)
+
+Jet finding on simulation -- starSim/src/RunFmsJetFinderPro.cxx
+DB timestamp              2015-03-21 12:15:03
+Hit / point makers        read from MuDst (SetReadMuDst(1))
+Trigger simulation        StFmsTriggerMaker with QT simulation (useQTSim),
+                          run number forced to 16080020; nine trigger bits
+                          (sm-bs1-3, lg-bs1-3, JP0-2) packed into the event's
+                          runId field
+Jet branches              reco "AntiKtR070NHits12" and particle
+                          "AntiKtR070Particle" (sections 1, 2, 4), plus the
+                          off-axis-cone UE branch (section 5)
+
+Job size                  starSim/sumsJobsFmsSim.xml: 500 events per job,
+                          nProcesses = 2000. Total statistics actually
+                          produced: NOT VERIFIED (not recorded in the repo).
+Synchronisation           the pythia tree is not filtered while MuDst/jet trees
+                          are, so event-by-event matching needs a separate
+                          synchronisation step (starSim/README.md)
+Embedding                 listed as a planned step in starSim/README.md; no
+                          code for it was found
+
+
+10. HOW FCSJetPipeline COMPARES (EM-only, point-based mode: -E 1 -F 1)
+----------------------------------------------------------------------
+Same as FMS:
+  - anti-kT, R = 0.7, E-scheme.
+  - Reco input: points, not tower hits.
+  - Point energy window: E > 1.0 GeV and E <= sqrt(s)/2 (about 254 GeV, the
+    counterpart of the FMS 100 GeV limit at sqrt(s) = 200 GeV), through
+    pass_point_energy_cut() in simulation and data alike.
+  - Truth jets from photons only, no electrons.
+  - Truth particles restricted to 1 < eta < 5 (here by the generator macros'
+    SetEtaRange, i.e. on what is handed to GEANT).
+  - Jet pT minimum at jet finding: 2.0 GeV reco, 1.0 GeV truth.
+  - Generator settings, when -M 1 ("FMS tune") is given: PYTHIA 6.4.28,
+    PyTune 370, PARP(90) = 0.213, PARP(91) = 1, CTEQ6L1, MSEL 1.
+
+Different from FMS:
+  - UE subtraction: energy, not pT, from an averaged position map built with
+    the event selection in UESelection.h; FMS uses per-jet off-axis cones.
+    Jet areas are not computed.
+  - Jet direction: constituent directions are taken from the origin, as if
+    there were no vertex information; event_vertex_z is stored but not used.
+  - Truth source: GEANT tracks created within 100 um of the primary vertex
+    (STAR's Pythia 6 wrapper leaves pi0/eta stable and GEANT decays them), versus PYTHIA
+    status-1 photons with pi0/eta decayed in PYTHIA. Photons from long-lived
+    parents (K0S, Lambda, ...) are excluded.
+  - Truth photons carry no energy cut, as in FMS, although reco points need
+    1 GeV; the calibration absorbs the difference. truth_nphotons is
+    therefore an uncut count, reco_nphotons counts points in the window.
+  - Acceptance: reco jet axis inside the ECAL x-y fiducial rectangle with a
+    20 cm buffer; truth jet axis up to R outside that region in eta-phi.
+    FMS: 2.8 < eta < 3.8 on the jet axis.
+  - Matching: one-to-one, closest pairs first, dR < R/2 = 0.35 (the CMS
+    choice, arXiv:1607.03663), versus nearest within 0.2, not one-to-one.
+  - Energy scale: (E, x, y) map with median numerical inversion, versus 1D
+    polynomials in E and pT.
+  - Unfolding: OmniFold versus SVD.
+  - ptHat: disjoint weighted bins with cross-section weights, versus one flat
+    2-80 GeV range. sqrt(s) = 508.4 GeV versus 200 GeV.
+  - Generator-level filter: FcsJetFilter (energy on one FCS arm above a
+    threshold, default 50 GeV), versus StFmsJetFilter.
+  - Simulated vertex: Gaussian (sigma_z = 30 cm), versus a file of data
+    vertices.
+  - Tower hits (when -F 0): MIP-fraction cut, 0.31 GeV ECAL, no upper cut.
+
+Applied after the pipeline, not in it:
+  - Unphysical jets: E <= sqrt(s)/2 and 0 < x_F <= 1 on the final energy,
+    after UE subtraction and calibration (pass_physical_jet_cut() in
+    JetParameters.h holds the definition).
+  - The second 2 GeV jet pT cut, on the corrected pT.
+  - Trigger-dependent jet pT thresholds (section 6).
+  - Trigger selection: flags are saved in the trees; simulation is produced
+    without a trigger requirement.
+
+Not used:
+  - Post-detector E_T filter, hot-channel mask in simulation, |vz| cut,
+    abort-gap removal, spin-state cut, ring-of-fire cut.
+
+Geometry caution for the off-axis cones: the FMS covers full azimuth, so cones
+at phi +/- 90 degrees always land on active detector. The FCS has a gap between
+its two halves (ECAL inner edge at |x| ~ 20.5 cm) and ends at y ~ -97 / +86 cm,
+so a cone at +/- 90 degrees from a jet near y ~ 0 sits across the gap and
+partly off the detector. This is a geometric estimate, not a measured effect.

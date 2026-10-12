@@ -18,7 +18,19 @@ static const float ecal_mip = 3.1;
 static const float hcal_mip = 15.0;
 
 // ------------------ Threshold ------------------
+// Tower hits (reco jets built from hits): minimum energy as a fraction of
+// the MIP values above.
 static const float mip_threshold = 0.1;
+
+// FCS points (reco jets built from points, -F 1): minimum point energy,
+// GeV. Same value as the STAR FMS EM-jet analysis's photon-candidate cut
+// (kFmsEngMin, see UnderlyingEventPlayground/fms_emjet_reference.txt),
+// which that analysis chose to reject low-energy photons / hadronic
+// contributions and to match data better. The MIP-based tower cut above
+// does not apply to points. Also the energy floor of reco_nphotons.
+// Applied through pass_point_energy_cut() below, together with the upper
+// limit.
+static const float point_energy_min = 1.0f;
 
 // ------------------ Geometry cut (symmetric two-window detector) ------------------
 // HCAL's own projected footprint (north/south combined into one shared
@@ -85,7 +97,9 @@ static const float R_buffer = 0.0f * R / 4.0f;
 // margin for the simple rectangle cut (pass_fiducial_cut): reco jets use a
 // margin since the jet energy response is poorly calibrated near the
 // fiducial edge. Truth jets use pass_jet_scale_cut instead, extending this
-// same boundary outward by half a jet radius in eta-phi (see below).
+// same boundary outward in eta-phi (see below): by half a jet radius for
+// ECAL+HCAL jets, by a full jet radius (truth_fiducial_margin_em) for
+// EM-only jets.
 static const float reco_fiducial_buffer = 10.0f;
 
 // Same role as reco_fiducial_buffer, but for EM-only reco jets against the
@@ -97,6 +111,27 @@ static const float reco_fiducial_buffer = 10.0f;
 // exclusion into jet-finding itself, rather than only filtering for it
 // downstream in the calibration/analysis stage.
 static const float reco_fiducial_buffer_ecal = 20.0f;
+
+// ------------------ EM-only reco jets ------------------
+// Minimum pT (GeV) of an EM-only reco jet at jet finding. Same value as the
+// STAR FMS EM-jet analysis (kPtMin, see
+// UnderlyingEventPlayground/fms_emjet_reference.txt). That analysis applies
+// the same 2 GeV again after its UE subtraction and energy/pT correction;
+// that second, analysis-level cut is not applied here.
+static const double reco_jet_pt_min_em = 2.0;
+
+// ------------------ EM-only truth jets ------------------
+// Minimum pT (GeV) of an EM-only truth jet at jet finding. Same value as
+// the STAR FMS EM-jet analysis's particle-level jets (AntiKtR070Particle,
+// see UnderlyingEventPlayground/fms_emjet_reference.txt).
+static const double truth_jet_pt_min_em = 1.0;
+
+// How far outside the reco fiducial region (kFiducialRectEcal inset by
+// reco_fiducial_buffer_ecal) an EM-only truth jet's axis may sit, in
+// eta-phi: one full jet radius. A truth jet further out than R has no
+// overlap with any jet whose axis is inside the fiducial region, so it
+// cannot affect what is observed there and is dropped.
+static const float truth_fiducial_margin_em = (float)R;
 
 // ------------------ Feynman x / detector side ------------------
 // Real Run 22 pp sqrt(s), GeV -- confirmed from RunLog.beamInfo (the
@@ -145,6 +180,34 @@ inline double computeFeynmanX(double E, double eta, double sqrtS)
 {
     double pz = E * std::tanh(eta);
     return 2.0 * pz / sqrtS;
+}
+
+// Energy window for an FCS point to be used (reco jets built from points,
+// and reco_nphotons): above point_energy_min and no more than one beam's
+// energy, sqrt(s)/2. A single photon cannot carry more than the beam
+// energy, so anything above it is unphysical (hot/miscalibrated channels,
+// beam background) -- the same role as the STAR FMS EM-jet analysis's
+// upper photon-energy cut (kFmsEngMax = 100 GeV at sqrt(s) = 200 GeV).
+// Shared by sim_to_jet and data_to_jet so both apply exactly the same
+// code; it removes nothing physical in simulation. Pass
+// computeSqrtSForRun(runNumber) for real data, kSqrtS_MainRun22_GeV for
+// simulation.
+inline bool pass_point_energy_cut(float e, double sqrtS)
+{
+    return e > point_energy_min && e <= 0.5 * sqrtS;
+}
+
+// Rejects unphysical reco jets, as the STAR FMS EM-jet analysis does: a
+// jet cannot carry more than one beam's energy (E <= sqrt(s)/2), and its
+// x_F must lie in (0, 1]. ANALYSIS-LEVEL ONLY: these limits are only
+// meaningful for the final jet energy, i.e. after underlying-event
+// subtraction and energy calibration, so nothing in sim_to_jet or
+// data_to_jet calls this -- it lives here so the analysis has one
+// definition to use. Pass the corrected E.
+inline bool pass_physical_jet_cut(double E, double eta, double sqrtS)
+{
+    double xF = computeFeynmanX(E, eta, sqrtS);
+    return E <= 0.5 * sqrtS && xF > 0.0 && xF <= 1.0;
 }
 
 // Detector side from the ECAL-front-plane x position (same north/south

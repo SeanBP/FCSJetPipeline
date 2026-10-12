@@ -12,6 +12,10 @@
                              3=MRST LO*, 21=NNPDF3.1sx, <=0=default);
                              pythia6 PyTune (325=Perugia STAR, 0=default)
       {{PP_TUNE}}           pythia8 Tune:pp preset (-T; -1 = none, pythia6 ignores it)
+      {{FMS_TUNE}}          1 = pythia6 "FMS tune" bundle (-M): PyTune 370 with
+                             PARP(90)=0.213, PARP(91)=1, MSEL=1, as the STAR FMS
+                             EM-jet analysis used (see starsim_pythia6_filter.C).
+                             0 (default) = off. pythia8 ignores it.
       PTCUT_BLOCK            flat "set ptcut = N" / "set ptcutmax = N" (-p/-P),
                              or a scaled_index chain drawn from a JSON
                              proportion table (-w, see
@@ -78,7 +82,7 @@
         else
             ln -sf starsim_pythia6_filter.C starsim.C
             set pid = "pythia6"
-            set tune_arg = ""
+            set tune_arg = ",{{FMS_TUNE}}"
         endif
 
         set seed_temp=`od -vAn -N4 -tu4 &lt; /dev/urandom`
@@ -90,6 +94,7 @@
 
         echo "========================================"
         echo "Generator      = {{GENERATOR}} (tune/PDF param={{TUNE_PARAM}})"
+        echo "FMS tune       = {{FMS_TUNE}}"
         echo "ptHatMin       = ${ptcut} GeV"
         echo "ptHatMax       = ${ptcutmax} GeV"
         echo "FcsJetFilter Ethr = {{FILTER_ETHR}} GeV"

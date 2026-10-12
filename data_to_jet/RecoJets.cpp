@@ -308,9 +308,10 @@ int main(int argc, char** argv) {
 
             // Either tower hits (default) or FCS points (use_points=1,
             // see the CLI arg above) feed the same anti-kt clustering
-            // below -- same per-candidate energy floor and (x,y,z)
-            // direction-vector construction either way, just swapping
-            // which arrays are read.
+            // below -- same (x,y,z) direction-vector construction either
+            // way, just swapping which arrays are read. The energy floor
+            // differs: hits use the MIP-fraction tower cut, points use
+            // pass_point_energy_cut() (see JetParameters.h).
             int nSource = use_points ? Cal_npts : Cal_nhits;
 
             for (int i=0; i<nSource; i++) {
@@ -320,8 +321,10 @@ int main(int argc, char** argv) {
                 if (detid == 4 || detid == 5) continue;
                 if (em_only && (detid == 2 || detid == 3)) continue;
 
-                if (!(((detid==0||detid==1)&&e>mip_threshold*ecal_mip) ||
-                      ((detid==2||detid==3)&&e>mip_threshold*hcal_mip))) continue;
+                if (use_points) {
+                    if (!pass_point_energy_cut(e, event_sqrt_s_gev)) continue;
+                } else if (!(((detid==0||detid==1)&&e>mip_threshold*ecal_mip) ||
+                             ((detid==2||detid==3)&&e>mip_threshold*hcal_mip))) continue;
 
                 float x = use_points ? Cal_pt_x[i] : Cal_hit_posx[i];
                 float y = use_points ? Cal_pt_y[i] : Cal_hit_posy[i];
@@ -342,7 +345,9 @@ int main(int argc, char** argv) {
             ClusterSequence cs_reco(reco_particles, JetDefinition(antikt_algorithm, R));
             vector<PseudoJet> reco_jets_selected;
 
-            for (auto &jet : cs_reco.inclusive_jets()) {
+            // EM-only reco jets carry a minimum pT (reco_jet_pt_min_em, see
+            // JetParameters.h); ECAL+HCAL reco jets have none.
+            for (auto &jet : cs_reco.inclusive_jets(em_only ? reco_jet_pt_min_em : 0.0)) {
                 float jetXE = z_proj*jet.px()/jet.pz();
                 float jetYE = z_proj*jet.py()/jet.pz();
                 bool passesFiducial = em_only
@@ -377,7 +382,7 @@ int main(int argc, char** argv) {
                 int nphotons = 0;
                 for (int p = 0; p < Cal_npts; p++) {
                     if (Cal_pt_detid[p] != 0 && Cal_pt_detid[p] != 1) continue;
-                    if (Cal_pt_energy[p] <= 1.0) continue;
+                    if (!pass_point_energy_cut(Cal_pt_energy[p], event_sqrt_s_gev)) continue;
                     double pEta, pPhi;
                     computeEtaPhi(Cal_pt_x[p], Cal_pt_y[p], pEta, pPhi);
                     double dPhi = fabs(pPhi - jet.phi());

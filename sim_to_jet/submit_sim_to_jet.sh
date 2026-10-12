@@ -4,7 +4,7 @@
 #   ./submit_sim_to_jet.sh -g <pythia8|pythia6> -t <tune_param> -p <ptcut> \
 #       -n <nevents> -s <0|1> -o <outdir> [-P <ptcutmax>] [-j <nprocesses>] \
 #       [-l <label>] [-k <0|1>] [-f <triggers>] [-c <run_number>] \
-#       [-e <filter_ethr>] [-E <0|1>] [-T <tune_pp>] [-F <0|1>]
+#       [-e <filter_ethr>] [-E <0|1>] [-T <tune_pp>] [-F <0|1>] [-M <0|1>]
 #
 #   -g  generator: pythia8 or pythia6
 #   -t  tune/PDF: pythia8 PDF:pSet (8=CTEQ6L1, 5=MSTW2008LO, 3=MRST LO*,
@@ -47,6 +47,13 @@
 #       unaffected. 0/omit = hits, the previous default behavior. HCAL
 #       currently produces no points at all, so this is ECAL-only input
 #       regardless of -E when enabled.
+#   -M  1 = "FMS tune": the generator settings of the STAR FMS EM-jet
+#       analysis, as one bundle -- pythia6, PyTune 370 (Perugia 2012,
+#       CTEQ6L1), PARP(90)=0.213, PARP(91)=1, MSEL=1 (values live in
+#       starsim_pythia6_filter.C). Implies -g pythia6 -t 370, so both may be
+#       omitted; passing anything else for either is an error. sqrt(s),
+#       ptHat cuts (-p/-P/-w) and decays are not part of the bundle.
+#       0/omit = off.
 #
 # Example:
 #   ./submit_sim_to_jet.sh -g pythia8 -t 8 -p 10 -n 500 -s 0 \
@@ -73,8 +80,9 @@ CALIB_RUN=0
 FILTER_ETHR=50.0
 EM_ONLY=0
 USE_POINTS=0
+FMS_TUNE=0
 
-while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:T:F:h" opt; do
+while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:T:F:M:h" opt; do
   case $opt in
     g) GENERATOR="$OPTARG" ;;
     t) TUNE_PARAM="$OPTARG" ;;
@@ -93,12 +101,28 @@ while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:T:F:h" opt; do
     E) EM_ONLY="$OPTARG" ;;
     T) PP_TUNE="$OPTARG" ;;
     F) USE_POINTS="$OPTARG" ;;
+    M) FMS_TUNE="$OPTARG" ;;
     h|*)
-      sed -n '2,55p' "$0"
+      sed -n '2,63p' "$0"
       exit 0
       ;;
   esac
 done
+
+if [ "$FMS_TUNE" != "0" ] && [ "$FMS_TUNE" != "1" ]; then
+    echo "Error: -M must be 0 or 1 (got '$FMS_TUNE')"
+    exit 1
+fi
+
+# The FMS tune sets the generator and PyTune itself (see -M above).
+if [ "$FMS_TUNE" = "1" ]; then
+    GENERATOR="${GENERATOR:-pythia6}"
+    TUNE_PARAM="${TUNE_PARAM:-370}"
+    if [ "$GENERATOR" != "pythia6" ] || [ "$TUNE_PARAM" != "370" ]; then
+        echo "Error: -M 1 (FMS tune) means -g pythia6 -t 370 (got -g '$GENERATOR' -t '$TUNE_PARAM')"
+        exit 1
+    fi
+fi
 
 if [ -z "$GENERATOR" ] || [ -z "$TUNE_PARAM" ] || [ -z "$NEVENTS" ] || [ -z "$SAVE_SIMPLETREE" ] || [ -z "$OUTDIR" ]; then
     echo "Missing required argument. Run with -h for usage."
@@ -176,7 +200,7 @@ fi
 
 export XML_IN="${SCRIPT_DIR}/sim_to_jet.xml"
 export XML_OUT="${OUTXML}"
-export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR EM_ONLY PP_TUNE USE_POINTS
+export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR EM_ONLY PP_TUNE USE_POINTS FMS_TUNE
 
 python3 << 'PYEOF'
 import json
@@ -232,6 +256,7 @@ xml = xml.replace("{{FILTER_ETHR}}", os.environ.get("FILTER_ETHR", "50.0"))
 xml = xml.replace("{{EM_ONLY}}", os.environ.get("EM_ONLY", "0"))
 xml = xml.replace("{{PP_TUNE}}", os.environ.get("PP_TUNE", "-1"))
 xml = xml.replace("{{USE_POINTS}}", os.environ.get("USE_POINTS", "0"))
+xml = xml.replace("{{FMS_TUNE}}", os.environ.get("FMS_TUNE", "0"))
 
 with open(os.environ["XML_OUT"], "w") as f:
     f.write(xml)
@@ -239,9 +264,9 @@ PYEOF
 
 echo "Generated ${OUTXML}"
 if [ -n "$PTCUT_JSON" ]; then
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE}"
 else
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE}"
 fi
 
 mkdir -p "${OUTDIR}"
@@ -288,6 +313,7 @@ calib_run=${CALIB_RUN}
 filter_ethr=${FILTER_ETHR}
 em_only=${EM_ONLY}
 use_points=${USE_POINTS}
+fms_tune=${FMS_TUNE}
 EOF
 echo "Wrote run parameters to ${OUTDIR}/run_params_${LABEL}_${REQID}.txt"
 

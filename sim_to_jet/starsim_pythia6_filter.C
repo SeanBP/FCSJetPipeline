@@ -19,9 +19,30 @@ StarPrimaryMaker *_primary = 0;
 class StarFilterMaker;
 StarFilterMaker *filter = 0;
 
+class StarPythia6;
+StarPythia6 *_pythia6 = 0;
+
+// "FMS tune": the generator settings of the STAR FMS EM-jet analysis
+// (BrightSTAR emjet-gpc, starSim/pythia.kumac -- see
+// UnderlyingEventPlayground/fms_emjet_reference.txt), bundled so they
+// switch on/off together via starsim()'s fmsTune argument:
+//   - PyTune 370 (Perugia 2012; its PDF is CTEQ6L1 through LHAPDF, set 10042)
+//   - PARP(90) = 0.213 (energy scaling of the MPI pT cutoff, i.e. the amount
+//     of underlying event), overriding the tune's own value
+//   - PARP(91) = 1 (primordial kT width)
+//   - MSEL = 1 (hard QCD)
+// Applied AFTER PyTune, which would otherwise overwrite the two PARPs.
+// sqrt(s), the ptHat cuts and particle decays are deliberately NOT part of
+// the bundle: they stay as this pipeline already sets them.
+const Int_t    kFmsTunePyTune = 370;
+const Double_t kFmsTuneParp90 = 0.213;
+const Double_t kFmsTuneParp91 = 1.0;
+const Int_t    kFmsTuneMsel   = 1;
+
 // bschmookler's dir has the MRST2007lomod grid but no pdfsets.index (and
 // isn't writable by us to add one); the system LHAPDF share dir has the
-// index but not this grid. Merged copy of both, writable, lives here:
+// index but not this grid. Merged copy of both, writable, lives here
+// (plus the system dir's cteq6l1 grid, which PyTune 370 needs):
 TString LHAPDF_DATA_PATH="/star/u/seanp/FCSJetPipeline/sim_to_jet/lhapdf_data";
 
 // ----------------------------------------------------------------------------
@@ -46,13 +67,14 @@ void trig( Int_t n=1 )
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
-void Pythia6( TString mode="pp:minbias", Double_t ckin3=0.0, Int_t tune=325, Double_t ckin4=-1.0 )
+void Pythia6( TString mode="pp:minbias", Double_t ckin3=0.0, Int_t tune=325, Double_t ckin4=-1.0, Int_t fmsTune=0 )
 {
   gSystem->Setenv("LHAPDF_DATA_PATH", LHAPDF_DATA_PATH.Data() );
   gSystem->Load( "/opt/star/$STAR_HOST_SYS/lib/libLHAPDF.so");
   gSystem->Load( "libPythia6_4_28.so");
 
   StarPythia6 *pythia6 = new StarPythia6("pythia6");
+  _pythia6 = pythia6;
   if ( mode == "pp:minbias" )
   {
     // Real Run 22 energy: sqrt(s)~508.4 GeV (254.2 GeV/nucleon), not 500.
@@ -68,7 +90,15 @@ void Pythia6( TString mode="pp:minbias", Double_t ckin3=0.0, Int_t tune=325, Dou
     pythia6->SetAttr("BLUE", "proton");
     pythia6->SetAttr("YELL", "proton");
 
+    if ( fmsTune ) tune = kFmsTunePyTune;
     if ( tune ) pythia6->PyTune( tune );
+
+    if ( fmsTune ) {
+      PyPars_t &pypars = pythia6->pypars();
+      pypars.parp(90) = kFmsTuneParp90;
+      pypars.parp(91) = kFmsTuneParp91;
+      pythia6->pysubs().msel = kFmsTuneMsel;
+    }
 
     // pT-hat minimum/maximum, same role as Pythia8's
     // PhaseSpace:ptHatMin/ptHatMax. PYTHIA6's own default is ckin(4)=-1,
@@ -85,7 +115,7 @@ void Pythia6( TString mode="pp:minbias", Double_t ckin3=0.0, Int_t tune=325, Dou
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
-void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t tune=325, Double_t fcsFilterEthr=50.0, Double_t ckin4=-1.0 )
+void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t tune=325, Double_t fcsFilterEthr=50.0, Double_t ckin4=-1.0, Int_t fmsTune=0 )
 {
 
   gROOT->ProcessLine(".L bfc.C");
@@ -117,7 +147,7 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t t
     chain -> AddBefore( "geant", _primary );
   }
 
-  Pythia6( "pp:minbias", ckin3, tune, ckin4 );
+  Pythia6( "pp:minbias", ckin3, tune, ckin4, fmsTune );
   command("call gstar_part");
 
   geometry("y2023");
@@ -142,6 +172,18 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t t
   command("gfile o pythia6.starsim.fzd");
 
   trig( nevents );
+
+  // What PYTHIA actually ran with, read back after the event loop so it is
+  // obvious from the log whether the FMS tune (or anything else) took effect
+  // -- nothing between PyTune and here may have silently reset it.
+  cout << "Tune check (fmsTune=" << fmsTune << "): MSEL=" << _pythia6->pysubs().msel
+       << " PARP(90)=" << _pythia6->pypars().parp(90)
+       << " PARP(91)=" << _pythia6->pypars().parp(91)
+       << " PARP(82)=" << _pythia6->pypars().parp(82)
+       << " MSTP(5)=" << _pythia6->pypars().mstp(5)
+       << " MSTP(51)=" << _pythia6->pypars().mstp(51)
+       << " MSTP(52)=" << _pythia6->pypars().mstp(52) << endl;
+
   chain->Finish();
 
   command("call agexit");  // ensure STARSIM exits properly

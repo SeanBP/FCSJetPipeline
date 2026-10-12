@@ -16,6 +16,7 @@
 #include <algorithm>
 
 #include "JetParameters.h"
+#include "JetXSecWeights.h"
 
 // CONFIGURATION
 
@@ -129,33 +130,52 @@ struct BinData
           resp_mu_err(re) {}
 };
 
+// w_vals is each entry's MC cross-section weight (see JetXSecWeights.h),
+// parallel to resp_vals/scale_vals.
 struct BinAccum
 {
     std::vector<float> resp_vals;
     std::vector<float> scale_vals;
+    std::vector<float> w_vals;
 };
 
-FitResult gaussian_fit(const std::vector<double> &v)
+// Each entry v[i] carries its MC cross-section weight w[i] (see
+// JetXSecWeights.h): the seed mean/sigma are weighted, and the histogram is
+// filled with weights and Sumw2 so the chi2 fit uses sqrt(sum w^2) bin
+// errors. Weights are rescaled to mean 1 first, purely so the histogram
+// contents (and the fit's amplitude) stay at the scale of entry counts.
+FitResult gaussian_fit(const std::vector<double> &v, const std::vector<double> &w)
 {
     FitResult r;
 
     if (v.size() < (size_t)min_total_entries)
         return r;
 
-    double mean = std::accumulate(v.begin(), v.end(), 0.0) / v.size();
+    double sum_w = std::accumulate(w.begin(), w.end(), 0.0);
+    if (!std::isfinite(sum_w) || sum_w <= 0.0)
+        return r;
+
+    double mean = 0.0;
+    for (size_t i = 0; i < v.size(); i++)
+        mean += w[i] * v[i];
+    mean /= sum_w;
 
     double var = 0.0;
     for (size_t i = 0; i < v.size(); i++)
-        var += (v[i] - mean) * (v[i] - mean);
+        var += w[i] * (v[i] - mean) * (v[i] - mean);
 
-    double sigma = std::sqrt(var / std::max<size_t>(1, v.size() - 1));
+    // n/(n-1) keeps this identical to the unweighted sample sigma when
+    // all weights are equal
+    double sigma = std::sqrt(var / sum_w * v.size() / std::max<size_t>(1, v.size() - 1));
     if (!std::isfinite(sigma) || sigma <= 0.0)
         return r;
 
     TH1D h("h", "", n_hist_bins, mean - 5 * sigma, mean + 5 * sigma);
+    h.Sumw2();
 
+    double w_norm = v.size() / sum_w;
     for (size_t i = 0; i < v.size(); i++)
-        h.Fill(v[i]);
+        h.Fill(v[i], w[i] * w_norm);
 
     double xmin = mean - n_sigma * sigma;
     double xmax = mean + n_sigma * sigma * asym;
@@ -232,12 +252,21 @@ int main(int argc, char** argv)
         grid_valid[ix][iy] = pass_fiducial_cut((float)x_grid[ix], (float)y_grid[iy], reco_fiducial_buffer);
     }
 
+    // Per-file MC cross-section weight; every jet below is weighted by its
+    // file's value instead of counting evenly (see JetXSecWeights.h).
+    std::vector<float> file_weight;
+    if (!ComputeXSecWeights(root_files, tree_name, file_weight))
+        return 1;
+
     // Accumulate per-bin values directly (memory-efficient)
 
     std::unordered_map<BinKey, BinAccum, BinKeyHash> bin_accum;
 
     for (size_t fidx = 0; fidx < root_files.size(); fidx++)
     {
+        if (file_weight[fidx] < 0)
+            continue;
+
         TFile *f = TFile::Open(root_files[fidx].c_str());
         if (!f || f->IsZombie())
             continue;
@@ -311,8 +340,11 @@ int main(int argc, char** argv)
 
                     BinKey key = {q, ix, iy, eb};
 
-                    bin_accum[key].resp_vals.push_back((float)reco);
-                    bin_accum[key].scale_vals.push_back((float)scale);
+                    BinAccum &acc = bin_accum[key];
+
+                    acc.resp_vals.push_back((float)reco);
+                    acc.scale_vals.push_back((float)scale);
+                    acc.w_vals.push_back(file_weight[fidx]);
                 }
             }
         }
@@ -329,15 +361,17 @@ int main(int argc, char** argv)
     {
         const std::vector<float> &resp_f = it->second.resp_vals;
         const std::vector<float> &scale_f = it->second.scale_vals;
+        const std::vector<float> &w_f = it->second.w_vals;
 
         if (resp_f.size() < (size_t)min_total_entries)
             continue;
 
         std::vector<double> resp_vals(resp_f.begin(), resp_f.end());
         std::vector<double> scale_vals(scale_f.begin(), scale_f.end());
+        std::vector<double> w_vals(w_f.begin(), w_f.end());
 
-        FitResult resp = gaussian_fit(resp_vals);
-        FitResult sc = gaussian_fit(scale_vals);
+        FitResult resp = gaussian_fit(resp_vals, w_vals);
+        FitResult sc = gaussian_fit(scale_vals, w_vals);
 
         if (!std::isfinite(sc.mu) || !std::isfinite(resp.mu))
             continue;
@@ -357,6 +391,7 @@ int main(int argc, char** argv)
     double scale_mu, resp_mu;
     double scale_mu_err, resp_mu_err;
     int n_entries;
+    double n_eff;
 
     t.Branch("E_low", &E_low);
     t.Branch("E_high", &E_high);
@@ -370,7 +405,10 @@ int main(int argc, char** argv)
     t.Branch("scale_mu_err", &scale_mu_err);
     t.Branch("response_mu_err", &resp_mu_err);
 
+    // n_entries is the raw (unweighted) jet count; n_eff is the Kish
+    // effective count under the cross-section weights, (sum w)^2 / sum w^2
     t.Branch("n_entries", &n_entries);
+    t.Branch("n_eff", &n_eff);
 
     for (int ie = 0; ie < n_bins_E; ie++)
     for (int ix = 0; ix < n_grid_x; ix++)
@@ -381,6 +419,9 @@ int main(int argc, char** argv)
 
         auto it_acc = bin_accum.find(key);
         n_entries = (it_acc != bin_accum.end()) ? (int)it_acc->second.resp_vals.size() : 0;
+        n_eff = 0.0;
+        if (it_acc != bin_accum.end())
+            n_eff = EffectiveEntries(std::vector<double>(it_acc->second.w_vals.begin(), it_acc->second.w_vals.end()));
 
         E_low = e_bins[ie];
         E_high = e_bins[ie + 1];

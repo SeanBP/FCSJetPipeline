@@ -19,3 +19,8 @@ log/
 # Editor/OS cruft
 *~
 .DS_Store
+
+# UnderlyingEventPlayground: compiled programs (build lines are at the top of each .cpp)
+/UnderlyingEventPlayground/min_opposite_angle
+/UnderlyingEventPlayground/max_dr_jet_placement
+/UnderlyingEventPlayground/ue_map

@@ -24,7 +24,28 @@ Bool_t ReadMCJobStats(Double_t &sigmaGen, Int_t &nTried){
       // Raw, as PYTHIA reports it -- no unit conversion (sigmaGen is in mb).
       sigmaGen = stats->sigmaGen;
       nTried = stats->nTried;
-      cout << "ReadMCJobStats: " << candidates[i] << " -> sigmaGen=" << stats->sigmaGen
+
+      // Pythia 6 only: STAR's StarPythia6::Stats() reads PYTHIA's cross
+      // section through a PyInt5_t struct that omits the common block's
+      // leading NGENPD integer, so the value arrives 4 bytes off -- a
+      // denormal (~5e-315) whose low 32 bits are the high 32 bits of the
+      // real cross section. Move them back into place, which gives the
+      // real value to ~1e-6 relative (it agrees with PYSTAT's printed
+      // cross section). A normal value, as Pythia 8 reports, is left
+      // alone. jet_scale/JetXSecWeights.h's DecodePythia6Sigma() is the
+      // same decoding on the reading side.
+      if ( sigmaGen > 0.0 && sigmaGen < 1e-300 ) {
+        Double_t raw = sigmaGen;
+        Double_t decoded = 0.0;
+        UInt_t* rawWords = (UInt_t*)&raw;
+        UInt_t* decodedWords = (UInt_t*)&decoded;
+        decodedWords[0] = 0;
+        decodedWords[1] = rawWords[0];
+        cout << "ReadMCJobStats: decoded Pythia 6 sigmaGen " << raw << " -> " << decoded << " mb" << endl;
+        sigmaGen = decoded;
+      }
+
+      cout << "ReadMCJobStats: " << candidates[i] << " -> sigmaGen=" << sigmaGen
            << " mb, nTried=" << stats->nTried << endl;
       return kTRUE;
     }

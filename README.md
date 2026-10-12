@@ -76,7 +76,8 @@ single generated SimpleTree file.
 ```
 ./submit_sim_to_jet.sh -g <pythia8|pythia6> -t <tune_param> -p <ptcut> \
     -n <nevents> -s <0|1> -o <outdir> [-P <ptcutmax>] [-j <nprocesses>] \
-    [-l <label>] [-w <json>] [-k <0|1>] [-f <triggers>] [-E <0|1>] [-F <0|1>]
+    [-l <label>] [-w <json>] [-k <0|1>] [-f <triggers>] [-E <0|1>] [-F <0|1>] \
+    [-M <0|1>]
 ```
 
 | Flag | Meaning |
@@ -95,6 +96,7 @@ single generated SimpleTree file.
 | `-f` | comma-separated FCS trigger flag names (see FCS trigger flags below); an event only gets a jetTree entry if at least one of them fired. Omit/empty (default) keeps every event. Called `-f` here, not `-t` like `data_to_jet`'s equivalent flag, since `-t` is already taken by the tune/PDF param above |
 | `-E` | `1` to build reco jets from ECAL hits only (no HCAL), using the ECAL-only fiducial boundary for both reco and truth jets; `0` (default) keeps the previous ECAL+HCAL behavior. See "EM-only reco jets" below |
 | `-F` | `1` to build reco jets from FCS points instead of tower hits; `0` (default) keeps the previous hit-based behavior. See "Point-based reco jets" below |
+| `-M` | `1` for the "FMS tune" generator bundle (see below); implies `-g pythia6 -t 370`, so both may be omitted. `0` (default) off |
 
 Example -- 500 pythia8/CTEQ6L1 events at ptHatMin=10 GeV, discard the SimpleTree:
 
@@ -134,6 +136,22 @@ optional per bin -- omitted/absent means `-1` (no upper cut), the same
 sentinel used everywhere else in this codebase. Since this substitution
 is multi-line csh, not a single value, the wrapper generates it with
 Python rather than `sed`.
+
+**FMS tune (`-M`).** `-M 1` switches on, as one bundle, the generator
+settings of the STAR FMS EM-jet analysis (BrightSTAR `emjet-gpc`; recorded
+in `UnderlyingEventPlayground/fms_emjet_reference.txt`): PYTHIA 6.4.28,
+`PyTune 370` (Perugia 2012, whose PDF is CTEQ6L1 through LHAPDF),
+`PARP(90)=0.213`, `PARP(91)=1` and `MSEL=1`. The values live in one place,
+`starsim_pythia6_filter.C`, and are applied after `PyTune` so the tune
+cannot overwrite them. In practice only `PARP(90)` differs from a plain
+`-g pythia6 -t 370` run: Perugia 2012's own `PARP(90)` is 0.24, its
+`PARP(91)` is already 1, and `MSEL=1` is what this pipeline's Pythia 6 runs
+use anyway. sqrt(s) (508.4 GeV), the ptHat cuts (`-p`/`-P`/`-w`) and
+particle decays are deliberately not part of the bundle. Every Pythia 6
+job's log ends its generation step with a `Tune check (fmsTune=...)` line
+reading `MSEL`, `PARP(90)`, `PARP(91)`, `PARP(82)` and the PDF set back from
+PYTHIA after the event loop. `lhapdf_data/` holds the `cteq6l1` grid this
+tune needs, alongside `MRST2007lomod`.
 
 **FCS trigger flags.** Both the SimpleTree (`data`, written by
 `StSimpleReaderMaker`) and the JetTree (`jetTree`, written by
@@ -182,6 +200,19 @@ straight through to `jetTree`, re-binding them per input SimpleTree file
 inside their file loop (not once globally), since one `jetTree` can be
 built from several SimpleTree files with different `mc_sigma_pb`/`mc_n_gen`
 values.
+
+**Pythia 6 cross section (`sigma_job`) decoding.** STAR's
+`StarPythia6::Stats()` reads PYTHIA's cross section through a struct that
+is 4 bytes out of step with the Fortran common block (`PyInt5_t` omits the
+leading `NGENPD`), so for a Pythia 6 job the framework reports `sigmaGen`
+as a denormal around 5e-315 whose low 32 bits are the high 32 bits of the
+real value. `readMudst.C`'s `ReadMCJobStats()` decodes it, to about 1e-6
+relative precision (it agrees with the cross section PYSTAT prints),
+before it is stored as `sigma_job`. `jet_scale/JetXSecWeights.h`'s
+`DecodePythia6Sigma()` applies the same decoding on read, so a tree that
+holds the raw framework value is weighted correctly too; any other reader
+of `sigma_job` should go through it. Pythia 8 reports a normal value and
+needs no decoding.
 
 **ECAL/HCAL gain calibration.** `runSimBfc.C` deliberately does *not*
 call `StFcsDb::forceUniformGain()`/`forceUniformGainCorrection()` --
@@ -249,9 +280,20 @@ when `-E 1` is set, both in `JetMatcher.cpp`/`RecoJets.cpp`:
    from the default rectangle (`kFiducialRect`, `reco_fiducial_buffer`) to
    the ECAL-only one (`kFiducialRectEcal`, `reco_fiducial_buffer_ecal`) --
    there's no reason to clip EM-only reco jets down to HCAL's smaller
-   acceptance. Truth jets get the same outward dilation as before (the
-   `-R/2` `etaPhiMargin` trick in `pass_jet_scale_cut`), just applied to
-   the ECAL-only boundary. `reco_fiducial_buffer_ecal` is `20.0f`,
+   acceptance. Truth jets get an outward dilation of the ECAL-only
+   boundary via the `etaPhiMargin` argument of `pass_jet_scale_cut`: a
+   full jet radius (`truth_fiducial_margin_em` = R), where the ECAL+HCAL
+   mode uses R/2. A truth jet further than R outside the reco fiducial
+   region cannot overlap any jet whose axis is inside it. EM-only truth
+   jets also need pT >= `truth_jet_pt_min_em` = 1 GeV at jet finding, the
+   STAR FMS EM-jet analysis's particle-level value, and EM-only reco jets
+   (sim and data) need pT >= `reco_jet_pt_min_em` = 2 GeV, its
+   detector-level value. The physical-jet limits (E <= sqrt(s)/2,
+   0 < x_F <= 1; `pass_physical_jet_cut` in `JetParameters.h`) are not
+   applied in the pipeline: they only make sense on the final energy,
+   after UE subtraction and calibration, so they belong to the analysis. Truth-reco matching
+   is one-to-one within dR < R/2, so truth jets between R/2 and R
+   outside the boundary are kept but can rarely be matched. `reco_fiducial_buffer_ecal` is `20.0f`,
    characterized via the EM-only JES calibration diagnostics fork
    (`JetScalePlayground/`): high-chi2 fit failures concentrated within
    ~20cm of the fiducial edge, comparable to the default rectangle's
@@ -272,10 +314,18 @@ value there runs the wrong calibration for the input.
 the single-photon-candidate level -- see `Cal_pt_*` in
 `StSimpleReaderMaker.h`) instead of raw tower hits, in both
 `JetMatcher.cpp`/`RecoJets.cpp`. Truth jets are never affected (they're
-already generator-level). The per-candidate energy floor
-(`mip_threshold*ecal_mip`/`hcal_mip`) and the (x,y,z)-direction PseudoJet
-construction are otherwise identical to the hit-based path -- only the
-source arrays (`Cal_pt_*` vs `Cal_hit_*`) change. **HCAL currently produces
+already generator-level). The (x,y,z)-direction PseudoJet construction is
+identical to the hit-based path -- only the source arrays (`Cal_pt_*` vs
+`Cal_hit_*`) change. The energy floor is not the same: hits keep the
+MIP-fraction tower cut (`mip_threshold*ecal_mip`/`hcal_mip`), while points
+must exceed `point_energy_min` = 1 GeV and be no more than one beam's
+energy, sqrt(s)/2 (`pass_point_energy_cut()` in `JetParameters.h`, the
+same function for simulation and data) -- the lower and upper photon-
+candidate cuts of the STAR FMS EM-jet analysis. The upper limit removes
+unphysical points in data and nothing in simulation. Upstream of that,
+`StFcsPointMaker` applies no energy cut of its own (every cluster yields
+points); the only floor is `StFcsClusterMaker`'s default 0.05 GeV ECAL
+seed-tower threshold. **HCAL currently produces
 no points at all** (checked directly against real data), so `-F 1` is
 ECAL-only input regardless of `-E`; combine with `-E 1` to also get the
 ECAL-only fiducial boundary, or leave `-E 0` to keep the wider default
@@ -397,6 +447,21 @@ in the folder and fits a scale/response Gaussian on a fine (E, x, y) grid
 geometry), then `CalibrationMap` fits a smooth model per position bin and
 writes the final JSON (this step does not reference `JetParameters.h`,
 only the intermediate fit tree).
+
+**Cross-section weighting.** Every jet entering a per-(E, x, y) fit is
+weighted by its event's share of the generator cross section rather than
+counted evenly, in both `JetEnergyScaleFineGrid` (weighted histogram,
+`Sumw2` errors) and `JetEnergyScaleFineGrid_em_only` (weighted median);
+the logic is in `jet_scale/JetXSecWeights.h`. Files are grouped by their
+`(mc_pthatmin_gev, mc_pthatmax_gev)` and every event in a ptHat bin gets
+`sigma_bin / sum(N_job)`, summed over all of that bin's jobs -- not the
+per-job `sigma_job / N_job`, which would overcount each bin by however
+many jobs `-w` gave it. This is exact only for **disjoint** ptHat bins
+(a `ptcutmax` on every bin of the `-w` JSON); open-ended bins overlap
+everything above them and the job prints a warning. A file without valid
+`sigma_job`/`N_job` stops the job. The step-1 output tree keeps the raw
+count in `n_entries` and adds `n_eff`, the effective count under the
+weights.
 
 ```
 ./submit_jet_scale.sh -i <jettrees_dir> -o <outdir> [-n <json_name>] \
