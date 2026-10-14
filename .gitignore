@@ -40,15 +40,12 @@ log/
 /JetScalePlayground/plot_gaussian_peaks
 /JetScalePlayground/points_ue_form_check
 /JetScalePlayground/summarize_diagnostics
-/UnderlyingEventPlayground/max_dr_jet_placement
-/UnderlyingEventPlayground/min_opposite_angle
 /UnderlyingEventPlayground/proxy_pt_window
 /UnderlyingEventPlayground/proxy_region_area
 /UnderlyingEventPlayground/proxy_trigger
 /UnderlyingEventPlayground/proxy_ue
 /UnderlyingEventPlayground/recoil_rate
 /UnderlyingEventPlayground/truth_dphi
-/UnderlyingEventPlayground/ue_map
 /UnderlyingEventPlayground/ue_position_map
 /UnderlyingEventPlayground/ue_pthat_dependence
 /UnfoldingPlayground/fms_multiplicity_unfold
