@@ -1,51 +1,71 @@
 # UnderlyingEventPlayground
 
-Workshop area for an underlying-event subtraction for FCS jets. Not part of
-the pipeline -- nothing here is used by `sim_to_jet`, `data_to_jet`,
-`jet_scale` or `jet_calibration`.
+Studies behind the underlying-event (UE) subtraction. The method that came out
+of them is in `../underlying_event/` (`ProxySelection.h`, `ProxySearch.h`,
+`UnderlyingEvent.cpp`); nothing here is used by the pipeline. Each source has
+its build and run line at the top.
 
-- `fms_emjet_reference.txt` -- parameters of the STAR FMS EM-jet analysis
-  (BrightSTAR, branch `emjet-gpc`) that this study is meant to complement:
-  jet definition, truth-level cuts, the off-axis-cone UE subtraction, analysis
-  cuts, energy correction, simulation setup, and where each differs from this
-  pipeline.
-- `min_opposite_angle.cpp` -- for every point in the EM-only reco fiducial
-  region, the smallest azimuthal separation a point on the opposite half can
-  have from it (180 deg = back-to-back), with and without requiring the two
-  points to be at least 2R apart in eta-phi. Build/run line is at the top of
-  the file; writes `min_opposite_angle.pdf/.png/.root`.
-- `max_dr_jet_placement.cpp` -- for every point P in the fiducial region, how
-  far a jet axis J on the opposite half can be kept, in eta-phi, from the
-  P' line (180 deg in azimuth from P, any eta: where a back-to-back jet can
-  be), while having zero overlap with a jet at P (dR(J, P) >= 2R). Draws the
-  map and the worst case, with the R-radius cones at P and J and the P' line
-  projected on the surface, and the jet-axis regions allowed by a 0.1,
-  0.2 and 0.3 R tolerance. Writes `max_dr_jet_placement.pdf/.png/.root`.
-- `UESelection.h` -- the UE event-selection geometry (P' line, jet distance, best
-  achievable distance, the 2R and 0.3 R constants), shared by
-  `max_dr_jet_placement.cpp` and `ue_map.cpp` so both use one definition.
-- `ue_map.cpp` -- builds the UE energy map on half the FCS ECAL (x > 0, the
-  JES fine grid) from `sim_to_jet -E 1 -F 1 -s 1` output: per grid point,
-  events with no reco jet within 2R and a tag jet in the 0.3 R region, the
-  summed point energy within R (mean, sigma), and the truth-jet
-  contamination within R (fraction of events, mean, sigma). Every event is
-  used as is and left-right mirrored, and weighted by cross section. Means
-  and sigmas come from a Gaussian fit where it can be trusted, otherwise
-  numerically; the `*_method` grids flag which. Build/run line is at the top
-  of the file.
+## Method in use
 
-## Working choices
+The near off-axis proxy-event method. The UE under a jet is the mean ECal
+point energy (same point selection as the jets: ECAL, 1 GeV to sqrt(s)/2) in
+an R cone at the jet's own position, averaged over other events of the same
+group (run in data, ptHat bin in simulation) and highest EM trigger level,
+whose own reco jet:
 
-- The UE correction is an energy subtraction (not pT), from an averaged map
-  in position, to be built separately for data, simulated reco and truth.
-  No pT binning yet.
-- Event selection for the UE cone at a point P: exactly one reco jet in the
-  event (pT and fiducial cuts as stored in the JetTree), not within 2R of P,
-  and a reco jet inside the region found by `max_dr_jet_placement.cpp` with
-  a 0.3 R tolerance (at least 2R from P, and distance to the P' line, the line
-  180 deg in azimuth from P at any eta, within 0.3 R of the
-  best achievable or at least 2R, beyond which a jet cannot overlap one on
-  the line).
-- The cone sums the same points the jets are built from (ECAL, 1 GeV to
-  sqrt(s)/2), so sub-threshold deposits are not counted.
-- Truth-jet contamination of the cone is recorded as a diagnostic.
+- has pT within 5% of the jet's (widened in 5% steps up to 50% only if fewer
+  than 4 proxy events are found);
+- sits near 90 deg in azimuth from the cone, in a band whose half-width gives
+  every cone position the same allowed eta-phi area;
+- is at least 2.5R from the cone, and no other jet of that event is closer.
+
+Every event that passes is used. The same is done at truth level in
+simulation, with truth jets and EM-only truth photons. The subtraction is in
+energy, per jet, at both levels, before the JES calibration.
+
+## Studies
+
+- `fms_emjet_reference.txt`: the STAR FMS EM-jet analysis (BrightSTAR
+  `emjet-gpc`) and how this pipeline compares.
+- `min_opposite_angle.cpp`, `max_dr_jet_placement.cpp`, `UESelection.h`,
+  `ue_map.cpp`: the earlier averaged position-map approach (UE cone opposite
+  the jet, single-jet events), superseded by the proxy-event method.
+- `truth_dphi.cpp`, `recoil_rate.cpp`: how often a second (truth) jet is
+  back-to-back with the first, i.e. why the cone should avoid the recoil
+  direction.
+- `proxy_region_area.cpp`: the band half-width that gives every cone position
+  the target allowed area.
+- `proxy_pt_window.cpp`: cost and UE bias of the proxy pT window width.
+- `proxy_trigger.cpp`: cost of matching the trigger, and whether the UE
+  depends on it.
+- `proxy_ue.cpp`: the full search jet by jet (cost, proxies found, reach in
+  events), in simulation or data.
+- `ue_position_map.cpp`: mean UE against jet position, in pT ranges.
+- `ue_pthat_dependence.cpp`: effect of drawing simulation proxies from the
+  jet's own ptHat bin (below).
+
+## Results
+
+**ptHat grouping in simulation** (`ue_pthat_dependence.cpp`, 2026-10, first
+calibration sample `fms_tune_calib_v1`, 966 files). Simulation proxies come
+from the jet's own ptHat bin, data proxies from the natural event mix. The
+cross-section-weighted RMS shift of the UE estimate caused by per-bin pooling,
+as a percentage of the mean jet energy, at fixed jet pT and radial position
+(inner / middle / outer thirds of the acceptance):
+
+| Jet pT (GeV) | Reco | Truth |
+|---|---|---|
+| 0.25-0.5 | 12.7 / 7.7 / 3.4 | 5.0 / 3.7 / 2.2 |
+| 0.5-1 | 4.0 / 2.8 / 2.0 | 2.4 / 2.1 / 1.4 |
+| 1-2 | 2.3 / 1.9 / 1.4 | 1.1 / 1.2 / 1.2 |
+| 2-3 | 0.8 / 0.8 / 0.8 | 0.8 / 0.7 / 0.8 |
+| 3-4 | 0.4 / 0.4 / 0.6 | 0.3 / 0.5 / 0.6 |
+| 4-6 | 0.3 / 0.4 / 0.4 | 0.1 / 0.2 / 0.3 |
+| 6-10 | 0.4 / 0.4 / 0.5 | 0.3 / 0.3 / 0.5 |
+
+Below 1% for analysis jets (pT >= 2 GeV), so the per-bin grouping is kept.
+Reco and truth shift the same way (0.15-0.3 GeV above 2 GeV pT), so the effect
+on the JES ratio is smaller still. 60-77% of the weight is in the 5-10 GeV
+ptHat bin. At fixed jet pT and position the mean UE falls with ptHat (above
+ptHat 20 GeV it is about half the 0-10 GeV value), at both levels; not yet
+understood.

@@ -162,8 +162,9 @@ ECAL+HCAL version, with a log-quadratic model and Gaussian-fit modes;
 
 Adds `reco_E_corr` and `reco_x_F_corr` to every file **in place** (asks for
 confirmation). The EM-only map is evaluated at the UE-subtracted energy,
-`reco_E_corr = (reco_E - reco_ue_E) / scale`. Jets without a UE estimate keep
-`reco_E`; jets outside the map keep the subtracted energy. x is folded to
+`reco_E_corr = (reco_E - reco_ue_E) / scale`. Jets without a UE estimate or
+outside the map get `reco_E_corr = reco_x_F_corr = -1` and must be dropped by
+the analysis. x is folded to
 positive for the lookup, y is not. `submit_jet_calibration.sh` is the
 ECAL+HCAL version (also writes `reco_E_uniform_corr`); `-E 1` forwards to the
 EM-only script. The two JSON schemas are not interchangeable.

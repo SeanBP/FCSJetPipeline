@@ -4,10 +4,11 @@
 // scale(x,y,E) = A + B/E + C/E^2 + D exp(-(E-E0)^2 / 2 sigma^2), sigma = sigmaL
 // below E0, sigmaR above, evaluated at the jet's own UE-subtracted energy
 // E = reco_E - reco_ue_E (numerical inversion): reco_E_corr = E / scale.
-// A jet without a UE estimate keeps reco_E ("No UE estimate"); one outside the
-// map (NaN, beyond the buffered fiducial region) gets the subtracted but
-// uncalibrated energy ("Invalid entries"). A file without reco_ue_E is an
-// error unless "noue" is given (map built without subtraction).
+// Jets that cannot be put on the calibrated scale get reco_E_corr =
+// reco_x_F_corr = -1 and must be dropped by the analysis: no UE estimate
+// ("No UE estimate") or outside the map ("Invalid entries": NaN beyond the
+// buffered fiducial region). A file without reco_ue_E is an error unless
+// "noue" is given (map built without subtraction).
 
 #include <TFile.h>
 #include <TTree.h>
@@ -506,8 +507,8 @@ int main(int argc, char** argv)
                     if (reco_ue_nproxy->at(j) <= 0)
                     {
                         no_ue_counter++;
-                        reco_E_corr.push_back(E);
-                        reco_x_F_corr.push_back((float)computeFeynmanX(E, reco_eta->at(j), event_sqrt_s_gev));
+                        reco_E_corr.push_back(-1.0f);
+                        reco_x_F_corr.push_back(-1.0f);
                         continue;
                     }
                     E -= reco_ue_E->at(j);
@@ -545,19 +546,16 @@ int main(int argc, char** argv)
                 double F_grid =
                     A_grid + B_grid/E_eval + C_grid/(E_eval*E_eval) + gauss_term;
 
-                double E_corr_val = E;
-
-                if(!invalid(F_grid) &&
-                   std::fabs(F_grid)>1e-8)
-                {
-                    E_corr_val = E/F_grid;
-                    corrected++;
-                }
-                else
+                if(invalid(F_grid) || std::fabs(F_grid)<=1e-8)
                 {
                     invalid_counter++;
+                    reco_E_corr.push_back(-1.0f);
+                    reco_x_F_corr.push_back(-1.0f);
+                    continue;
                 }
 
+                double E_corr_val = E/F_grid;
+                corrected++;
                 reco_E_corr.push_back(E_corr_val);
                 reco_x_F_corr.push_back(
                     (float)computeFeynmanX(E_corr_val, reco_eta->at(j), event_sqrt_s_gev));

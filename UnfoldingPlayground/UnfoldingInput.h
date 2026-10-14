@@ -76,12 +76,14 @@ inline bool LoadJetPairs(const std::vector<std::string> &files, MatchMode mode, 
 
         std::vector<float> *rE = 0, *rpt = 0, *rx = 0, *ry = 0, *reta = 0, *rphi = 0, *rueE = 0, *ruept = 0;
         std::vector<float> *tE = 0, *tpt = 0, *teta = 0, *tphi = 0, *tueE = 0, *tuept = 0;
-        std::vector<int> *rnph = 0, *tnph = 0, *rue_n = 0, *tue_n = 0, *mr = 0, *mt = 0;
+        std::vector<int> *rnph = 0, *rue_n = 0, *tue_n = 0, *mr = 0, *mt = 0, *tc_jet = 0, *tc_pid = 0;
+        std::vector<float> *tc_E = 0;
         Int_t em0 = 0, em1 = 0, em2 = 0;
         t->SetBranchStatus("*", 0);
         const char *used[] = {"reco_E", "reco_pt", "reco_x", "reco_y", "reco_eta", "reco_phi", "reco_nphotons", "truth_E", "truth_pt",
-                              "truth_eta", "truth_phi", "truth_nphotons", "match_reco_idx", "match_truth_idx", "fcsEM0", "fcsEM1", "fcsEM2"};
-        for (int k = 0; k < 17; k++) t->SetBranchStatus(used[k], 1);
+                              "truth_eta", "truth_phi", "truth_const_E", "truth_const_jetIndex", "truth_const_pid", "match_reco_idx",
+                              "match_truth_idx", "fcsEM0", "fcsEM1", "fcsEM2"};
+        for (int k = 0; k < 19; k++) t->SetBranchStatus(used[k], 1);
         t->SetBranchAddress("reco_E", &rE);
         t->SetBranchAddress("reco_pt", &rpt);
         t->SetBranchAddress("reco_x", &rx);
@@ -93,7 +95,9 @@ inline bool LoadJetPairs(const std::vector<std::string> &files, MatchMode mode, 
         t->SetBranchAddress("truth_pt", &tpt);
         t->SetBranchAddress("truth_eta", &teta);
         t->SetBranchAddress("truth_phi", &tphi);
-        t->SetBranchAddress("truth_nphotons", &tnph);
+        t->SetBranchAddress("truth_const_E", &tc_E);
+        t->SetBranchAddress("truth_const_jetIndex", &tc_jet);
+        t->SetBranchAddress("truth_const_pid", &tc_pid);
         t->SetBranchAddress("match_reco_idx", &mr);
         t->SetBranchAddress("match_truth_idx", &mt);
         t->SetBranchAddress("fcsEM0", &em0);
@@ -114,6 +118,13 @@ inline bool LoadJetPairs(const std::vector<std::string> &files, MatchMode mode, 
         for (Long64_t ev = 0; ev < t->GetEntries(); ev++)
         {
             t->GetEntry(ev);
+            // Truth photon count per jet with the reco point energy window, recomputed
+            // from the constituents (truth_nphotons in older files has no threshold)
+            std::vector<int> tnph(tE->size(), 0);
+            for (size_t c = 0; c < tc_E->size(); c++)
+                if (tc_pid->at(c) == 22 && pass_point_energy_cut(tc_E->at(c), kSqrtS_MainRun22_GeV) &&
+                    tc_jet->at(c) >= 0 && tc_jet->at(c) < (int)tnph.size())
+                    tnph[tc_jet->at(c)]++;
             std::vector<std::pair<int, int> > m;
             if (mode == kMatchPipeline)
             {
@@ -143,7 +154,7 @@ inline bool LoadJetPairs(const std::vector<std::string> &files, MatchMode mode, 
                 JetPair p;
                 p.rE = rE->at(ri); p.rpt = rpt->at(ri); p.rx = rx->at(ri); p.ry = ry->at(ri);
                 p.reta = reta->at(ri); p.rphi = rphi->at(ri); p.rnph = rnph->at(ri);
-                p.tE = tE->at(ti); p.tpt = tpt->at(ti); p.teta = teta->at(ti); p.tphi = tphi->at(ti); p.tnph = tnph->at(ti);
+                p.tE = tE->at(ti); p.tpt = tpt->at(ti); p.teta = teta->at(ti); p.tphi = tphi->at(ti); p.tnph = tnph[ti];
                 p.has_ue = ue && rue_n->at(ri) > 0 && tue_n->at(ti) > 0;
                 p.rueE = p.has_ue ? rueE->at(ri) : 0.f; p.ruept = p.has_ue ? ruept->at(ri) : 0.f;
                 p.tueE = p.has_ue ? tueE->at(ti) : 0.f; p.tuept = p.has_ue ? tuept->at(ti) : 0.f;

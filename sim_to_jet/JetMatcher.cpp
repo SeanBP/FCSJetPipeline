@@ -155,7 +155,8 @@ int main(int argc, char** argv) {
     // axis (as data_to_jet/RecoJets.cpp)
     outTree->Branch("reco_nphotons", &reco_nphotons);
 
-    // Photon constituents of the truth jet (== truth_nconst in em_only mode)
+    // Photon constituents of the truth jet in the same energy window as the
+    // reco points (pass_point_energy_cut)
     outTree->Branch("truth_nphotons", &truth_nphotons);
 
     outTree->Branch("truth_const_px", &truth_const_px);
@@ -512,7 +513,7 @@ int main(int argc, char** argv) {
 
                     E_tot += c.E();
                     if (EM_PIDS.count(pid)) E_em += c.E();
-                    if (pid == 22) nphotons_truth++;
+                    if (pid == 22 && pass_point_energy_cut(c.E(), kSqrtS_MainRun22_GeV)) nphotons_truth++;
                 }
                 truth_nphotons.push_back(nphotons_truth);
 

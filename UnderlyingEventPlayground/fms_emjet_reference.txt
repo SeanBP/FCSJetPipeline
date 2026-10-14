@@ -268,18 +268,21 @@ Same as FMS:
     PyTune 370, PARP(90) = 0.213, PARP(91) = 1, CTEQ6L1, MSEL 1.
 
 Different from FMS:
-  - UE subtraction: energy, not pT, from an averaged position map built with
-    the event selection in UESelection.h; FMS uses per-jet off-axis cones.
-    Jet areas are not computed.
+  - UE subtraction: energy, not pT, per jet from proxy events (other events
+    of the same run or ptHat bin and EM trigger level, with a jet of similar
+    pT near 90 deg from the cone; ../underlying_event/), at reco and truth
+    level; FMS uses off-axis cones in the same event. Jet areas are not
+    computed.
   - Jet direction: constituent directions are taken from the origin, as if
     there were no vertex information; event_vertex_z is stored but not used.
   - Truth source: GEANT tracks created within 100 um of the primary vertex
     (STAR's Pythia 6 wrapper leaves pi0/eta stable and GEANT decays them), versus PYTHIA
     status-1 photons with pi0/eta decayed in PYTHIA. Photons from long-lived
     parents (K0S, Lambda, ...) are excluded.
-  - Truth photons carry no energy cut, as in FMS, although reco points need
-    1 GeV; the calibration absorbs the difference. truth_nphotons is
-    therefore an uncut count, reco_nphotons counts points in the window.
+  - Truth jets are clustered from all photons, as in FMS, although reco points
+    need 1 GeV; the calibration absorbs the difference. The photon counts use
+    the same window at both levels: truth_nphotons counts photon constituents
+    and reco_nphotons counts points, both 1 GeV < E <= sqrt(s)/2.
   - Acceptance: reco jet axis inside the ECAL x-y fiducial rectangle with a
     20 cm buffer; truth jet axis up to R outside that region in eta-phi.
     FMS: 2.8 < eta < 3.8 on the jet axis.
@@ -287,7 +290,8 @@ Different from FMS:
     choice, arXiv:1607.03663), versus nearest within 0.2, not one-to-one.
   - Energy scale: (E, x, y) map with median numerical inversion, versus 1D
     polynomials in E and pT.
-  - Unfolding: OmniFold versus SVD.
+  - Unfolding: planned to follow FMS (SVD on the photon-multiplicity
+    response); not yet settled (../UnfoldingPlayground/).
   - ptHat: disjoint weighted bins with cross-section weights, versus one flat
     2-80 GeV range. sqrt(s) = 508.4 GeV versus 200 GeV.
   - Generator-level filter: FcsJetFilter (energy on one FCS arm above a

@@ -118,7 +118,7 @@ int main(int argc, char **argv)
             else
             {
                 const double c2 = std::cos(p.rphi) * std::cos(p.rphi);
-                const double a = A0 / p.tnph;   // injected: depends only on the particle multiplicity
+                const double a = A0 / std::max(p.tnph, 1);   // injected: depends only on the particle multiplicity (0 counts as 1)
                 det[s]->D->Fill(bd, p.w * a * c2); det[s]->S->Fill(bd, p.w * c2);
                 part[s]->D->Fill(bt, p.w * a * c2); part[s]->S->Fill(bt, p.w * c2);
                 if (k == 1) n_data++;

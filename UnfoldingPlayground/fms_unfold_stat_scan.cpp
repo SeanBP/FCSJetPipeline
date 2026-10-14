@@ -59,7 +59,7 @@ Result RunOne(const std::vector<JetPair> &pairs, int s_sel, int nsub, int j, dou
         if (h == 1) resp.Fill(bd, bt, p.w);
         else
         {
-            const double c2 = std::cos(p.rphi) * std::cos(p.rphi), a = A0 / p.tnph;
+            const double c2 = std::cos(p.rphi) * std::cos(p.rphi), a = A0 / std::max(p.tnph, 1);
             D.Fill(bd, p.w * a * c2); S.Fill(bd, p.w * c2);
             Dt.Fill(bt, p.w * a * c2); St.Fill(bt, p.w * c2);
         }
