@@ -217,7 +217,7 @@ int main(int argc, char **argv)
                         area += cells[c].area;
                 if (area < kMinArea) continue;
 
-                // Points: same selection and direction convention as ue_map.cpp
+                // Points: same selection and direction convention as the reco jets (use_points)
                 double e_sum = 0.0;
                 for (int i = 0; i < Cal_npts; i++)
                 {

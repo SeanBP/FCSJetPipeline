@@ -214,7 +214,7 @@ int main(int argc, char **argv)
                 ProxyJet jet = {reco_pt->at(j), reco_eta->at(j), reco_phi->at(j), reco_x->at(j), reco_y->at(j)};
                 ev_jets.push_back(jet);
             }
-            // Points: same selection and direction convention as ue_map.cpp
+            // Points: same selection and direction convention as the reco jets (use_points)
             std::vector<float> ev_eta, ev_phi, ev_E;
             for (int i = 0; i < Cal_npts; i++)
             {
