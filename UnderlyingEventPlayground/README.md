@@ -1,11 +1,11 @@
 # UnderlyingEventPlayground
 
-Studies behind the underlying-event (UE) subtraction. The method that came out
-of them is in `../underlying_event/` (`ProxySelection.h`, `ProxySearch.h`,
+Studies of the underlying-event (UE) subtraction implemented in
+`../underlying_event/` (`ProxySelection.h`, `ProxySearch.h`,
 `UnderlyingEvent.cpp`); nothing here is used by the pipeline. Each source has
 its build and run line at the top.
 
-## Method in use
+## Method
 
 The near off-axis proxy-event method. The UE under a jet is the mean ECal
 point energy (same point selection as the jets: ECAL, 1 GeV to sqrt(s)/2) in
@@ -27,9 +27,6 @@ energy, per jet, at both levels, before the JES calibration.
 
 - `fms_emjet_reference.txt`: the STAR FMS EM-jet analysis (BrightSTAR
   `emjet-gpc`) and how this pipeline compares.
-- `min_opposite_angle.cpp`, `max_dr_jet_placement.cpp`, `UESelection.h`,
-  `ue_map.cpp`: the earlier averaged position-map approach (UE cone opposite
-  the jet, single-jet events), superseded by the proxy-event method.
 - `truth_dphi.cpp`, `recoil_rate.cpp`: how often a second (truth) jet is
   back-to-back with the first, i.e. why the cone should avoid the recoil
   direction.
