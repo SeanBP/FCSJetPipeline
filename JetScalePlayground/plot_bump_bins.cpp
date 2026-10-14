@@ -1,16 +1,8 @@
-// Diagnostics-only, standalone plotting tool: picks a few representative
-// CalibrationMap (x,y) position bins -- high total jet statistics, and
-// where the Gaussian bump hit the OLD (production) fit bounds -- and
-// plots each bin's scale-vs-response calibration points with the
-// background-only and background+bump curves overlaid, refit under both
-// the OLD (production) bounds and the loosened diagnostics bounds. Lets
-// us see, per bin, whether loosening the bounds recovers a converged,
-// sensible bump shape that actually matches the data, or whether the data
-// just doesn't support one.
-//
-// Self-contained: duplicates the small set of CalibrationMap.cpp helpers
-// it needs (BackgroundChi2/GaussChi2/fit machinery) rather than sharing a
-// header, since this is throwaway diagnostic tooling.
+// Picks high-statistics position bins whose bump fit hit the tight
+// (ECAL+HCAL) bounds and plots their scale-vs-response points with the
+// background-only and background+bump fits under the tight and the loose
+// (EM-only) bounds, to see whether the data support a bump. Carries its own
+// copy of the CalibrationMap fit helpers.
 //
 // Usage:
 //   ./plot_bump_bins <jet_calibration_diag.root> <old_fit_diagnostics.root> \

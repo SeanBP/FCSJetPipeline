@@ -20,9 +20,9 @@
 
 // CONFIGURATION
 
+// Hardcoded default input; normally given as argv[1]
 std::string input_dir = "/star/data01/pwg/seanp/tunes/pythia8_nnpdf23lo/JetTrees/";
 std::string tree_name = "jetTree";
-// input_dir may be overridden via argv[1] in main()
 
 // reflection behavior
 bool reflect_to_positive_half = true;

@@ -18,13 +18,8 @@
 #   2. fiducial_from_corners (plain C++, no ROOT/STAR dependency) -- turns
 #      those corners into the actual fiducial rectangles, per side.
 #
-# NOTE (Aug 2026 investigation): the detector position table was found to
-# be constant across essentially all of Run 22 (checked from 2021-12-21
-# through the y2023 nominal date) -- so in practice this only needs to be
-# run once per run *period* that includes a real detector move, not per
-# run. Re-run it if you have reason to think the geometry changed (a new
-# run period, a documented detector move) and want to confirm before
-# trusting cached values.
+# The detector position is constant from 2021-12-21 through the end of
+# Run 22, so this only needs rerunning after a detector move.
 
 set -e
 

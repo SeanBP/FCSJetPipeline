@@ -1,11 +1,11 @@
 void runMudst(char* file="st_fwd_23080044_raw_1000019.MuDst.root", 
-	      int ifile=-1, Int_t nevt=10, char* outdir=".", int readMuDst=1, int debug=0){  
+	      int ifile=-1, Int_t nevt=10, char* outdir=".", int readMuDst=1, int debug=0,
+	      const char* trigFilter=""){  // trigFilter: comma-separated FCS trigger flag names; only events that fired one are written (empty = all)
     gROOT->Macro("Load.C");
     gROOT->Macro("$STAR/StRoot/StMuDSTMaker/COMMON/macros/loadSharedLibraries.C");
     gSystem->Load("StEventMaker");
     gSystem->Load("StFcsDbMaker");
     gSystem->Load("StFcsRawHitMaker");
-    //gSystem->Load("StFcsWaveformFitMaker");
     gSystem->Load("StFcsClusterMaker");
     gSystem->Load("libMinuit");
     gSystem->Load("StFcsPointMaker");
@@ -54,30 +54,29 @@ void runMudst(char* file="st_fwd_23080044_raw_1000019.MuDst.root",
     StFcsDbMaker *fcsDbMkr= new StFcsDbMaker();
     StFcsDb* fcsDb = (StFcsDb*) chain->GetDataSet("fcsDb");
 
-    // Real per-event spin config; -1 outside the spin-DB coverage window
-    // (see SpinPlayground/run_number_to_spin_coverage.sh).
+    // Per-event spin config; -1 outside the spin-DB coverage window
     StSpinDbMaker* spinDbMkr = new StSpinDbMaker();
 
     //Analysis Maker
     StSimpleReaderMaker* AnalysisCode  =  new StSimpleReaderMaker(muDstMaker) ;
     AnalysisCode -> SetSpinDb(spinDbMkr) ;
+    AnalysisCode -> SetTriggerFilter(trigFilter) ;
 
-    // Retroactive HCAL gain correction; currently a no-op placeholder
-    // (all 1.0) until real per-tower HCAL corrections are measured.
+    // HCAL gain correction; a placeholder of 1.0 until per-tower corrections exist
     AnalysisCode -> SetHcalRetroactiveGainCorr("hcal_gain_corrections") ;
 
-    // In order to speed up the analysis and eliminate IO, turn off unneeded branches
-
-    // Miscellaneous things we need before starting the chain
-    //TString Name = JobIdName ; //Name.Append(".histograms.root") ;
     TString foriternum(file);
     Ssiz_t last_ = foriternum.Last('_');
     TString filename = "SimpleTree_mudst_";
     TString iternum = foriternum(last_+1,7);
-    TString runnum = foriternum(last_-8,8);  //Since I know file name will have the form xrd_runnum_iternum.MuDst.root I can use this this hack to get the runnumber
+    // The file name ends <run>_<iternum>.MuDst.root, or, for the st_fwd
+    // stream, <run>_raw_<iternum>.MuDst.root; either way the output is named
+    // with the full 8-digit run number.
+    Ssiz_t run_end = last_;
+    if ( run_end >= 4 && foriternum(run_end-4,4) == "_raw" ) run_end -= 4;
+    TString runnum = foriternum(run_end-8,8);
     filename += runnum + "_" + iternum + ".root";
-    //std::cout << iternum.Atoi() << std::endl;
-    AnalysisCode -> SetOutputFileName(filename.Data()) ; // Name the output file for histograms
+    AnalysisCode -> SetOutputFileName(filename.Data()) ; 
     if ( nevt == 0 )  nevt = 10000000 ; 
 
     chain->Init();

@@ -93,15 +93,10 @@ star-submit "jet_scale/jet_scale_em_only_${LABEL}.xml"
 SUBMIT_DIR="${PIPELINE_ROOT}/submit"
 mkdir -p "${SUBMIT_DIR}"
 
-# sched*/.csh/.package files are read from PIPELINE_ROOT by their original
-# path at job start, not transferred by condor -- sweeping immediately races
-# job startup and kills jobs. Defer the sweep until condor_wait confirms
-# this submission's own jobs are done, in the background.
+# Jobs read the sched* files from PIPELINE_ROOT at start-up, so they are moved
+# to submit/ only after condor_wait reports the whole submission finished.
 REPORT=$(find "${PIPELINE_ROOT}" -maxdepth 1 -name 'sched*.report' -newer "${MARKER}")
 REQID=$(basename "${REPORT}" .report | sed 's/^sched//')
-# Read the real Log path from the .condor file rather than assuming
-# /tmp/$USER/... -- a wrong guess makes condor_wait fail immediately, so
-# also gate the sweep on its exit status.
 CONDORFILE=$(find "${PIPELINE_ROOT}" -maxdepth 1 -name "sched${REQID}_*.condor" -newer "${MARKER}" | head -1)
 CONDORLOG=$(grep -m1 '^Log' "${CONDORFILE}" | sed -e 's/^Log[[:space:]]*=[[:space:]]*//')
 nohup bash -c "if condor_wait '${CONDORLOG}' >/dev/null 2>&1; then find '${PIPELINE_ROOT}' -maxdepth 1 -name 'sched${REQID}*' -exec mv -t '${SUBMIT_DIR}' {} +; else echo \"condor_wait failed for ${REQID} (log='${CONDORLOG}') -- NOT sweeping, leaving sched files in place\" >> '${PIPELINE_ROOT}/submit/.sweep_failures.log'; fi" >/dev/null 2>&1 &

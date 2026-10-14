@@ -1,30 +1,9 @@
 #!/bin/bash
-# Runs the diagnostics fork of CalibrationMap's position-bin fit in
-# parallel via TRUE separate condor jobs -- N single-core jobs, each fitting
-# a disjoint shard of the ~1800 independent position bins (see
-# CalibrationMap.cpp's compute_shard), merged locally afterward. This is
-# NOT the old fork()-based in-process parallelism (CalibrationMap.cpp's
-# compute_all_regions, n_procs_hint>1) -- that path is hard-disabled and
-# stays that way; it silently corrupted results because every worker was a
-# fork() of one already-ROOT/Minuit2-initialized process (see its header
-# comment). A condor job is a genuinely separate process from a clean start,
-# so there's no shared post-init state to corrupt. Verified byte-identical
-# JSON output against the single-process path on a synthetic dataset before
-# this was written (see session notes) -- the shard/merge split changes
-# nothing about the fit itself, each position bin's fit is completely
-# independent of every other.
-#
-# Also deliberately NOT one job requesting many cores (this script's
-# previous approach, before the condor-job-per-shard rewrite): a
-# request_cpus=8 job sat idle for over an hour on this pool once, since it
-# needs one machine with 8 simultaneously-free cores on a pool dominated by
-# single-core jobs. N separate single-core jobs (like sim_to_jet's own
-# nProcesses=500 array) match what the pool actually handles well.
-#
-# Blocks until every shard job finishes (condor_wait), verifies each one
-# actually produced its shard CSV (no silent failures), then runs the merge
-# step locally (fast -- no fitting, just I/O + the existing
-# smoothing/decay/clamp/fiducial-mask/save pipeline).
+# Runs this folder's CalibrationMap position-bin fit as N single-core condor
+# jobs, each fitting a disjoint shard (--shard), waits for them, checks every
+# shard CSV exists, then merges locally (--merge: smoothing and save, no
+# fitting). Each bin's fit is independent, so the result is identical to a
+# single-process run.
 #
 # Usage:
 #   ./submit_calibration_map_diag_condor.sh -i <jet_calibration.root> -o <output.json> [-E <0|1>] [-n <n_shards>]
@@ -59,7 +38,7 @@ while getopts "i:o:E:n:h" opt; do
     E) EM_ONLY="$OPTARG" ;;
     n) NSHARDS="$OPTARG" ;;
     h|*)
-      sed -n '2,35p' "$0"
+      sed -n '2,25p' "$0"
       exit 0
       ;;
   esac
@@ -103,7 +82,7 @@ cat > "$BUILD_CSH" << EOF
 module purge
 module load root-5.34.38
 cd ${SCRIPT_DIR}
-g++ -m64 -pthread CalibrationMap.cpp -o ${BINPATH} \`root-config --cflags --libs\` -lMinuit2 -std=c++11
+g++ -m64 CalibrationMap.cpp -o ${BINPATH} \`root-config --cflags --libs\` -lMinuit2 -std=c++11
 EOF
 singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 -B /tmp /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif csh "$BUILD_CSH"
 if [ ! -x "$BINPATH" ]; then
@@ -145,9 +124,8 @@ if ! condor_wait "${LOGDIR}/shard.log"; then
     exit 1
 fi
 
-# condor_wait only confirms every job left the queue, not that each
-# succeeded -- check every shard's own exit code and output file, same
-# never-fail-silently standard as the fork-based path's shard I/O checks.
+# condor_wait only confirms the jobs left the queue: check each shard's exit
+# code and output file
 FAILED=0
 for ((i=0; i<NSHARDS; i++)); do
     EXITCODE=$(grep -a "return value" "${LOGDIR}/shard.log" | sed -n "$((i+1))p" | sed -n 's/.*return value \([0-9]*\).*/\1/p') || true

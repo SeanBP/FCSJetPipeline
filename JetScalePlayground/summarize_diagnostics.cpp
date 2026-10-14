@@ -1,8 +1,5 @@
-// Prints a side-by-side comparison of the diagnostics captured by this
-// folder's JetEnergyScaleFineGrid/CalibrationMap forks, for two samples
-// (e.g. EM-only production vs. the ECAL+HCAL reference). No plotting --
-// console summary only, matching this pipeline's other temporary
-// diagnostic tools.
+// Prints a side-by-side console comparison of the grid and fit diagnostics
+// of two samples (e.g. EM-only vs ECAL+HCAL).
 //
 // Usage: ./summarize_diagnostics <label_a> <bins_a.root> <fitdiag_a.root> \
 //                                 <label_b> <bins_b.root> <fitdiag_b.root>

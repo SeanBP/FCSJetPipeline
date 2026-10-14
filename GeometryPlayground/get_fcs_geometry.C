@@ -29,20 +29,10 @@ int RunNumberToDateArithmetic(int runNumber){
     return year*10000 + month*100 + day;
 }
 
-// Looks up a run's real start time from the authoritative RunLog.runDescriptor
-// DB (same mechanism StFcsDbMaker/macro/fcsTimedepGainCorr_db.C uses),
-// rather than inferring it from the run number's day-of-year encoding.
-// Falls back to RunNumberToDateArithmetic() (with itim=0) if the DB is
-// unreachable -- e.g. a SUMS batch worker node with more restricted
-// outbound network access than this interactive session; verified
-// empirically (Aug 2026) working here, but batch-node behavior is untested.
-//
-// Port selection: the formula in fcsTimedepGainCorr_db.C (3400+year-1,
-// year=runNumber/1000000-1) undershoots by 1 at the earliest Run 22 runs
-// (gives 3420 for run 22359013, which returns nothing; 3421 is the port
-// that actually has that run's data, and 3421 also serves every later
-// run tested). So port 3421 is tried first as the most likely hit, then
-// the formula's port, then a couple of neighbors, before giving up.
+// A run's start time from RunLog.runDescriptor (as
+// StFcsDbMaker/macro/fcsTimedepGainCorr_db.C), falling back to
+// RunNumberToDateArithmetic() if the DB is unreachable. Port 3421 is tried
+// first: the macro's formula port (3400+year-1) misses the earliest Run 22 runs.
 void RunNumberToDateTime(int runNumber, int &idat, int &itim){
     int yearCode = runNumber/1000000;
     int formulaPort = 3400 + (yearCode-1) - 1;
@@ -80,19 +70,9 @@ void RunNumberToDateTime(int runNumber, int &idat, int &itim){
          << " cross-checked against the DB just now) ***" << endl;
 }
 
-// Geometry/fcs/fcsDetectorPosition's real, final survey-based position
-// only took effect starting this date. Empirically bisected (Aug 2026,
-// GeometryPlayground): xoff was a placeholder value (round numbers,
-// -67.399/67.399 for ECAL) through 2021-12-20, then jumped to the final
-// calibrated value (-17.399/17.399) and stayed fixed there for the rest
-// of Run 22 (checked through the y2023 nominal date). Confirmed directly
-// against the raw DB table: the real transition is precise to the
-// minute, 2021-12-20 16:30:00 (dataID 17/22 in Geometry_fcs.
-// fcsDetectorPosition); this constant rounds that up to the next whole
-// day, so it flags a few conservative extra hours on the 20th itself.
-// (yoff/y-center settles even earlier, by 2021-12-02, so xoff is the
-// binding constraint.) Requesting a run/date before this returns
-// geometry that was never the real, final detector position.
+// First date with the surveyed detector position: before 2021-12-20 16:30
+// the DB holds placeholder xoff values (-67.399/67.399 for ECAL instead of
+// -17.399/17.399).
 const int kFcsSurveyValidFromDate = 20211221;
 
 void get_fcs_geometry(Int_t calibRun=0){

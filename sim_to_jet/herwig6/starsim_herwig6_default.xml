@@ -36,6 +36,7 @@
         echo "ptHatMin    = ${ptcut} GeV"
         echo "========================================"
 
+        # Hardcoded output folder
         mkdir -p /star/data01/pwg/seanp/tunes/herwig6_default
 
         echo "Starting detector simulation..."

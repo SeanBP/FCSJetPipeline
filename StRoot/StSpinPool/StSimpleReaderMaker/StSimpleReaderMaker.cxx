@@ -26,6 +26,7 @@
 #include "TObjArray.h"
 #include "TClonesArray.h"
 #include "TString.h"
+#include "TObjString.h"
 
 #include "FcsTriggerDefs.h"
 
@@ -41,11 +42,9 @@
 
 ClassImp(StSimpleReaderMaker)                   // Macro for CINT compatibility
 
-// Same 21-name/bit table StFcsTriggerSimMaker::Make() decodes from
-// dsm_out (copied here, not modifying the official maker, since we
-// bypass its Make() -- see SetTriggerSim() in the header for why).
-// Names match "fcs"+ctrg[i] in FcsTriggerDefs.h's 64-flag set for the
-// ~20 that have one; DYNoEpd has no counterpart there and is skipped.
+// The 21-name bit table StFcsTriggerSimMaker::Make() decodes from dsm_out
+// (its Make() is bypassed). Names match "fcs"+ctrg[i] in FcsTriggerDefs.h;
+// DYNoEpd has no counterpart and is skipped.
 static const int kNSimTrgLocal = 21;
 static const char* kSimTrgName[kNSimTrgLocal] = {
     "fcsJP2","fcsJPA1","fcsJPA0","fcsJPBC1","fcsJPBC0","fcsJPDE1","fcsJPDE0",
@@ -53,18 +52,8 @@ static const char* kSimTrgName[kNSimTrgLocal] = {
     "fcsHad2","fcsHad1","fcsHad0","fcsEM2","fcsEM1","fcsEM0","fcsELE2","fcsEM3"
 };
 
-// Per-run beam energy -> sqrt(s), GeV. Mirrors shared/JetParameters.h's
-// computeSqrtSForRun() -- StRoot/ is compiled standalone via cons/stardev
-// and can't reach outside its own tree at build time, so this small
-// lookup is duplicated here by hand rather than included, same
-// three-copy convention already used for FcsTriggerDefs.h (see
-// FCSJetPipeline/README.md). Source: RunLog.beamInfo, investigated
-// 2026-10 -- blueEnergy=yellowEnergy=254.867 GeV (sqrt(s)=509.734) for
-// runs <=23002045 (~2021-12-15 to 2022-01-02, 321/3368 Run 22 forward
-// runs), =254.213 GeV (sqrt(s)=508.426) for runs >=23002052 (2022-01-02
-// onward, 3047/3368 runs, matches sim_to_jet's generator-level
-// SetFrame("CMS",508.4)) -- no production runs fall between those two
-// numbers, so there's no real ambiguity right at the boundary.
+// Per-run sqrt(s), GeV: a copy of shared/JetParameters.h's
+// computeSqrtSForRun() (StRoot builds standalone)
 static double SqrtSForRun(int runNumber) {
     return (runNumber <= 23002045) ? 509.734 : 508.426;
 }
@@ -115,7 +104,6 @@ Int_t StSimpleReaderMaker::Init( )
 
   // FCS DB
   mFcsDb = static_cast<StFcsDb*>(GetDataSet("fcsDb"));
-  // mFcsDb->setDbAccess(0);
   if (!mFcsDb) {
   	LOG_ERROR << "StSimpleReaderMaker::InitRun Failed to get StFcsDb" << endm;
         return kStFatal;
@@ -226,6 +214,33 @@ Int_t StSimpleReaderMaker::Init( )
     }
   }
 
+  // Resolve SetTriggerFilter()'s names to Trig_flag[] indices
+  mTrigFilterIndex.clear();
+  {
+    TObjArray* names = mTrigFilterNames.Tokenize(",");
+    for (int n = 0; n < names->GetEntries(); n++){
+      TString name = ((TObjString*)names->At(n))->GetString();
+      name = name.Strip(TString::kBoth);
+      if ( name.IsNull() ) continue;
+      int found = -1;
+      for (int j = 0; j < kNTrigFlags; j++){
+        if ( name == kTrigFlagName[j] ){ found = j; break; }
+      }
+      if ( found < 0 ){
+        LOG_ERROR << "StSimpleReaderMaker::Init trigger filter name '" << name.Data()
+                  << "' not found in FcsTriggerDefs.h" << endm;
+        delete names;
+        return kStFatal;
+      }
+      mTrigFilterIndex.push_back(found);
+    }
+    delete names;
+  }
+  if ( !mTrigFilterIndex.empty() ){
+    LOG_INFO << "StSimpleReaderMaker::Init writing only events that fired one of: "
+             << mTrigFilterNames.Data() << endm;
+  }
+
   return kStOK ;
 
 }
@@ -246,13 +261,8 @@ Int_t StSimpleReaderMaker::Make( )
   StMuEvent* muEvent = mMuDstMaker->muDst()->event() ;
 
   // -----------
-  // Resolve fired trigger(s) to named FCS trigger flags: either the real
-  // fired trigger id(s) (real data -- the same numeric id gets
-  // reassigned to a different named trigger across the run period, so
-  // matching needs (id, run number) together, see FcsTriggerDefs.h /
-  // TriggerIDs.txt), or, if SetTriggerSim() was called, the simulated
-  // physics-condition decision from fcs_trg_base run on this event's FCS
-  // hits (simulated events have no real fired trigger id to look up).
+  // Fired triggers to named flags: from (trigger id, run number) in data, or
+  // from fcs_trg_base on this event's hits if SetTriggerSim() was called
   if ( mTrgSim ){
 
     int runNumber = muEvent ? muEvent->runNumber() : 0;
@@ -278,9 +288,8 @@ Int_t StSimpleReaderMaker::Make( )
           unsigned short ch = hit->channel();
           if ( ehp < 0 || ch >= 32 ) continue;
 
-          // Simulated-event ADC packing (StFcsTriggerSimMaker::feedADC's
-          // mSimMode==1 branch): fast-sim hits don't carry a real
-          // per-timebin waveform, just a single energy-equivalent ADC.
+          // Simulated hits carry one energy-equivalent ADC, packed as in
+          // StFcsTriggerSimMaker::feedADC (mSimMode == 1)
           uint16_t data[8];
           memset(data, 0, sizeof(data));
           data[1] = hit->adc(0) - 1;
@@ -313,15 +322,19 @@ Int_t StSimpleReaderMaker::Make( )
     }
   }
 
+  // Trigger filter (SetTriggerFilter()): an event that fired none of the
+  // requested triggers is not written at all.
+  if ( !mTrigFilterIndex.empty() ){
+    bool passed = false;
+    for (size_t k = 0; k < mTrigFilterIndex.size(); k++){
+      if ( Trig_flag[mTrigFilterIndex[k]] ){ passed = true; break; }
+    }
+    if ( !passed ) return kStOK ;
+  }
+
   // -----------
-  // Resolve this event's real spin configuration (real data only --
-  // Spin_config stays -1, set above, if SetSpinDb() was never called).
-  // See SpinPlayground/run_number_to_spin_coverage.sh for how narrow the
-  // real DB coverage window is (2021-12-14 through 2022-04-18 only, as of
-  // this investigation) -- most events outside that window will
-  // legitimately end up with Spin_config=-1 even with a valid muEvent and
-  // a correctly-attached mSpinDb, because isValid() will be false or the
-  // specific bunch crossing won't resolve.
+  // Spin configuration (data only; stays -1 without SetSpinDb(), outside
+  // the spin DB coverage, or for an unresolved bunch crossing)
   if ( mSpinDb && muEvent ){
     int runNumber = muEvent->runNumber();
     if ( runNumber != mSpinLastRunNumber ){
@@ -333,21 +346,9 @@ Int_t StSimpleReaderMaker::Make( )
       Spin_config = mSpinDb->spin4usingBX7((int)bx7); // itself -1 if this bx wasn't resolved
     }
 
-    // Event-level vertex and per-run sqrt(s), real data only -- gated on
-    // mSpinDb the same way Spin_config itself is (only data_to_jet
-    // attaches it), since both need a real muEvent with a real Run 22
-    // run number. sim_to_jet leaves both at their -1/-9999 "not set"
-    // sentinels and uses a fixed sqrt(s) directly at the point of use
-    // (JetMatcher.cpp) instead, matching its generator-level assumption.
-    //
-    // Vertex priority: TPC primary vertex (ranking()>0) first, then VPD,
-    // then BBC -- first one found with |z|<80cm wins. See
-    // event_vertex_z's header comment for why TPC/VPD are expected to be
-    // empty in P24ia specifically (tracking off, ZDC-only and known bad
-    // before run 23050001) -- the cascade is still checked in this order
-    // regardless, so it does the right thing automatically on any input
-    // where TPC/VPD genuinely are populated (e.g. P25ib, still being
-    // evaluated) without needing a separate code path.
+    // Event vertex and sqrt(s), data only (gated on mSpinDb like
+    // Spin_config). Vertex: TPC primary (ranking > 0), then VPD, then BBC,
+    // the first with |z| < 80 cm.
     const double kVertexZMax = 80.0;
     event_vertex_z = -9999; event_vertex_source = 0;
     StMuDst* muDst = mMuDstMaker->muDst();
@@ -366,9 +367,7 @@ Int_t StSimpleReaderMaker::Make( )
     }
     if ( event_vertex_source == 0 ){
       double bbcVz = muEvent->bbcTriggerDetector().zVertex();
-      // bbcVz's own "not resolved" sentinel is -9999 -- excluded by the
-      // |z|<80 cut below same as any other out-of-range value, no
-      // separate check needed.
+      // bbcVz's -9999 sentinel fails the |z| cut
       if ( std::fabs(bbcVz) < kVertexZMax ){
         event_vertex_z = bbcVz;
         event_vertex_source = 3; // BBC
@@ -378,11 +377,8 @@ Int_t StSimpleReaderMaker::Make( )
     event_sqrt_s_gev = SqrtSForRun(runNumber);
   }
 
-  // Resolved once per event (not per hit) for the retroactive HCAL
-  // correction lookup below -- real event time straight from the muDst,
-  // no DB query needed (unlike Spin_config's run-level DB resolution).
-  // StEventInfo::time() returns a raw Unix-epoch int, not a TDatime --
-  // TDatime's epoch constructor does the conversion explicitly here.
+  // Event time for the HCAL gain-correction lookup (StEventInfo::time() is
+  // a Unix time)
   if ( mUseHcalRetroCorr ){
     mHcalCorrCurrentDate = muEvent ? TDatime(muEvent->eventInfo().time()).GetDate() : -1;
   }
@@ -405,10 +401,7 @@ Int_t StSimpleReaderMaker::Make( )
     		Cal_adcsum[Cal_nhits] = hit->adcSum();
     		Cal_hit_energy[Cal_nhits] = hit->energy();
 
-    		// Retroactive HCAL gain correction -- no-op (factor 1.0) unless
-    		// SetHcalRetroactiveGainCorr() was called and a manifest period
-    		// covers this event's date. See mUseHcalRetroCorr's comment in
-    		// StSimpleReaderMaker.h.
+    		// HCAL gain correction; 1.0 unless enabled and covered
     		if ( mUseHcalRetroCorr && (det == kFcsHcalNorthDetId || det == kFcsHcalSouthDetId) ){
     			Cal_hit_energy[Cal_nhits] *= getHcalRetroCorr(det, hit->id());
     		}
@@ -474,12 +467,7 @@ Int_t StSimpleReaderMaker::Make( )
 	}
   } // Loop over FCS clusters
 
-  // Loop over FCS points (StMuFcsPoint -- the single-photon-candidate
-  // level; one or more points make up a cluster, see StMuFcsPoint.h).
-  // Unlike clusters, a point's xyz() is already in global STAR
-  // coordinates (set by the official StFcsPointMaker reconstruction),
-  // so no mFcsDb projection is needed here the way clusters need
-  // getStarXYZfromColumnRow().
+  // Loop over FCS points; xyz() is already in global STAR coordinates
   for(UInt_t ipt = 0 ; ipt < fcs_coll->numberOfPoints() && Cal_npts < 200 ; ipt++){
 
         StMuFcsPoint* pt = fcs_coll->getPoint(ipt); // Pointer to a point
@@ -563,7 +551,6 @@ Int_t StSimpleReaderMaker::Make( )
   	StMuMcTrack *mcTrack = (StMuMcTrack*)mcTracks->UncheckedAt(iTrk);
 	if ( !mcTrack ) continue;
 
-	//mcpart_index[mcpart_num] = mcTrack->Id();       // Counts particles sequentially
 	mcpart_geid[mcpart_num] = mcTrack->GePid();
   	mcpart_idVtx[mcpart_num] = mcTrack->IdVx();       // ID of creation vertex
         mcpart_idVtxEnd[mcpart_num] = mcTrack->IdVxEnd(); // ID of stop (end) vertex
@@ -629,9 +616,8 @@ Int_t StSimpleReaderMaker::Finish( )
 
 }
 
-// Reads manifest.txt (startDate endDate filename, one line per period,
-// '#' comments/blank lines skipped) from mHcalCorrDir. See
-// data_to_jet/hcal_gain_corrections/README.md for the format.
+// Reads manifest.txt (startDate endDate filename per line, '#' comments)
+// from mHcalCorrDir
 void StSimpleReaderMaker::loadHcalCorrManifest(){
   TString path = mHcalCorrDir + "/manifest.txt";
   std::ifstream fin(path.Data());
@@ -653,10 +639,8 @@ void StSimpleReaderMaker::loadHcalCorrManifest(){
            << " period(s) from " << path << endm;
 }
 
-// Reads one correction-factor file (ehp ns dep ch factor per line, same
-// format StFcsDb::readGainCorrFromText() uses) into mHcalCorrFactor.
-// Rows with ehp!=1 (not HCAL) are skipped -- this machinery is HCAL-only,
-// see mUseHcalRetroCorr's comment in the header.
+// Reads one correction file (ehp ns dep ch factor, as
+// StFcsDb::readGainCorrFromText()); non-HCAL rows (ehp != 1) are skipped
 void StSimpleReaderMaker::loadHcalCorrFile(const TString& filename){
   for (int ns = 0; ns < 2; ns++)
     for (int dep = 0; dep < 24; dep++)
@@ -684,11 +668,8 @@ void StSimpleReaderMaker::loadHcalCorrFile(const TString& filename){
   LOG_INFO << "StSimpleReaderMaker::loadHcalCorrFile: loaded " << path << endm;
 }
 
-// Retroactive HCAL correction factor for one hit, resolved from
-// mHcalCorrCurrentDate (set once per event in Make()). Returns 1.0
-// (no-op) if no manifest period covers this event's date -- not an
-// error, matches the "no data -> no-op / sentinel" convention used
-// elsewhere in this project (e.g. Spin_config's -1).
+// HCAL correction factor for one hit at mHcalCorrCurrentDate; 1.0 if no
+// manifest period covers it
 float StSimpleReaderMaker::getHcalRetroCorr(int det, int id){
   TString file;
   for (size_t i = 0; i < mHcalCorrPeriods.size(); i++){

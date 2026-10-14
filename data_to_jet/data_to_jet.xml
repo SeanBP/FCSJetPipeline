@@ -1,37 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <!--
-    Data-to-jet pipeline: MuDst -> SimpleTree (runMudst.C, reco-only,
-    reads already-officially-produced MuDst) -> jet finding, for real
-    STAR MuDst files. Every line of the file list from MakeRunList.pl is
-    split evenly across {{NPROCESSES}} jobs; each job runs RecoJets once
-    per SimpleTree file (not combined), so every jet_output file keeps a
-    matching SimpleTree_mudst filename suffix for later linking.
-
-    Companion to ../sim_to_jet/sim_to_jet.xml, sharing ../shared/JetParameters.h.
+    Data-to-jet pipeline: MuDst -> SimpleTree (runMudst.C) -> jet finding
+    (RecoJets, once per SimpleTree file, so each jet_output file shares its
+    SimpleTree's name suffix) -> in-job underlying event.
 
     Configurable per submission (filled in by submit_data_to_jet.sh, see its -h):
       {{LISTFILE}}        absolute path to a MakeRunList.pl-format catalog list
       {{NPROCESSES}}      number of parallel jobs to split the list across
+      {{RANGEFILE}}       optional: one "first-line number-of-lines" row per
+                          job, replacing the even split (consecutive files
+                          of one run per job, for the underlying-event step)
       {{SAVE_SIMPLETREE}} 1 = keep intermediate SimpleTree_mudst_*.root, 0 = discard
       {{TRIGGER_FILTER}}  comma-separated FCS trigger names (FcsTriggerDefs.h);
-                          jetTree entry only if one fired, empty = keep all
-      {{EM_ONLY}}         1 = build reco jets from ECAL hits only (no HCAL),
-                          using the ECAL-only fiducial boundary (-E flag).
-                          0 (default) = previous ECAL+HCAL behavior. See
-                          ../shared/JetParameters.h's
-                          kFiducialRectEcal/reco_fiducial_buffer_ecal.
-      {{USE_POINTS}}      1 = build reco jets from FCS points (StMuFcsPoint)
-                          instead of tower hits (-F flag). 0 (default) =
-                          hits, the previous behavior. HCAL currently
-                          produces no points at all, so this is ECAL-only
-                          input regardless of EM_ONLY when enabled.
+                          an event is written (SimpleTree and jetTree) only
+                          if one fired, empty = keep all
+      {{EM_ONLY}}         1 = ECAL-only reco jets and fiducial boundary (-E)
+      {{USE_POINTS}}      1 = reco jets from FCS points instead of tower
+                          hits (-F)
       {{OUTDIR}}          absolute output directory
       {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
 
     star-submit must run from the pipeline root, since the SandBox <File>
-    paths below are relative to it. Runs inside the same singularity
-    container as sim_to_jet.xml.
+    paths below are relative to it.
 -->
 
 <job nProcesses="{{NPROCESSES}}">
@@ -45,8 +36,8 @@
         # Flatten data_to_jet/ into the job's working dir.
         cp data_to_jet/* .
         cp shared/* .
-        # cp (not -r) skips subdirs -- hcal_gain_corrections/ needs its own
-        # recursive copy to land flat where SetHcalRetroactiveGainCorr() expects it.
+        cp underlying_event/* .
+        # hcal_gain_corrections/ is copied separately (cp skips folders)
         cp -r data_to_jet/hcal_gain_corrections .
 
         # Evenly split {{LISTFILE}} across NPROCESSES jobs (contiguous ranges,
@@ -67,6 +58,17 @@
 
         @ line_start = ${mystart} + 1
         @ line_end = ${mystart} + ${mycount}
+
+        # A ranges file (submit_data_to_jet.sh -n) replaces the even split:
+        # line JOBINDEX+1 is "first-line number-of-lines" of {{LISTFILE}}
+        set RANGEFILE = "{{RANGEFILE}}"
+        if ( "${RANGEFILE}" != "" ) then
+            @ rline = ${JOBINDEX} + 1
+            set RANGE = `sed -n "${rline}p" ${RANGEFILE}`
+            @ line_start = $RANGE[1]
+            @ mycount = $RANGE[2]
+            @ line_end = ${line_start} + ${mycount} - 1
+        endif
 
         echo "========================================"
         echo "JOBINDEX = ${JOBINDEX}"
@@ -91,8 +93,7 @@
         rm -f simpletree_files.list
         touch simpletree_files.list
 
-        # Needed so the NBEFORE/NAFTER glob below (0 matches on the first
-        # iteration) expands to nothing instead of aborting with "No match."
+        # Let the NBEFORE/NAFTER glob below match nothing
         set nonomatch
 
         set i = 1
@@ -128,13 +129,12 @@
             set NBEFORE = `ls SimpleTree_mudst_*.root | grep -c '\.root$'`
 
             echo "Running runMudst.C..."
-            root4star -b -q runMudst.C\(\"${LOCALFILE}\",-1,-2,\".\",1,0\)
+            root4star -b -q runMudst.C\(\"${LOCALFILE}\",-1,-2,\".\",1,0,\"{{TRIGGER_FILTER}}\"\)
 
             rm -f ${LOCALFILE}
 
-            # Require a NEW file, not just "ls -t | head -1" finding one --
-            # that silently re-picks up a stale prior-iteration file when
-            # runMudst.C fails without crashing, causing a phantom duplicate.
+            # Require a new file, so a silent runMudst.C failure does not
+            # reuse the previous iteration's output
             set NAFTER = `ls SimpleTree_mudst_*.root | grep -c '\.root$'`
             if ( ${NAFTER} &lt;= ${NBEFORE} ) then
                 echo "ERROR: runMudst.C produced no NEW output for ${FILEURL} (SimpleTree count stayed at ${NBEFORE}), skipping"
@@ -169,6 +169,9 @@
 
         set TRIGGER_FILTER = "{{TRIGGER_FILTER}}"
 
+        rm -f ue_pairs.list
+        touch ue_pairs.list
+
         set j = 1
         while ( ${j} &lt;= ${NPRODUCED} )
             set STFILE = `sed -n "${j}p" simpletree_files.list`
@@ -181,9 +184,17 @@
             echo "${STFILE}" >! single_file.list
             ./RecoJets single_file.list "${TRIGGER_FILTER}" {{EM_ONLY}} {{USE_POINTS}}
             mv jet_output.root jet_output_${SUFFIX}.root
+            echo "jet_output_${SUFFIX}.root ${STFILE}" >> ue_pairs.list
 
             @ j++
         end
+
+        # In-job underlying event (reco_ue_* branches), with this job's
+        # SimpleTrees as proxies; must run before they are discarded
+        echo "Compiling UnderlyingEvent..."
+        g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent \
+            `root-config --cflags --libs` -std=c++11
+        ./UnderlyingEvent ue_pairs.list
 
         if ( {{SAVE_SIMPLETREE}} == 0 ) then
             foreach f ( `cat simpletree_files.list` )
@@ -191,8 +202,7 @@
             end
         endif
 
-        # Temporary, job-local only; never meant to leave scratch.
-        rm -f my_lines.list simpletree_files.list single_file.list
+        rm -f my_lines.list simpletree_files.list single_file.list ue_pairs.list
 
         echo "Files in scratch:"
         ls -l
@@ -212,6 +222,7 @@
             <File>file:./.sl73_x8664_gcc485</File>
             <File>file:./StRoot</File>
             <File>file:./shared/JetParameters.h</File>
+            <File>file:./underlying_event</File>
         </Package>
     </SandBox>
 

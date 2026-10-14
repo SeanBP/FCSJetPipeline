@@ -1,15 +1,5 @@
-// macro to instantiate the Geant3 from within
-// STAR  C++  framework and get the starsim prompt
-// To use it do
-//  root4star starsim.C
-//
-// Herwig6 + FCS generator-level flux filter. Based on runHerwig6.C, with
-// the pieces that macro was missing added: declared herwig6 (was an
-// undeclared bare global there), the SetPtRange/SetEtaRange/SetPhiRange/
-// SetVertex/SetSigma acceptance cuts every other generator macro here has,
-// pT-hat threading via HWHARD's PTMIN, and the FCS filter. Herwig6 has no
-// Pythia-style numbered tune -- this uses unmodified Herwig 6 defaults,
-// only PTMIN is set.
+// starsim with Herwig6 (default settings, ptHat minimum via HWHARD PTMIN)
+// and the FCS generator-level flux filter. Run as root4star starsim.C(...)
 
 class St_geant_Maker;
 St_geant_Maker *geant_maker = 0;

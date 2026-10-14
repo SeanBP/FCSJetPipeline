@@ -1,14 +1,6 @@
-// Reads back the StarGenStats object StarPrimaryMaker::Finish() writes at
-// the end of the starsim stage (pythia8.genstats.root / pythia6.genstats.root
-// -- sim_to_jet.xml renames it there right after the starsim.C step, since
-// runSimBfc.C's own output file would otherwise silently overwrite the
-// original pythia8.starsim.root/pythia6.starsim.root name and destroy it
-// before this macro ever runs). Scans by class rather than by hardcoded key
-// name (StarPythia8's object is named "Pythia8", StarPythia6's is
-// "Pythia6Stats") so this doesn't break if that naming ever changes.
-// Returns false (leaves sigmaGen/nTried untouched) if no genstats file is
-// found -- e.g. a non-sim_to_jet caller, or an older job predating this
-// bookkeeping.
+// Reads the StarGenStats object written by the starsim stage
+// (pythia8.genstats.root or pythia6.genstats.root, renamed by sim_to_jet.xml).
+// Returns false, leaving the arguments untouched, if none is found.
 Bool_t ReadMCJobStats(Double_t &sigmaGen, Int_t &nTried){
   TString candidates[2] = {"pythia8.genstats.root", "pythia6.genstats.root"};
   for (int i = 0; i < 2; i++){
@@ -21,19 +13,14 @@ Bool_t ReadMCJobStats(Double_t &sigmaGen, Int_t &nTried){
       if ( TString(key->GetClassName()) != "StarGenStats" ) continue;
       StarGenStats* stats = (StarGenStats*)key->ReadObj();
       if ( !stats ) continue;
-      // Raw, as PYTHIA reports it -- no unit conversion (sigmaGen is in mb).
+      // mb, as PYTHIA reports it
       sigmaGen = stats->sigmaGen;
       nTried = stats->nTried;
 
-      // Pythia 6 only: STAR's StarPythia6::Stats() reads PYTHIA's cross
-      // section through a PyInt5_t struct that omits the common block's
-      // leading NGENPD integer, so the value arrives 4 bytes off -- a
-      // denormal (~5e-315) whose low 32 bits are the high 32 bits of the
-      // real cross section. Move them back into place, which gives the
-      // real value to ~1e-6 relative (it agrees with PYSTAT's printed
-      // cross section). A normal value, as Pythia 8 reports, is left
-      // alone. jet_scale/JetXSecWeights.h's DecodePythia6Sigma() is the
-      // same decoding on the reading side.
+      // Pythia 6: StarPythia6::Stats() reads the cross section 4 bytes off
+      // (its PyInt5_t struct omits NGENPD), giving a denormal whose low word
+      // is the true value's high word. Shift it back. Same decoding as
+      // jet_scale/JetXSecWeights.h's DecodePythia6Sigma().
       if ( sigmaGen > 0.0 && sigmaGen < 1e-300 ) {
         Double_t raw = sigmaGen;
         Double_t decoded = 0.0;
@@ -55,7 +42,7 @@ Bool_t ReadMCJobStats(Double_t &sigmaGen, Int_t &nTried){
   return kFALSE;
 }
 
-void readMudst(Int_t nEvents, Int_t nFiles, TString InputFileList, TString OutputDir =".", TString JobIdName = "", Int_t trgSelect = 202209, Double_t ptHatMin = -1, Double_t ptHatMax = -1 )
+void readMudst(Int_t nEvents, Int_t nFiles, TString InputFileList, TString OutputDir =".", TString JobIdName = "", Int_t trgSelect = 202209, Double_t ptHatMin = -1, Double_t ptHatMax = -1, TString trigFilter = "" )
 {
 
   // Load libraries
@@ -105,6 +92,8 @@ void readMudst(Int_t nEvents, Int_t nFiles, TString InputFileList, TString Outpu
   // Analysis Maker
   StSimpleReaderMaker* AnalysisCode  =  new StSimpleReaderMaker(muDstMaker) ;
   AnalysisCode -> SetTriggerSim(trgSim) ;
+  // Comma-separated FCS trigger flag names: only events that fired one are written (empty = all)
+  AnalysisCode -> SetTriggerFilter(trigFilter.Data()) ;
 
   Double_t sigmaGen; Int_t nTried;
   if ( ReadMCJobStats(sigmaGen, nTried) )
@@ -113,16 +102,6 @@ void readMudst(Int_t nEvents, Int_t nFiles, TString InputFileList, TString Outpu
   AnalysisCode -> SetMCPtHatMin(ptHatMin) ;
   AnalysisCode -> SetMCPtHatMax(ptHatMax) ;
 
-  // In order to speed up the analysis and eliminate IO, turn off unneeded branches
-  //FIX ME: StMuMCTrack won't set status to 1 after being turned off
-  //muDstMaker -> SetStatus("*",0) ;                // Turn off all branches
-  //muDstMaker -> SetStatus("MuEvent",1) ;          // Turn on the Event data (esp. Event number)
-  //muDstMaker -> SetStatus("StMuMcTrack",1) ;      // Turn on the MC Track data
-  //muDstMaker -> SetStatus("FcsHit",1) ;           // Turn on the FCS Hit data
-
-  // Miscellaneous things we need before starting the chain
-  //TString Name = JobIdName ; 
-  //Name.Append(".histograms.root") ;
   AnalysisCode -> SetOutputFileName("SimpleTree_mudst.root") ; // Name the output file
   if ( nEvents == 0 )  nEvents = 10000000 ;       // Take all events in nFiles if nEvents = 0
 

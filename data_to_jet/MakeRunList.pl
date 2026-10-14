@@ -3,12 +3,12 @@
 use strict;
 use warnings;
 
+# StarFileList.pm lives in another user's area; update if it moves
 use lib '/star/u/dkap7827/Tools2/Tools/PerlScripts';
 use StarFileList;
 use Cwd qw(abs_path);
 use Getopt::Long qw(GetOptions);
 use Getopt::Long qw(HelpMessage);
-#use Getopt::Long qw(VesrionMessage);
 use Pod::Usage;
 
 =pod
@@ -52,7 +52,6 @@ This program will generate a run list of MuDst files to use for Run 22 analysis.
 
 
 my $KEYS = "path,filename,events";
-#my $CONDITIONS = "";
 my $FILE = "test.list";
 my $LIMIT = 10;
 my $PRINTLEVEL = 0;
@@ -70,15 +69,12 @@ GetOptions(
     ) or HelpMessage(1);
 
 
-# Runs excluded from the wave-1 window below for known data-quality
-# reasons (per the 2026-10 investigation writeup):
-#   23003063-23004033: FEE low-voltage problem (below the wave-1 start,
-#                       kept here only so this list stays correct if the
-#                       start is ever widened back below 23005044)
+# Runs excluded for data quality:
+#   23003063-23004033: FEE low-voltage problem (below the wave-1 start)
 #   23007067-23007076: beam and luminosity tests
 #   23027046-23027048: 56-bunch and calibration runs
-# ECAL is only calibrated from run 23005043 (the LED reference run)
-# onward, hence the wave-1 start at 23005044.
+# ECAL is calibrated from run 23005043 (LED reference) onward, hence the
+# wave-1 start at 23005044.
 my @EXCLUDED_RANGES = (
     [23003063, 23004033],
     [23007067, 23007076],
@@ -94,24 +90,10 @@ sub IsExcludedRun
     return 0;
 }
 
-# RunLog.runStatus's shift-crew assessment, queried live so this covers
-# whatever run range is actually requested (not just wave 1) without
-# needing a hardcoded list maintained by hand. Good-run rule matches
-# STAR's own production tooling (packages/scripts/RunDAQ.pm):
-# rtsStatus=0 AND shiftLeaderStatus<=1. Checked directly against wave 1
-# (23005044-23027047): 517/519 runs pass, only 23023038/23023039 fail
-# (both already low-file-count/incomplete runs, not otherwise flagged) --
-# this is a genuinely separate signal from the EXCLUDED_RANGES above, not
-# a duplicate of it.
-#
-# Unlike RunNumberToDateTime() elsewhere in this project (which falls
-# back silently to day-of-year arithmetic), an unreachable DB here is
-# fatal by default: this filter is a correctness gate (dropping runs the
-# shift crew marked bad), not a best-effort date lookup, so silently
-# proceeding without it would risk quietly shipping a run list that
-# includes known-bad runs. Pass --skip-status-check to proceed anyway
-# (e.g. from a worker node with no DB access) -- the run list will then
-# NOT have this filter applied, which is loudly reported either way.
+# Shift-crew good-run flag from RunLog.runStatus, queried live, with STAR
+# production's rule (RunDAQ.pm): rtsStatus = 0 and shiftLeaderStatus <= 1.
+# An unreachable DB is fatal unless --skip-status-check is given, in which
+# case the list is made without this filter (and says so).
 sub GetBadRunsFromRunLog
 {
     my ($runMin, $runMax, $skipCheck) = @_;
@@ -149,17 +131,11 @@ $FileList->Production("=P24ia");
 $FileList->Trgsetupname("=production_pp500_2022");
 $FileList->Filetype("=daq_reco_mudst");
 $FileList->Sname2("=st_fwd");
-#$FileList->Runnumber(">23005043");
-#$FileList->Runnumber("=23007011");
 $FileList->AddExtraOpts("-limit $LIMIT");
 
-# Wave 1 only (23005044-23027047); wave 2 (23027048-23048036) needs its
-# own deliberate change here once that production is actually run.
+# Wave 1 only (23005044-23027047); wave 2 is 23027048-23048036
 $FileList->Runnumber("[]23005044-23027047");
 
-#Get Time
-#my $epochtime = time();            #UNIX time (seconds from Jan 1, 1970)
-#my $localtime = localtime();       #Human readaable time
 if( $PRINTLEVEL>2 ){ die "ERROR:Invalid print level:'$PRINTLEVEL'\n"; }
 if($PRINTLEVEL==1 ){  $FileList->Command(1); exit; }
 

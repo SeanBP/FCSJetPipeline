@@ -1,23 +1,7 @@
 #!/bin/bash
-# Compiles and runs the diagnostics fork of CalibrationMap (this folder's
-# copy) against a jet_calibration.root "bins" tree (from
-# run_jet_energy_scale_diag.sh or the production JetEnergyScaleFineGrid),
-# producing the JES lookup JSON. Same algorithm as the production
-# ../jet_scale/CalibrationMap.cpp, plus an EM-only-conditional skew-Gaussian-parameter domain
-# (E0_MAX/SIGMA_MAX -- see this folder's CalibrationMap.cpp header comment
-# for why). Always rebuilds fresh.
-#
-# Runs single-threaded (CalibrationMap argv[4]=1) on purpose: this script is
-# meant for direct, interactive use on a shared STAR login/submit node, where
-# auto-detecting the box's full local core count and forking that many
-# worker processes (CalibrationMap's default when argv[4] is omitted) would
-# unfairly load a machine other people are actively using -- confirmed
-# starsub04 has ~27 concurrent users and an already-near-8.0 load average on
-# its 8 cores. For the much faster parallel fit, submit
-# submit_calibration_map_diag_condor.sh instead, which shards the fit across
-# N separate single-core condor jobs (not this binary's own in-process
-# fork()-based n_procs, which is hard-disabled -- see CalibrationMap.cpp's
-# compute_all_regions header comment for why) and merges the results.
+# Compiles and runs this folder's CalibrationMap on a jet_calibration.root
+# "bins" tree, single process, producing the JES lookup JSON. For a faster
+# run use submit_calibration_map_diag_condor.sh (condor shards).
 #
 # Usage:
 #   ./run_calibration_map_diag.sh -i <jet_calibration.root> -o <output.json> [-E <0|1>]
@@ -45,7 +29,7 @@ while getopts "i:o:E:h" opt; do
     o) OUTPUT="$OPTARG" ;;
     E) EM_ONLY="$OPTARG" ;;
     h|*)
-      sed -n '2,20p' "$0"
+      sed -n '2,18p' "$0"
       exit 0
       ;;
   esac
@@ -80,7 +64,7 @@ cat > "$TMPCSH" << EOF
 module purge
 module load root-5.34.38
 cd ${SCRIPT_DIR}
-g++ -m64 -pthread CalibrationMap.cpp -o .calibration_map_diag_bin \`root-config --cflags --libs\` -lMinuit2 -std=c++11
+g++ -m64 CalibrationMap.cpp -o .calibration_map_diag_bin \`root-config --cflags --libs\` -lMinuit2 -std=c++11
 if ( \$status != 0 ) then
     echo "ERROR: compilation failed"
     exit 1

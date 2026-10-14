@@ -5,6 +5,7 @@
 #       -n <nevents> -s <0|1> -o <outdir> [-P <ptcutmax>] [-j <nprocesses>] \
 #       [-l <label>] [-k <0|1>] [-f <triggers>] [-c <run_number>] \
 #       [-e <filter_ethr>] [-E <0|1>] [-T <tune_pp>] [-F <0|1>] [-M <0|1>]
+#       [-C <0|1>]
 #
 #   -g  generator: pythia8 or pythia6
 #   -t  tune/PDF: pythia8 PDF:pSet (8=CTEQ6L1, 5=MSTW2008LO, 3=MRST LO*,
@@ -23,30 +24,24 @@
 #   -l  short label for the generated XML's filename, default "run"
 #   -k  1 = save stdout/stderr under <outdir>/log/, 0 = discard, default 0
 #   -f  comma-separated FCS trigger flag names (see FcsTriggerDefs.h); an
-#       event only gets a jetTree entry if one fired. Empty = keep every event.
+#       event is only written (to the SimpleTree and so to the jetTree) if
+#       one fired. Empty = keep every event.
 #   -c  real Run 22 run number to pin the FCS gain/gainCorrection calibration
 #       era to (see RunNumberToDate() in runSimBfc.C). 0/omit = BFC's own
 #       nominal date.
-#   -e  FcsJetFilter's generator-level forward-flux accept threshold, GeV.
-#       An event is kept only if projected flux onto one FCS arm exceeds
-#       this (StRoot/StarGenerator/FILT/FcsJetFilter.cxx). Default 50.0,
-#       the original hardcoded value before this flag existed. Pass 0 to
-#       disable the filter (accept every generated event).
-#   -E  1 = build reco jets from ECAL hits only (no HCAL), using the
-#       ECAL-only fiducial boundary for both reco and truth jets
-#       (JetParameters.h's kFiducialRectEcal/reco_fiducial_buffer_ecal).
-#       0/omit = previous ECAL+HCAL behavior.
+#   -e  FcsJetFilter's generator-level forward-flux accept threshold, GeV
+#       (StRoot/StarGenerator/FILT/FcsJetFilter.cxx). Default 50.0; 0 disables
+#       the filter.
+#   -E  1 = reco jets from ECAL only, with the ECAL-only fiducial boundary
+#       for reco and truth jets (kFiducialRectEcal). 0/omit = ECAL+HCAL.
 #   -T  pythia8 only: Tune:pp preset number (14=Monash, 33=Detroit, 5=4C,
 #       3=2C, 21=A14-NNPDF2.3LO, 18=CUETP8M1, 2=Skands2009, see
 #       pythia8.web.cern.ch/manuals/pythia8317/Tunes.html). Default -1 =
 #       none. Pass -t -1 with it to keep the preset's own PDF. Caveat:
 #       STAR's StarPythia8::Init() re-applies Detroit's MPI/CR values after
 #       the preset, so only those five differ from the preset for non-33.
-#   -F  1 = build reco jets from FCS points (StMuFcsPoint, the single-
-#       photon-candidate level) instead of tower hits. Truth jets are
-#       unaffected. 0/omit = hits, the previous default behavior. HCAL
-#       currently produces no points at all, so this is ECAL-only input
-#       regardless of -E when enabled.
+#   -F  1 = reco jets from FCS points (StMuFcsPoint) instead of tower hits.
+#       HCAL has no points, so this is ECAL-only input. 0/omit = hits.
 #   -M  1 = "FMS tune": the generator settings of the STAR FMS EM-jet
 #       analysis, as one bundle -- pythia6, PyTune 370 (Perugia 2012,
 #       CTEQ6L1), PARP(90)=0.213, PARP(91)=1, MSEL=1 (values live in
@@ -54,6 +49,11 @@
 #       omitted; passing anything else for either is an error. sqrt(s),
 #       ptHat cuts (-p/-P/-w) and decays are not part of the bundle.
 #       0/omit = off.
+#   -C  1 = jet-energy-scale calibration sample: no minimum pT on reco or
+#       truth jets, and the in-job underlying-event step in minimum-bias
+#       mode. Cannot be combined with -f. Keep the SimpleTrees (-s 1) and
+#       rerun the UE over the whole sample with
+#       underlying_event/submit_ue_by_pthat.sh. 0/omit = analysis cuts.
 #
 # Example:
 #   ./submit_sim_to_jet.sh -g pythia8 -t 8 -p 10 -n 500 -s 0 \
@@ -81,8 +81,9 @@ FILTER_ETHR=50.0
 EM_ONLY=0
 USE_POINTS=0
 FMS_TUNE=0
+CALIB_SAMPLE=0
 
-while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:T:F:M:h" opt; do
+while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:T:F:M:C:h" opt; do
   case $opt in
     g) GENERATOR="$OPTARG" ;;
     t) TUNE_PARAM="$OPTARG" ;;
@@ -102,8 +103,9 @@ while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:T:F:M:h" opt; do
     T) PP_TUNE="$OPTARG" ;;
     F) USE_POINTS="$OPTARG" ;;
     M) FMS_TUNE="$OPTARG" ;;
+    C) CALIB_SAMPLE="$OPTARG" ;;
     h|*)
-      sed -n '2,63p' "$0"
+      sed -n '2,62p' "$0"
       exit 0
       ;;
   esac
@@ -163,6 +165,15 @@ if [ "$PP_TUNE" -gt 0 ] && [ "$GENERATOR" != "pythia8" ]; then
     exit 1
 fi
 
+if [ "$CALIB_SAMPLE" != "0" ] && [ "$CALIB_SAMPLE" != "1" ]; then
+    echo "Error: -C must be 0 or 1 (got '$CALIB_SAMPLE')"
+    exit 1
+fi
+if [ "$CALIB_SAMPLE" = "1" ] && [ -n "$TRIGGER_FILTER" ]; then
+    echo "Error: -C 1 (calibration sample) cannot be combined with a trigger filter (-f)"
+    exit 1
+fi
+
 if [ "$USE_POINTS" != "0" ] && [ "$USE_POINTS" != "1" ]; then
     echo "Error: -F must be 0 or 1 (got '$USE_POINTS')"
     exit 1
@@ -200,7 +211,7 @@ fi
 
 export XML_IN="${SCRIPT_DIR}/sim_to_jet.xml"
 export XML_OUT="${OUTXML}"
-export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR EM_ONLY PP_TUNE USE_POINTS FMS_TUNE
+export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR EM_ONLY PP_TUNE USE_POINTS FMS_TUNE CALIB_SAMPLE
 
 python3 << 'PYEOF'
 import json
@@ -257,6 +268,7 @@ xml = xml.replace("{{EM_ONLY}}", os.environ.get("EM_ONLY", "0"))
 xml = xml.replace("{{PP_TUNE}}", os.environ.get("PP_TUNE", "-1"))
 xml = xml.replace("{{USE_POINTS}}", os.environ.get("USE_POINTS", "0"))
 xml = xml.replace("{{FMS_TUNE}}", os.environ.get("FMS_TUNE", "0"))
+xml = xml.replace("{{CALIB_SAMPLE}}", os.environ.get("CALIB_SAMPLE", "0"))
 
 with open(os.environ["XML_OUT"], "w") as f:
     f.write(xml)
@@ -264,9 +276,9 @@ PYEOF
 
 echo "Generated ${OUTXML}"
 if [ -n "$PTCUT_JSON" ]; then
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE} calib_sample=${CALIB_SAMPLE}"
 else
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE} calib_sample=${CALIB_SAMPLE}"
 fi
 
 mkdir -p "${OUTDIR}"
@@ -277,18 +289,12 @@ star-submit "sim_to_jet/sim_to_jet_${LABEL}.xml"
 SUBMIT_DIR="${PIPELINE_ROOT}/submit"
 mkdir -p "${SUBMIT_DIR}"
 
-# sched*/.csh/.package files are read from PIPELINE_ROOT by their original
-# path at job start, not transferred by condor -- sweeping immediately races
-# job startup and kills jobs. Defer the sweep until condor_wait confirms
-# this submission's own jobs are done, in the background.
+# Jobs read the sched* files from PIPELINE_ROOT at start-up, so they are moved
+# to submit/ only after condor_wait reports the whole submission finished.
 REPORT=$(find "${PIPELINE_ROOT}" -maxdepth 1 -name 'sched*.report' -newer "${MARKER}")
 REQID=$(basename "${REPORT}" .report | sed 's/^sched//')
 
-# Provenance: one text file per submission in the output directory, so a
-# jet_output_*.root file sitting there months later can be traced back to
-# exactly what produced it (every resolved simulation flag, the pipeline's
-# git commit, submission time, condor request id) without having to dig
-# through shell history or the (overwritable) generated XML itself.
+# Record every resolved setting next to the output
 GITHASH=$(git -C "${PIPELINE_ROOT}" rev-parse HEAD 2>/dev/null || echo "unknown")
 cat > "${OUTDIR}/run_params_${LABEL}_${REQID}.txt" <<EOF
 # sim_to_jet run parameters -- see FCSJetPipeline/README.md
@@ -314,12 +320,10 @@ filter_ethr=${FILTER_ETHR}
 em_only=${EM_ONLY}
 use_points=${USE_POINTS}
 fms_tune=${FMS_TUNE}
+calib_sample=${CALIB_SAMPLE}
 EOF
 echo "Wrote run parameters to ${OUTDIR}/run_params_${LABEL}_${REQID}.txt"
 
-# Read the real Log path from the .condor file rather than assuming
-# /tmp/$USER/... -- a wrong guess makes condor_wait fail immediately, so
-# also gate the sweep on its exit status.
 CONDORFILE=$(find "${PIPELINE_ROOT}" -maxdepth 1 -name "sched${REQID}_*.condor" -newer "${MARKER}" | head -1)
 CONDORLOG=$(grep -m1 '^Log' "${CONDORFILE}" | sed -e 's/^Log[[:space:]]*=[[:space:]]*//')
 nohup bash -c "if condor_wait '${CONDORLOG}' >/dev/null 2>&1; then find '${PIPELINE_ROOT}' -maxdepth 1 -name 'sched${REQID}*' -exec mv -t '${SUBMIT_DIR}' {} +; else echo \"condor_wait failed for ${REQID} (log='${CONDORLOG}') -- NOT sweeping, leaving sched files in place\" >> '${PIPELINE_ROOT}/submit/.sweep_failures.log'; fi" >/dev/null 2>&1 &

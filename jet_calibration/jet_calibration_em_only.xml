@@ -1,15 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <!--
-    EM-only jet-calibration pipeline: the EM-only counterpart of
-    jet_calibration.xml (same folder). Takes a folder of EM-only
-    jet_output_*.root (JetTrees) files and a JSON lookup table (from
-    jet_scale_em_only) and adds corrected branches (reco_E_corr,
-    reco_x_F_corr) to those files IN PLACE (TFile "UPDATE", no separate
-    output files, no undo). Uses ../shared/JetParameters.h's
-    computeFeynmanX. Differs from the ECAL+HCAL step only in the model
-    ApplyCorrections_em_only evaluates and in not writing the "uniform"
-    branches (see its header comment).
+    EM-only jet calibration: adds reco_E_corr and reco_x_F_corr to a folder of
+    EM-only jet_output_*.root files in place (TFile "UPDATE", no undo), using a
+    JSON lookup table from jet_scale_em_only (ApplyCorrections_em_only).
 
     Configurable per submission (filled in by
     submit_jet_calibration_em_only.sh, see its -h):
@@ -84,7 +78,6 @@
             ./ApplyCorrections_em_only my_files.list {{CALIB_JSON}}
         endif
 
-        # Temporary, job-local only; never meant to leave scratch.
         rm -f all_files.list my_files.list
 
         echo "Done."

@@ -1,669 +1,178 @@
 # FCSJetPipeline
 
-Four distinct SUMS pipelines, each in its own self-contained folder:
-simulation-to-jet, real-production-data-to-jet, jet-energy-scale
-calibration building, and calibration application. Plus one standalone
-utility folder, `pico_analysis/`, for PicoDst-based diagnostics -- not
-part of the jet-finding chain (see its own section below). Each folder
-holds its own XML template, its own `submit_*.sh` wrapper (with a working
-`-h`), and every source file it needs -- nothing pipeline-specific is
-shared between folders. Only genuinely cross-pipeline resources live at
-the pipeline root, all together under `shared/`: `JetParameters.h`
-(physics constants/cuts used by every jet-finding step except
-`CalibrationMap`) and the compiled `vector<float>`/`vector<int>`
-CollectionProxy dictionary (`VectorDict.cxx/.h`) that any step reading
-jetTree's `std::vector` branches must link against -- `JetMatcher`,
-`JetEnergyScaleFineGrid`, `RecoJets`, `ApplyCorrections`, and the
-standalone `FCS2VIRTUE` tool. Also at the pipeline root: `StRoot/` (the
-two locally compiled makers, `StSimpleReaderMaker`/`StSimpleTreeMaker`),
-and `.sl73_x8664_gcc485/` (their precompiled binary cache).
+SUMS pipelines for STAR FCS jets (Run 22 pp, sqrt(s) = 508 GeV), one folder
+per stage. Each folder holds its XML template, a `submit_*.sh` wrapper (run it
+with `-h` for its options) and its sources.
 
-Every pipeline shares two more conventions:
+| Stage | Input -> output |
+|---|---|
+| `sim_to_jet/` | PYTHIA + starsim -> BFC/MuDst -> SimpleTree -> matched truth/reco jets (+ in-job underlying event) |
+| `data_to_jet/` | official MuDst -> SimpleTree -> reco jets (+ in-job underlying event) |
+| `underlying_event/` | underlying-event (UE) estimate per jet; runs inside the two jobs above, or over a whole simulation sample |
+| `jet_scale/` | simulated JetTrees -> jet-energy-scale (JES) lookup JSON |
+| `jet_calibration/` | applies a JES JSON to JetTrees, in place |
+| `pico_analysis/` | PicoDst diagnostics, not part of the jet chain |
 
-- **Logs are opt-in.** By default a job's stdout/stderr are discarded
-  (sent to `/dev/null`); pass `-k 1` to any wrapper to save them instead,
-  under an auto-created `log/` folder inside that pipeline's output
-  directory (or `<jettrees_dir>/log/` for `jet_calibration`, which has no
-  separate output directory since it corrects files in place).
-- **No stray list files.** Any working list a job builds internally
-  (line-range chunks, per-job file lists) is `rm -f`'d at the end of the
-  job script; nothing but real output ever leaves scratch.
+Shared resources at the root:
 
-## Layout
+- `shared/JetParameters.h`: jet radius, fiducial rectangles, thresholds, the
+  EM-only truth-particle selection, sqrt(s) per run, x_F.
+- `shared/VectorDict.*`: the `std::vector` dictionary every program reading
+  jetTree vector branches links against.
+- `StRoot/`: `StSimpleReaderMaker`, `StSimpleTreeMaker` and a local
+  `FcsJetFilter` (settable threshold). `.sl73_x8664_gcc485/` is their
+  prebuilt cache; jobs do not rebuild it, so rebuild (`stardev`, `cons`)
+  after editing `StRoot/`.
 
-```
-FCSJetPipeline/
-├── shared/                 pipeline-root resources used by multiple stages: JetParameters.h (physics constants/cuts) and the VectorDict.cxx/.h CollectionProxy dictionary (for jetTree's std::vector branches)
-├── StRoot/                 source for the two locally-compiled makers, shared by sim_to_jet and data_to_jet
-├── .sl73_x8664_gcc485/      precompiled binaries for that StRoot/ source (rebuild if StRoot/ changes)
-├── sim_to_jet/               starsim -> BFC/MuDst -> jet finding (simulation)
-│   ├── sim_to_jet.xml, submit_sim_to_jet.sh
-│   └── pthat_distribution_optimized.json      relative ptHatMin proportions for -w
-├── data_to_jet/              MuDst -> SimpleTree -> jet finding (real production data)
-│   └── data_to_jet.xml, submit_data_to_jet.sh, MakeRunList.pl
-├── jet_scale/                 builds a JES calibration JSON from a folder of JetTrees
-│   └── jet_scale.xml, submit_jet_scale.sh   (+ the *_em_only.* counterparts: EM-only JetTrees, median-based, own fit model)
-├── jet_calibration/             applies a calibration JSON to JetTrees, in place
-│   └── jet_calibration.xml, submit_jet_calibration.sh   (+ the *_em_only.* counterparts: reads the EM-only JSON schema)
-├── JetScalePlayground/          JES calibration diagnostics/exploration, not part of the pipeline
-├── pico_analysis/                 PicoDst diagnostics utility, not part of the jet-finding chain
-│   └── pico_analysis.xml, submit_pico_analysis.sh, mip_ana.C, pico_to_root.C
-└── output/                       default scratch space; jobs are usually pointed at an explicit -o instead
-```
+The `*Playground/` folders and `FCS2VIRTUE/` (SimpleTree -> VIRTUE event
+display JSON) hold studies and tools that the pipelines do not use. Analysis
+plots live outside this repository, in `FCSJetAnalysis/`.
 
-## Job-splitting, standardized
+## Conventions
 
-- **`sim_to_jet`**: `-n` events generated per job, `-j` total number of
-  parallel jobs. Each job is fully independent (its own generated events),
-  so there's no fixed input to split -- one job runs the whole chain on
-  one file.
-- **`data_to_jet`** and **`jet_calibration`**: the input (a file catalog
-  list, or a folder of JetTrees) is a fixed set of items. `-j` evenly
-  splits that fixed set across jobs -- contiguous, non-overlapping ranges,
-  so no two concurrent jobs ever touch the same input file. A job that
-  gets several items still processes them one at a time (see "1:1
-  SimpleTree/JetTree linkage" below), it never combines them.
-- **`jet_scale`**: the one deliberate exception. It reads an entire folder
-  as a single whole-population fit (memory/CPU-bound, not parallelizable
-  across files the way the others are), so it is always exactly one job;
-  there is no `-j`.
+- Run every `submit_*.sh` from anywhere; it calls `star-submit` from the
+  pipeline root, since the XML SandBox paths are relative to it. Generated
+  XMLs (`<template>_<label>.xml`) and the `sched*` files are job-specific
+  and are not tracked. `sched*` files are moved to `submit/` once
+  `condor_wait` reports the submission finished.
+- Logs are off by default; `-k 1` writes each job's stdout/stderr to
+  `<outdir>/log/` while it runs. Keep it off for large batches.
+- `sim_to_jet` and `data_to_jet` write `<outdir>/run_params_<label>_<id>.txt`
+  with every resolved option, the submission time and the git commit.
+- `-1` (or `-9999` for positions) marks a value that does not apply, e.g.
+  `sigma_job` in data or `Spin_config` in simulation.
 
 ## sim_to_jet
 
-starsim -> BFC/MuDst reconstruction -> jet finding, all in one job, on a
-single generated SimpleTree file.
+```
+./submit_sim_to_jet.sh -g <pythia8|pythia6> -t <tune> -p <ptHatMin> -n <nevents> -s <0|1> -o <outdir> \
+    [-P <ptHatMax>] [-j <njobs>] [-w <json>] [-l <label>] [-k <0|1>] [-f <triggers>] [-c <run>] \
+    [-e <ethr>] [-E <0|1>] [-F <0|1>] [-T <tune_pp>] [-M <0|1>] [-C <0|1>]
+```
 
-```
-./submit_sim_to_jet.sh -g <pythia8|pythia6> -t <tune_param> -p <ptcut> \
-    -n <nevents> -s <0|1> -o <outdir> [-P <ptcutmax>] [-j <nprocesses>] \
-    [-l <label>] [-w <json>] [-k <0|1>] [-f <triggers>] [-E <0|1>] [-F <0|1>] \
-    [-M <0|1>]
-```
+One job generates `-n` events and writes
+`jet_output_<gen>_<tune>_pt<ptHatMin>_<job>.root` (and the SimpleTree with
+`-s 1`). Main options:
 
 | Flag | Meaning |
 |---|---|
-| `-g` | generator: `pythia8` or `pythia6` |
-| `-t` | pythia8: `PDF:pSet` integer (8=CTEQ6L1, 5=MSTW2008LO, 3=MRST LO*, 21=NNPDF3.1sx, <=0=default). pythia6: `PyTune` integer (325=Perugia X [MRST LO*], 0=default) |
-| `-p` | pTHatMin cut, GeV -- a single flat value used by every job; ignored if `-w` is given |
-| `-P` | pTHatMax cut, GeV -- a single flat value used by every job, default `-1` (no upper cut); ignored if `-w` is given (put a `"ptcutmax"` key in each bin of the JSON instead) |
-| `-n` | events to generate per job |
-| `-s` | `1` to keep the intermediate `SimpleTree_*.root`, `0` to discard it after jet finding runs |
-| `-o` | output directory (created if missing) |
-| `-j` | total number of parallel jobs, default 1 |
-| `-w` | optional: absolute path to a JSON file of relative ptHatMin (and optionally ptHatMax) proportions to sample across the `-j` jobs, instead of flat `-p`/`-P` values -- overrides `-p`/`-P` entirely |
-| `-l` | short label used in the generated XML's filename, default `run` |
-| `-k` | `1` to save stdout/stderr under `<outdir>/log/`, `0` to discard them, default `0` |
-| `-f` | comma-separated FCS trigger flag names (see FCS trigger flags below); an event only gets a jetTree entry if at least one of them fired. Omit/empty (default) keeps every event. Called `-f` here, not `-t` like `data_to_jet`'s equivalent flag, since `-t` is already taken by the tune/PDF param above |
-| `-E` | `1` to build reco jets from ECAL hits only (no HCAL), using the ECAL-only fiducial boundary for both reco and truth jets; `0` (default) keeps the previous ECAL+HCAL behavior. See "EM-only reco jets" below |
-| `-F` | `1` to build reco jets from FCS points instead of tower hits; `0` (default) keeps the previous hit-based behavior. See "Point-based reco jets" below |
-| `-M` | `1` for the "FMS tune" generator bundle (see below); implies `-g pythia6 -t 370`, so both may be omitted. `0` (default) off |
+| `-w` | JSON of relative ptHatMin (and ptHatMax) shares across the `-j` jobs, e.g. `pthat_distribution_optimized.json`; replaces `-p`/`-P` |
+| `-f` | keep only events that fired one of these FCS triggers (`FcsTriggerDefs.h` names, emulated with `fcs_trg_base`) |
+| `-c` | run number fixing the FCS gain calibration era (default: BFC's nominal date) |
+| `-e` | `FcsJetFilter` forward-flux threshold, GeV (default 50, 0 = off) |
+| `-E 1` | EM-only reco jets (ECAL only) with the ECAL fiducial rectangle |
+| `-F 1` | reco jets from FCS points (`StMuFcsPoint`) instead of tower hits |
+| `-M 1` | the FMS EM-jet generator settings: pythia6, PyTune 370, PARP(90)=0.213, PARP(91)=1, MSEL=1 |
+| `-C 1` | JES calibration sample: no jet pT minimums and a minimum-bias UE step; no `-f` |
 
-Example -- 500 pythia8/CTEQ6L1 events at ptHatMin=10 GeV, discard the SimpleTree:
+Folder layout: after a submission finishes,
+`organize_sim_output.sh <outdir>` moves the files into
+`jet_output/pt<N>/` and `SimpleTree/pt<N>/`, so no folder holds thousands of
+files.
 
-```
-./submit_sim_to_jet.sh -g pythia8 -t 8 -p 10 -n 500 -s 0 \
-    -o /star/data01/pwg/seanp/pipeline_output/cteq6l1_pt10_test
-```
+**Jets.** Anti-kt, R = 0.7. Reco jets must be inside the fiducial rectangle
+minus a margin (10 cm, or 20 cm for EM-only); truth jets may extend outside
+it by R/2 (R for EM-only) in eta-phi. Matching is one-to-one within
+dR < R/2. EM-only truth jets are clustered from photons created within
+100 um of the primary vertex (prompt and pi0/eta decay photons, not GEANT
+secondaries). EM-only jet pT minimums: reco 2 GeV, truth 1 GeV (as the FMS
+analysis), unless `-C 1`. FCS points must have 1 GeV < E <= sqrt(s)/2.
 
-Each run produces `jet_output_<generator>_<tune>_pt<ptcut>_<run_number>.root`
-(and `SimpleTree_..._<run_number>.root` if `-s 1`) in the output directory.
-`run_number` is `JOBINDEX`, so raising `-j` above 1 runs that many
-independent jobs in parallel without filename collisions.
+**Cross sections.** Every tree carries `sigma_job` (PYTHIA cross section,
+mb), `N_job` (trials) and the job's ptHat range (`mc_pthatmin_gev`,
+`mc_pthatmax_gev`). `jet_scale/JetXSecWeights.h` turns them into per-ptHat-bin
+event weights. Pythia 6's cross section arrives byte-shifted from the STAR
+interface and is decoded in `readMudst.C` (and again on read). Jobs where
+PYTHIA 6 crashed carry no valid `sigma_job` and cannot be weighted.
 
-**Weighted pT-cut sampling (`-w`).** Instead of flat `-p`/`-P` cuts, `-w
-<json>` draws each job's ptHatMin (and optionally ptHatMax) from a table
-of relative proportions, so low-pT (bulk of the cross section) and
-high-pT (rare tail) both get proportionate statistics instead of either
-flooding or starving the sample. `pthat_distribution_optimized.json`
-ships with the table currently in use (fit to `pythia8_nnpdf23lo`'s
-reference distribution); format:
-
-```json
-{
-  "reference_total": 20000,
-  "bins": [
-    { "ptcut": 0, "count": 21 },
-    { "ptcut": 2, "count": 218, "ptcutmax": 4 },
-    ...
-  ]
-}
-```
-
-`count` is that bin's share out of `reference_total`; `submit_sim_to_jet.sh`
-scales the proportion to however many jobs `-j` actually submits (does
-not require submitting `reference_total` jobs at once). `ptcutmax` is
-optional per bin -- omitted/absent means `-1` (no upper cut), the same
-sentinel used everywhere else in this codebase. Since this substitution
-is multi-line csh, not a single value, the wrapper generates it with
-Python rather than `sed`.
-
-**FMS tune (`-M`).** `-M 1` switches on, as one bundle, the generator
-settings of the STAR FMS EM-jet analysis (BrightSTAR `emjet-gpc`; recorded
-in `UnderlyingEventPlayground/fms_emjet_reference.txt`): PYTHIA 6.4.28,
-`PyTune 370` (Perugia 2012, whose PDF is CTEQ6L1 through LHAPDF),
-`PARP(90)=0.213`, `PARP(91)=1` and `MSEL=1`. The values live in one place,
-`starsim_pythia6_filter.C`, and are applied after `PyTune` so the tune
-cannot overwrite them. In practice only `PARP(90)` differs from a plain
-`-g pythia6 -t 370` run: Perugia 2012's own `PARP(90)` is 0.24, its
-`PARP(91)` is already 1, and `MSEL=1` is what this pipeline's Pythia 6 runs
-use anyway. sqrt(s) (508.4 GeV), the ptHat cuts (`-p`/`-P`/`-w`) and
-particle decays are deliberately not part of the bundle. Every Pythia 6
-job's log ends its generation step with a `Tune check (fmsTune=...)` line
-reading `MSEL`, `PARP(90)`, `PARP(91)`, `PARP(82)` and the PDF set back from
-PYTHIA after the event loop. `lhapdf_data/` holds the `cteq6l1` grid this
-tune needs, alongside `MRST2007lomod`.
-
-**FCS trigger flags.** Both the SimpleTree (`data`, written by
-`StSimpleReaderMaker`) and the JetTree (`jetTree`, written by
-`JetMatcher`) carry one `int` branch per known FCS trigger name from
-`TriggerIDs.txt` -- 1 if that trigger fired on the event, 0 otherwise,
-same convention as `data_to_jet`. Simulated events have no real online
-trigger decision to read, so `readMudst.C` constructs an
-`StFcsTriggerSimMaker` (the FCS trigger-logic emulator, `fcs_trg_base`)
-and passes it to `StSimpleReaderMaker::SetTriggerSim()`, which drives it
-directly on each event's FCS hits instead of doing the real-data id
-lookup. `StFcsTriggerSimMaker::Make()` itself is never called (it
-segfaults reading a muDst with no `StEvent` present) -- it's kept in the
-chain only for `Init()`/`InitRun()` (gains, pedestals, `stage_version`)
-via `SetActive(kFALSE)`, and `StSimpleReaderMaker` drives its
-`fcs_trg_base` engine directly. Only ~20 of the 64 flags are computable
-this way (the physics-condition categories `fcs_trg_base` models); the
-rest stay 0 for simulated events. `trgSelect=202209` (default, set in
-`readMudst.C`) should match whatever trigger-algorithm version was live
-for the run period being modeled; see `TriggerPlayground` if this needs
-revisiting.
-
-**MC cross-section weighting.** Both the SimpleTree and JetTree also carry
-`mc_sigma_pb`/`mc_sigma_err_pb`/`mc_n_gen` -- the generator's total cross
-section (and its error, in pb) for this job's ptHatMin/ptHatMax phase-space
-cut, and the number of hard-scattering trials (PYTHIA's `nAccepted`) it
-corresponds to, so `dividing weight = mc_sigma_pb / mc_n_gen` gives each
-event's share of integrated luminosity regardless of which ptHatMin-bin job
-(and hence which SimpleTree file) it came from -- needed since `jet_scale`-
-style cross-section analyses merge many ptHatMin bins with very different
-statistics into one sample. `-1` is the "not MC" sentinel (always the value
-in `data_to_jet`'s trees, and in any sim SimpleTree older than this
-bookkeeping). Sourced from `StarPrimaryMaker::Finish()`'s `StarGenStats`
-object (framework code, not this pipeline's) which every `starsim.C` run
-already writes to `pythia8.starsim.root`/`pythia6.starsim.root` --
-`sim_to_jet.xml` renames it to `${pid}.genstats.root` immediately after the
-starsim step (its original name collides with `runSimBfc.C`'s own output
-file, which would otherwise silently clobber it), and `readMudst.C`'s
-`ReadMCXSec()` reads it back and calls `StSimpleReaderMaker::SetMCXSec()`
-before the chain runs. **Use `nAccepted`, not the smaller number of events
-that survive `FcsJetFilter`**, as the weight's denominator -- confirmed from
-`StarGenStats::luminosity() = sumWeightGen/sigmaGen` in the framework
-source: the filter only decides what gets written to the `.fzd` file, it
-doesn't change how much integrated luminosity each surviving event
-represents. `JetMatcher.cpp`/`RecoJets.cpp` pass these three branches
-straight through to `jetTree`, re-binding them per input SimpleTree file
-inside their file loop (not once globally), since one `jetTree` can be
-built from several SimpleTree files with different `mc_sigma_pb`/`mc_n_gen`
-values.
-
-**Pythia 6 cross section (`sigma_job`) decoding.** STAR's
-`StarPythia6::Stats()` reads PYTHIA's cross section through a struct that
-is 4 bytes out of step with the Fortran common block (`PyInt5_t` omits the
-leading `NGENPD`), so for a Pythia 6 job the framework reports `sigmaGen`
-as a denormal around 5e-315 whose low 32 bits are the high 32 bits of the
-real value. `readMudst.C`'s `ReadMCJobStats()` decodes it, to about 1e-6
-relative precision (it agrees with the cross section PYSTAT prints),
-before it is stored as `sigma_job`. `jet_scale/JetXSecWeights.h`'s
-`DecodePythia6Sigma()` applies the same decoding on read, so a tree that
-holds the raw framework value is weighted correctly too; any other reader
-of `sigma_job` should go through it. Pythia 8 reports a normal value and
-needs no decoding.
-
-**ECAL/HCAL gain calibration.** `runSimBfc.C` deliberately does *not*
-call `StFcsDb::forceUniformGain()`/`forceUniformGainCorrection()` --
-`StFcsDb` is left on its default `GAINMODE::DB`, which pulls real
-calibrated gain and per-tower gain-correction values from the STAR
-conditions DB. ECAL's `gainCorr` is genuinely per-tower (not flat);
-HCAL's is currently flat 1.0, correctly reflecting that HCAL has no
-per-tower calibration yet, while HCAL's base `gain` still includes the
-known 1.3 electronics-gain factor. `data_to_jet`'s `runMudst.C` is
-unaffected -- it reads already-officially-produced muDSTs and never
-touches `StFcsDb`'s gain settings itself.
-
-**Pinning a specific calibration era (`-c`/`calibRun`).** By default the
-BFC chain queries the conditions DB at its own nominal `y2023` chain-flag
-date (`20230410`), so every simulated job uses the same single gain/
-gain-correction era regardless of which real run period it's meant to
-model. `submit_sim_to_jet.sh`'s `-c <run_number>` flag (passed through
-to `runSimBfc.C`'s `calibRun` parameter, and from there to
-`sim_to_jet.xml`'s `{{CALIB_RUN}}`) overrides this: given a real Run 22
-run number (e.g. `23101043`), `runSimBfc.C` converts it to a calendar
-date+time via `RunNumberToDateTime()` and calls `St_db_Maker::SetDateTime()`
-with it before `chain->Init()`, so `StFcsDb` (still on default `GAINMODE::DB`,
-per above) picks up that run's actual calibration era instead. Omit `-c`
-(or pass `0`) to keep the previous, unchanged nominal-date behavior.
-`RunNumberToDateTime()` queries the real, authoritative `RunLog.runDescriptor`
-DB (`db04.star.bnl.gov`) for the run's actual start time, falling back to
-`RunNumberToDateArithmetic()` (day-of-year arithmetic, `itim=0`) if that
-DB is unreachable -- e.g. a SUMS worker node with more restricted network
-access than an interactive session. The arithmetic fallback accounts for
-a non-obvious STAR run-number quirk: the run number's 2-digit year code
-is *not* the real calendar year, it's one less (e.g. run `22359013`'s
-real date is 2021-12-25, not 2022-12-25). Each job's log prints a
-`Gain check (calibRun=..., ...)` line after `EventLoop()` (representative
-ECAL/HCAL channel gain+gainCorr) so it's obvious at a glance whether the
-override took effect as expected.
-
-**Fiducial-region geometry cut (`../shared/JetParameters.h`).** `cut_x_inner`/
-`cut_x_outer`/`cut_y_min`/`cut_y_max` (used by both `data_to_jet` and
-`sim_to_jet`, and by `jet_scale`/`jet_calibration` downstream) are
-reproducible directly from the STAR conditions DB via a standalone tool in
-`GeometryPlayground/`: `run_number_to_fiducial.sh <run_number>` pulls
-`StFcsDb`'s detector-position geometry for that run's era and computes the
-ECAL/HCAL fiducial rectangle from it. See the comment above `cut_x_inner`
-in `JetParameters.h` for provenance. Detector position is constant across
-essentially all of Run 22 (one transition, 2021-12-21), so a single
-hardcoded rectangle is valid pipeline-wide -- re-run the tool only if
-there's reason to think the geometry changed (a different run period, a
-documented detector move). `cut_x_inner_ecal`/`cut_x_outer_ecal`/
-`cut_y_min_ecal`/`cut_y_max_ecal` are the same idea but for ECAL's own raw
-footprint (not clipped down to HCAL's smaller projected one) -- see
-"EM-only reco jets" below for when that rectangle applies instead. Both
-rectangles are exposed as `FiducialRect` structs (`kFiducialRect`/
-`kFiducialRectEcal`) that `pass_fiducial_cut()`/`pass_jet_scale_cut()`
-take as an optional last argument, defaulting to `kFiducialRect` so every
-pre-existing call site is unaffected.
-
-**EM-only reco jets (`-E`).** `submit_sim_to_jet.sh -E 1` and
-`submit_data_to_jet.sh -E 1` build reco jets from ECAL hits only (FCS
-Cal_detid 0/1), skipping HCAL hits (detid 2/3) entirely instead of the
-previous default of clustering both together. Two things change together
-when `-E 1` is set, both in `JetMatcher.cpp`/`RecoJets.cpp`:
-1. The HCAL-hit skip happens before clustering, so reco jets are built
-   from ECAL energy deposits alone.
-2. Reco jet (and, in `sim_to_jet`, truth jet) fiducial selection switches
-   from the default rectangle (`kFiducialRect`, `reco_fiducial_buffer`) to
-   the ECAL-only one (`kFiducialRectEcal`, `reco_fiducial_buffer_ecal`) --
-   there's no reason to clip EM-only reco jets down to HCAL's smaller
-   acceptance. Truth jets get an outward dilation of the ECAL-only
-   boundary via the `etaPhiMargin` argument of `pass_jet_scale_cut`: a
-   full jet radius (`truth_fiducial_margin_em` = R), where the ECAL+HCAL
-   mode uses R/2. A truth jet further than R outside the reco fiducial
-   region cannot overlap any jet whose axis is inside it. EM-only truth
-   jets also need pT >= `truth_jet_pt_min_em` = 1 GeV at jet finding, the
-   STAR FMS EM-jet analysis's particle-level value, and EM-only reco jets
-   (sim and data) need pT >= `reco_jet_pt_min_em` = 2 GeV, its
-   detector-level value. The physical-jet limits (E <= sqrt(s)/2,
-   0 < x_F <= 1; `pass_physical_jet_cut` in `JetParameters.h`) are not
-   applied in the pipeline: they only make sense on the final energy,
-   after UE subtraction and calibration, so they belong to the analysis. Truth-reco matching
-   is one-to-one within dR < R/2, so truth jets between R/2 and R
-   outside the boundary are kept but can rarely be matched. `reco_fiducial_buffer_ecal` is `20.0f`,
-   characterized via the EM-only JES calibration diagnostics fork
-   (`JetScalePlayground/`): high-chi2 fit failures concentrated within
-   ~20cm of the fiducial edge, comparable to the default rectangle's
-   characterized `10.0f`.
-
-Every JetTree carries a `reco_em_only` int branch (0/1, constant for the
-whole file) recording which mode built it, same provenance convention as
-`mc_pthatmin_gev`/`sigma_job`/etc. `jet_scale` and `jet_calibration` must be
-told separately whether their input JetTrees are EM-only, since they don't
-read `reco_em_only` back out of the trees: `submit_jet_scale.sh -E 1` and
-`submit_jet_calibration.sh -E 1` hand off to the dedicated EM-only scripts
-(`submit_jet_scale_em_only.sh` then `submit_jet_calibration_em_only.sh`,
-below), which have their own fit model and JSON schema. Passing the wrong `-E`
-value there runs the wrong calibration for the input.
-
-**Point-based reco jets (`-F`).** `submit_sim_to_jet.sh -F 1` and
-`submit_data_to_jet.sh -F 1` build reco jets from FCS points (`StMuFcsPoint`,
-the single-photon-candidate level -- see `Cal_pt_*` in
-`StSimpleReaderMaker.h`) instead of raw tower hits, in both
-`JetMatcher.cpp`/`RecoJets.cpp`. Truth jets are never affected (they're
-already generator-level). The (x,y,z)-direction PseudoJet construction is
-identical to the hit-based path -- only the source arrays (`Cal_pt_*` vs
-`Cal_hit_*`) change. The energy floor is not the same: hits keep the
-MIP-fraction tower cut (`mip_threshold*ecal_mip`/`hcal_mip`), while points
-must exceed `point_energy_min` = 1 GeV and be no more than one beam's
-energy, sqrt(s)/2 (`pass_point_energy_cut()` in `JetParameters.h`, the
-same function for simulation and data) -- the lower and upper photon-
-candidate cuts of the STAR FMS EM-jet analysis. The upper limit removes
-unphysical points in data and nothing in simulation. Upstream of that,
-`StFcsPointMaker` applies no energy cut of its own (every cluster yields
-points); the only floor is `StFcsClusterMaker`'s default 0.05 GeV ECAL
-seed-tower threshold. **HCAL currently produces
-no points at all** (checked directly against real data), so `-F 1` is
-ECAL-only input regardless of `-E`; combine with `-E 1` to also get the
-ECAL-only fiducial boundary, or leave `-E 0` to keep the wider default
-rectangle over effectively the same ECAL-only input. Note that with `-F 1`,
-the `reco_nphotons` branch (points with E>1 GeV inside deltaR<R of the jet
-axis) becomes largely redundant with `reco_nconst`, since the jet's own
-constituents and the points counted as "photons near the jet axis" are now
-mostly the same set -- same relationship as `truth_nphotons`/`truth_nconst`
-in `sim_to_jet`'s `-E 1` mode. Every JetTree carries a `reco_from_points`
-int branch (0/1, constant for the whole file) recording which mode built it.
-
-**Run parameters file.** Both `submit_sim_to_jet.sh` and
-`submit_data_to_jet.sh` write `<outdir>/run_params_<label>_<REQID>.txt`
-alongside the job output, right after the condor request id is known --
-every resolved CLI flag, the submission timestamp (UTC), the generated
-XML's path, and the pipeline repo's git commit hash at submission time.
-This is the reference for "what produced this output" months later;
-it's written once per submission (one file per `-l` label + REQID pair),
-not per job, since all jobs in one submission share the same parameters.
+**Triggers in simulation.** `fcs_trg_base` (via `StFcsTriggerSimMaker`,
+whose own `Make()` is bypassed) computes 20 of the 64 trigger flags; the
+rest stay 0.
 
 ## data_to_jet
 
-Real STAR MuDst data has already been through official offline production
-(BFC, FCS clustering), so this pipeline just reads it and finds jets:
-MuDst -> SimpleTree (`runMudst.C`) -> jet finding, for every file in a
-catalog list, split evenly across `-j` jobs.
-
-**Step 1 -- get a file list.**
-
 ```
-perl MakeRunList.pl -f mylist.list -l 50
+perl MakeRunList.pl -f mylist.list -l <max_files>      # file catalog query (wave 1, good runs)
+./submit_data_to_jet.sh -f <listfile> -s <0|1> -o <outdir> [-n <files_per_job>] [-j <njobs>] \
+    [-l <label>] [-k <0|1>] [-t <triggers>] [-E <0|1>] [-F <0|1>]
 ```
 
-Queries the STAR file catalog (via the `StarFileList` Perl module) for
-real `daq_reco_mudst` files and writes one URL/path per line, with the
-event count appended as a trailing number (each pipeline job strips it
-automatically). `-l` caps how many files it returns; see `perldoc
-MakeRunList.pl` for all options (run range, production tag, etc. are
-currently fixed for Run 22 pp500 forward production in the script itself).
-This depends on another user's shared Perl library path
-(`/star/u/dkap7827/Tools2/Tools/PerlScripts`); if that ever moves, this
-script needs its `use lib` line updated.
+The list is ordered by run and time and cut into jobs of at most `-n`
+(default 40) consecutive files of one run, so the in-job UE step finds proxy
+events from the same run. `-j` instead splits the list evenly. Each
+SimpleTree gives one `jet_output_<run>_<file>.root` with the same suffix.
 
-**Step 2 -- run the pipeline.**
+Per event the trees carry the fired FCS trigger flags (resolved from
+trigger id and run number, `FcsTriggerDefs.h`, generated from
+`TriggerIDs.txt` by `generate_trigger_defs.py`; three copies, regenerate
+together and rebuild StRoot), `Spin_config` (spin DB, covers 2021-12-14 to
+2022-04-18 only), the event vertex (TPC, VPD, then BBC) and sqrt(s).
+`MakeRunList.pl` needs the Perl library in
+`/star/u/dkap7827/Tools2/Tools/PerlScripts`.
+
+## underlying_event
+
+The UE under a jet is the mean ECal point energy in an R cone at the jet's
+position, averaged over other events (proxy events) of the same group (run in
+data, ptHat bin in simulation) and EM trigger level whose own jet has a
+similar pT (within 5%) and lies near 90 deg in azimuth from the cone, at least
+2.5R away (`ProxySelection.h`, `ProxySearch.h`). Every jet_output file gets
+`reco_ue_E`, `reco_ue_pt`, `reco_ue_nproxy`, `reco_ue_pt_window`, and in
+simulation the truth-level equivalents `truth_ue_*` (from truth jets and
+EM-only truth photons).
+
+The in-job step only sees one job's events. For a simulation sample, rerun it
+over all files of each ptHat bin, one condor job per bin, inputs copied to
+scratch:
 
 ```
-./submit_data_to_jet.sh -f <listfile> -s <0|1> -o <outdir> \
-    [-j <nprocesses>] [-l <label>] [-k <0|1>] [-t <triggers>] [-E <0|1>] \
-    [-F <0|1>]
+./submit_ue_by_pthat.sh -i <sample>[,<sample>...] -w <workdir> [-m minbias|default] [-n]
 ```
-
-| Flag | Meaning |
-|---|---|
-| `-f` | absolute path to the list file from step 1 |
-| `-s` | `1` to keep each intermediate `SimpleTree_mudst_*.root`, `0` to discard it |
-| `-o` | output directory (created if missing) |
-| `-j` | number of parallel jobs to evenly split the list's lines across, default 1 |
-| `-l` | short label used in the generated XML's filename, default `run` |
-| `-k` | `1` to save each job's stdout/stderr under `<outdir>/log/`, `0` to discard them, default `0` |
-| `-t` | comma-separated FCS trigger flag names (see FCS trigger flags below); an event only gets a jetTree entry if at least one of them fired. Omit/empty (default) keeps every event |
-| `-E` | `1` to build reco jets from ECAL hits only (no HCAL), using the ECAL-only fiducial boundary; `0` (default) keeps the previous ECAL+HCAL behavior. See "EM-only reco jets" under sim_to_jet above |
-| `-F` | `1` to build reco jets from FCS points instead of tower hits; `0` (default) keeps the previous hit-based behavior. See "Point-based reco jets" below |
-
-Each job fetches its assigned files (`xrdcp` if xrootd URLs, plain `cp`
-otherwise) and runs `runMudst.C` on each to get its SimpleTree. Runs
-inside the same singularity container as `sim_to_jet`; `root4star` only
-reliably resolves that way under SUMS here.
-
-**1:1 SimpleTree/JetTree linkage.** A job assigned several files does
-*not* combine them into one `RecoJets` call -- it loops and calls
-`RecoJets` once per SimpleTree file, naming each `jet_output_<suffix>.root`
-with the same run/segment suffix as the `SimpleTree_mudst_<suffix>.root`
-it came from, so the two can be linked back together later to look up the
-same event in both.
-
-**FCS trigger flags.** Both the SimpleTree (`data`, written by
-`StSimpleReaderMaker`) and the JetTree (`jetTree`, written by
-`RecoJets`) carry one `int` branch per known FCS trigger name from
-`TriggerIDs.txt` -- 1 if that trigger fired on the event, 0 otherwise.
-Resolved from `StMuEvent::triggerIdCollection().nominal().triggerIds()`
-against `FcsTriggerDefs.h`, a generated lookup table (see
-`generate_trigger_defs.py`) matching each fired numeric trigger id to a
-name using *both* the id and the run number, since the online trigger
-system reassigns numeric ids to different named triggers across the run
-period. (`sim_to_jet` resolves flags differently -- see its own
-section.) `FcsTriggerDefs.h` exists as three copies that must be
-regenerated together: one under `StRoot/StSpinPool/StSimpleReaderMaker/`
-and one each in `data_to_jet/` and `sim_to_jet/`. If `TriggerIDs.txt`
-changes, rerun `python3 generate_trigger_defs.py` from `data_to_jet/`
-(its source-of-truth copy) and rebuild StRoot.
-
-**Per-event spin configuration.** Both the SimpleTree and JetTree also
-carry a single `Spin_config` `int` branch: `StSpinDbMaker`'s combined
-spin4 code (0-10, see `StSpinDbMaker::optimizeTables()` for the encoding
-legend), resolved per event from the real bunch-crossing id against the
-offline `Calibrations/rhic` conditions DB. **`-1` means "no data"** --
-the offline spin DB has real per-fill entries only for **2021-12-14
-through 2022-04-18** (see `SpinPlayground/run_number_to_spin_coverage.sh
-<run_number>` to check a specific run). Any event outside that window
-correctly gets `Spin_config=-1`, not a bug. Resolved in
-`StSimpleReaderMaker::Make()` (`StSpinDbMaker` attached via
-`SetSpinDb()`, only called by `data_to_jet/runMudst.C`). `sim_to_jet`
-carries the same branch for schema consistency but never attaches an
-`StSpinDbMaker`, so it's always `-1` there.
 
 ## jet_scale
 
-Takes a folder of `jet_output_*.root` (JetTrees) files from `sim_to_jet`
-and produces the JSON lookup table used to correct reco jet energies.
-**`sim_to_jet` output only** -- `JetEnergyScaleFineGrid` fits reco jet
-energy against matched truth jet energy (`truth_E`, `match_truth_idx`),
-and only simulated events have truth-level jets to match against;
-`data_to_jet`'s JetTrees (`RecoJets.cpp`) carry no truth branches at all,
-so pointing `-i` at a `data_to_jet` output folder fails. Two steps, one
-job (see "Job-splitting"
-above for why there's no `-j`): `JetEnergyScaleFineGrid` scans every file
-in the folder and fits a scale/response Gaussian on a fine (E, x, y) grid
-(references the shared `shared/JetParameters.h` for the fiducial-cut
-geometry), then `CalibrationMap` fits a smooth model per position bin and
-writes the final JSON (this step does not reference `JetParameters.h`,
-only the intermediate fit tree).
-
-**Cross-section weighting.** Every jet entering a per-(E, x, y) fit is
-weighted by its event's share of the generator cross section rather than
-counted evenly, in both `JetEnergyScaleFineGrid` (weighted histogram,
-`Sumw2` errors) and `JetEnergyScaleFineGrid_em_only` (weighted median);
-the logic is in `jet_scale/JetXSecWeights.h`. Files are grouped by their
-`(mc_pthatmin_gev, mc_pthatmax_gev)` and every event in a ptHat bin gets
-`sigma_bin / sum(N_job)`, summed over all of that bin's jobs -- not the
-per-job `sigma_job / N_job`, which would overcount each bin by however
-many jobs `-w` gave it. This is exact only for **disjoint** ptHat bins
-(a `ptcutmax` on every bin of the `-w` JSON); open-ended bins overlap
-everything above them and the job prints a warning. A file without valid
-`sigma_job`/`N_job` stops the job. The step-1 output tree keeps the raw
-count in `n_entries` and adds `n_eff`, the effective count under the
-weights.
-
 ```
-./submit_jet_scale.sh -i <jettrees_dir> -o <outdir> [-n <json_name>] \
-    [-s <0|1>] [-l <label>] [-k <0|1>] [-E <0|1>]
+./submit_jet_scale_em_only.sh -i <jettrees_dir/> -o <outdir> [-n <json>] [-s <0|1>] [-l <label>] [-k <0|1>]
 ```
 
-| Flag | Meaning |
-|---|---|
-| `-i` | absolute path to a folder of `jet_output_*.root` files |
-| `-o` | output directory (created if missing) |
-| `-n` | filename for the output JSON lookup table, default `JetEnergyScale_lookup.json` |
-| `-s` | `1` to keep the intermediate `jet_calibration.root`, `0` to discard it (default `0`) |
-| `-l` | short label used in the generated XML's filename, default `run` |
-| `-k` | `1` to save stdout/stderr under `<outdir>/log/`, `0` to discard them, default `0` |
-| `-E` | `1` if the input JetTrees are EM-only (built with `sim_to_jet -E 1`): hands off to `submit_jet_scale_em_only.sh` with the same arguments (see `jet_scale_em_only` below); `0` (default) for ordinary ECAL+HCAL JetTrees. Must match how the input was actually built |
+EM-only JES from simulated JetTrees (`sim_to_jet -E 1`; for the calibration
+use a `-C 1` sample with its UE rerun in minimum-bias mode). Reads a flat
+folder (for an organized sample, a folder of links).
 
-Example:
+1. `JetEnergyScaleFineGrid_em_only`: on a 2.5 cm grid (5 cm match radius) and
+   20 truth-energy bins (3-100 GeV), the cross-section-weighted median of
+   scale = (reco_E - reco_ue_E) / (truth_E - truth_ue_E) and of the response.
+   Medians close exactly under numerical inversion (arXiv:1609.05195).
+   `noue` turns the UE subtraction off.
+2. `CalibrationMap_em_only`: per position, fits
+   `A + B/E + C/E^2 + D exp(-(E-E0)^2 / 2 sigma^2)` (sigmaL below E0, sigmaR
+   above), smooths the maps and masks them to the fiducial region. For speed
+   it can run as condor shards (`--shard` / `--merge`, see
+   `JetScalePlayground/submit_calibration_map_diag_condor.sh`).
 
-```
-./submit_jet_scale.sh -i /star/data01/pwg/seanp/tunes/pythia8_mstw2008lo/JetTrees \
-    -o /star/data01/pwg/seanp/tunes/pythia8_mstw2008lo \
-    -n JetEnergyScale_lookup_pythia8_mstw2008lo.json
-```
-
-It can also just be compiled and run directly on the login node instead
-of through SUMS, if preferred (see the two `g++`/`./` lines in
-`jet_scale.xml`'s `<command>`).
-
-## jet_scale_em_only
-
-The EM-only counterpart of `jet_scale`, in the same `jet_scale/` folder as
-separate `_em_only` files so the ECAL+HCAL chain is untouched: the same four
-files (`jet_scale_em_only.xml`, `submit_jet_scale_em_only.sh`,
-`JetEnergyScaleFineGrid_em_only.cpp`, `CalibrationMap_em_only.cpp`), the
-same single-job structure, and the same flags minus `-E` (`submit_jet_scale.sh
--E 1` simply forwards here). Use it for JetTrees built with `sim_to_jet -E 1`
-(ECAL hits only). Anything beyond
-this one-to-one set (closure tests, the sharded condor fit, plotting) is a
-diagnostic, not part of the pipeline, and lives in `JetScalePlayground/`
-and in the separate analysis directory `/star/u/seanp/FCSJetAnalysis/`
-(outside this repository).
-
-It differs from `jet_scale` in three ways, all hardwired:
-
-1. **Median, not Gaussian-fit mode.** Per-(E,x,y) scale/response are plain
-   medians. Numerical inversion with a mode/mean has a proven, non-zero
-   closure bias wherever the response curve is curved (Cukierman &
-   Nachman, arXiv:1609.05195, Eq. 24; it showed up here as a ~8% undershoot
-   at 8-15 GeV); the median closes exactly regardless of the curve's
-   shape (their Eq. 35). The correction is applied once per jet, at its
-   own measured `E_reco` -- no iteration.
-2. **Own fit model.** Inverse-power background `A + B/E + C/E^2` plus an
-   asymmetric skew Gaussian (`sigmaL` below `E0`, `sigmaR` above),
-   smoothed over the grid and masked to the ECAL fiducial acceptance. The
-   JSON's bins carry `sigmaL`/`sigmaR`, not `jet_scale`'s single `sigma`.
-3. **EM-only defaults:** ECAL-only fiducial rectangle/buffer, truth-energy
-   bins from 3 to 100 GeV, `match_radius` 5 cm.
-
-```
-./submit_jet_scale_em_only.sh -i <jettrees_dir> -o <outdir> [-n <json_name>] \
-    [-s <0|1>] [-l <label>] [-k <0|1>]
-```
-
-| Flag | Meaning |
-|---|---|
-| `-i` | absolute path to a folder of EM-only `jet_output_*.root` files |
-| `-o` | output directory (created if missing) |
-| `-n` | filename for the output JSON lookup table, default `JetEnergyScale_lookup_em_only.json` |
-| `-s` | `1` to keep the intermediate `jet_calibration.root`, `0` to discard it (default `0`) |
-| `-l` | short label used in the generated XML's filename, default `run` |
-| `-k` | `1` to save stdout/stderr under `<outdir>/log/`, `0` to discard them, default `0` |
-
-Example:
-
-```
-./submit_jet_scale_em_only.sh -i /star/data01/pwg/seanp/pipeline_output/em_only_production \
-    -o /star/data01/pwg/seanp/em_only_cal
-```
-
-On the 1500-file / 9.8M matched-jet EM-only production sample, the
-resulting map gives a post-correction median scale within 0.994-1.005 of
-unity across 3-58 GeV, with 95.3% of jets landing in a defined map cell and
-a mean per-position reduced chi2 of 1.33 (measured with the closure test in
-`/star/u/seanp/FCSJetAnalysis/`, outside this repository).
+`submit_jet_scale.sh` (`JetEnergyScaleFineGrid`, `CalibrationMap`) is the
+ECAL+HCAL version, with a log-quadratic model and Gaussian-fit modes;
+`-E 1` forwards to the EM-only script.
 
 ## jet_calibration
 
-Takes a folder of `jet_output_*.root` (JetTrees) files and a calibration
-JSON (from `jet_scale`) and adds the corrected branches (`reco_E_corr`,
-`reco_x_F_corr`, `reco_E_uniform_corr`) to those files. **This modifies
-the files in place** -- `ApplyCorrections` opens each with `TFile
-"UPDATE"` and overwrites the tree; there are no separate output files and
-no undo. References the shared `shared/JetParameters.h`
-(`computeFeynmanX`, for `reco_x_F_corr`). It only ever looks up
-whatever (E,x,y) grid is baked into the input calibration JSON, and that
-JSON's schema differs between the ECAL+HCAL and EM-only calibrations, so
-`-E 1` hands off to `submit_jet_calibration_em_only.sh` (see
-`jet_calibration_em_only` below) for an EM-only JSON and EM-only JetTrees.
-
-`ApplyCorrections.cpp` reflects `reco_x` to positive before looking it up
-in the JES JSON grid (`fabs(x)`), matching `jet_scale`'s
-`JetEnergyScaleFineGrid.cpp`, which folds x the same way when building
-that grid (`reflect_to_positive_half`). `reco_y` is looked up unreflected
-(`y`, not `fabs(y)`) -- the y-grid was never folded on the build side, so
-folding it here would look up the wrong cell for every negative-y jet.
-
 ```
-./submit_jet_calibration.sh -i <jettrees_dir> -c <calib_json> -j <nprocesses> \
-    [-l <label>] [-k <0|1>] [-E <0|1>]
+./submit_jet_calibration_em_only.sh -i <jettrees_dir> -c <json> -j <njobs> [-l <label>] [-k <0|1>]
 ```
 
-| Flag | Meaning |
-|---|---|
-| `-i` | absolute path to a folder of `jet_output_*.root` files; every file in it is modified in place |
-| `-c` | absolute path to the calibration JSON lookup table |
-| `-j` | number of parallel jobs to evenly split the folder's files across |
-| `-l` | short label used in the generated XML's filename, default `run` |
-| `-k` | `1` to save each job's stdout/stderr under `<jettrees_dir>/log/`, `0` to discard them, default `0` |
-| `-E` | `1` if the JetTrees are EM-only and `-c` is an EM-only JSON: hands off to `submit_jet_calibration_em_only.sh` with the same arguments; `0` (default) for ECAL+HCAL |
-
-The wrapper asks for a `y`/`N` confirmation before submitting, since this
-is destructive. Example:
-
-```
-./submit_jet_calibration.sh -i /star/data01/pwg/seanp/tunes/pythia8_mstw2008lo/JetTrees \
-    -c /star/data01/pwg/seanp/tunes/pythia8_mstw2008lo/JetEnergyScale_lookup_pythia8_mstw2008lo.json \
-    -j 10
-```
-
-## jet_calibration_em_only
-
-The EM-only counterpart of `jet_calibration`, in the same `jet_calibration/`
-folder: `ApplyCorrections_em_only.cpp`, `jet_calibration_em_only.xml`,
-`submit_jet_calibration_em_only.sh` (which `submit_jet_calibration.sh -E 1`
-forwards to), same flags minus `-E` and same job-splitting. Like `jet_calibration` it **modifies the
-files in place** (`TFile "UPDATE"`, no undo) and asks for a `y`/`N`
-confirmation before submitting. Use it with a JSON from `jet_scale_em_only`
--- the ECAL+HCAL `ApplyCorrections` cannot read that schema (it exits with
-"bin missing field sigma" rather than misapplying it), and this one cannot
-read the ECAL+HCAL schema.
-
-Differences from `jet_calibration`: it evaluates the EM-only model
-(`A + B/E + C/E^2` + asymmetric skew Gaussian) once per jet at its own
-`E_reco`, and it writes only `reco_E_corr` and `reco_x_F_corr` -- there are
-no `*_uniform_corr` branches, since the uniform-correction constants were
-tuned for ECAL+HCAL jets. Jets at (x,y) where the map is undefined
-(outside the buffer-restricted fiducial acceptance) keep `reco_E_corr =
-reco_E` and are counted under "Invalid entries", exactly as in the
-ECAL+HCAL step.
-
-```
-./submit_jet_calibration_em_only.sh -i <jettrees_dir> -c <calib_json> -j <nprocesses> \
-    [-l <label>] [-k <0|1>]
-```
+Adds `reco_E_corr` and `reco_x_F_corr` to every file **in place** (asks for
+confirmation). The EM-only map is evaluated at the UE-subtracted energy,
+`reco_E_corr = (reco_E - reco_ue_E) / scale`. Jets without a UE estimate keep
+`reco_E`; jets outside the map keep the subtracted energy. x is folded to
+positive for the lookup, y is not. `submit_jet_calibration.sh` is the
+ECAL+HCAL version (also writes `reco_E_uniform_corr`); `-E 1` forwards to the
+EM-only script. The two JSON schemas are not interchangeable.
 
 ## pico_analysis
 
-**Not part of the jet-finding chain.** A standalone diagnostics utility
-for Run 22 pp500 forward-tracking production data, which is primarily
-distributed as PicoDst rather than MuDst. Neither mode here produces a
-JetMatcher/RecoJets-compatible SimpleTree, so its output can't feed
-`jet_scale` or `jet_calibration` -- it's kept alongside the jet pipelines
-for future PicoDst-based analyses, not folded into them. Always a single
-job (both modes process their whole input list as one aggregate; no `-j`).
-
 ```
-./submit_pico_analysis.sh -d <mip|hits> -f <listfile> -o <outdir> \
-    [-l <label>] [-k <0|1>]
+./submit_pico_analysis.sh -d <mip|hits> -f <listfile> -o <outdir> [-l <label>] [-k <0|1>]
 ```
 
-| Flag | Meaning |
-|---|---|
-| `-d` | `mip` (MIP peak analysis, `mip_ana.C`: projects tracks onto the FCS ECal/HCal, writes diagnostic plots to `mip_ana.pdf`) or `hits` (flat hit-level tree, `pico_to_root.C`: FCS hit energy/position/detector ID + vertex position per event, no clustering, no jets) |
-| `-f` | absolute path to a text file listing PicoDst files, one per line |
-| `-o` | output directory (created if missing) |
-| `-l` | short label used in the generated XML's filename, default `run` |
-| `-k` | `1` to save stdout/stderr under `<outdir>/log/`, `0` to discard them, default `0` |
-
-Example -- build a list of PicoDst files and run the MIP analysis on them:
-
-```
-ls -1 /gpfs01/star/pwg_tasks/FwdCalib/PROD/forwardCrossSection_2022/27082025/*.root > mylist.list
-./submit_pico_analysis.sh -d mip -f $(pwd)/mylist.list \
-    -o /star/data01/pwg/seanp/pipeline_output/mip_test
-```
-
-No local compilation needed; the `stardev` environment already includes
-the PicoDst/Forward-detector classes these macros use, and `root4star`'s
-ACLiC (`+`) compiles each macro inline at runtime.
-
-## Notes
-
-- Every `submit_*.sh` script runs `star-submit` from the pipeline root
-  (required: each XML's SandBox `<File>` paths are relative to that
-  directory, and SUMS packages them preserving that relative path; an
-  absolute path would repackage everything under the wrong subpath and
-  break each pipeline's `cp <subdir>/* .` flattening step). Right after
-  the `star-submit` call, each script sweeps the newly-created
-  `sched*`/`*.package`/`*.csh`/`*.list`/`*.condor` files into `submit/`, a
-  dedicated scratch folder, so they don't clutter the pipeline root.
-- To hand-edit and submit without a wrapper, see the usage block at the
-  top of the relevant `<pipeline>/<pipeline>.xml`.
-- If `StRoot/` is ever edited, rebuild `.sl73_x8664_gcc485/` (normal
-  `stardev`/cons build flow) before submitting -- jobs use the precompiled
-  cache, they do not rebuild from source.
+`mip`: MIP peaks from tracks projected onto the FCS (`mip_ana.C`). `hits`:
+flat FCS hit tree (`pico_to_root.C`). Single job, ACLiC-compiled at run time.

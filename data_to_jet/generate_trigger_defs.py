@@ -1,20 +1,8 @@
 #!/usr/bin/env python3
-# Regenerates FcsTriggerDefs.h (in this folder, in ../sim_to_jet/, and in
-# ../StRoot/StSpinPool/StSimpleReaderMaker/) from TriggerIDs.txt.
-#
-# TriggerIDs.txt is one line per (name, id, first run, last run) trigger
-# assignment -- the same numeric id gets reassigned to a different named
-# trigger across the run period, so StSimpleReaderMaker/RecoJets/
-# JetMatcher resolve a fired id to a name using (id, run number)
-# together, not id alone. sim_to_jet's JetMatcher.cpp only ever sees
-# flag *names* (StSimpleReaderMaker resolves them for simulated events
-# via fcs_trg_base, not this id/run-range table), but needs its own copy
-# of this header since it's compiled fresh in each SUMS job like
-# data_to_jet/RecoJets.cpp is.
-#
-# Run this whenever TriggerIDs.txt changes, then rebuild StRoot
-# (.sl73_x8664_gcc485) since StSimpleReaderMaker.cxx compiles against its
-# copy of the generated header.
+# Regenerates FcsTriggerDefs.h (here, in ../sim_to_jet/ and in
+# ../StRoot/StSpinPool/StSimpleReaderMaker/) from TriggerIDs.txt, one line per
+# (name, id, first run, last run): ids are reused across the run period, so a
+# fired id is resolved to a name with the run number. Rebuild StRoot afterwards.
 #
 # Usage: python3 generate_trigger_defs.py
 
@@ -51,10 +39,7 @@ def main():
         if len(origs) == 1:
             flagname_for_origname[next(iter(origs))] = san
         else:
-            # Sanitized collision (e.g. "FCS15-DiELEA" and "FCS15_DiELEA"
-            # both sanitize to "FCS15_DiELEA") -- these are genuinely
-            # different trigger ids assigned similar-looking names, not a
-            # typo, so keep them as distinct flags by suffixing the id.
+            # Different ids whose names sanitize alike: keep both, suffixed
             for name, tid, r0, r1 in rows:
                 if name in origs:
                     flagname_for_origname[name] = f"{san}_{tid}"

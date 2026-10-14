@@ -6,13 +6,8 @@
     *replace RejectGE() with Filter()
     *fix the filter function so that it takes a StarGenEvent rather than a StarGenParticleMaster
 
-  Local override of StarGenerator/FILT/FcsJetFilter (central STAR software):
-  the flux threshold (ETHR, GeV) that decides whether a generated event is
-  kept is exposed as a settable member instead of a hardcoded constant, so
-  it can be configured per-submission (see starsim_pythia8_filter.C /
-  starsim_pythia6_filter.C and submit_sim_to_jet.sh's -e flag). Default
-  matches the original hardcoded value (50.0 GeV) so existing behavior is
-  unchanged unless -e is passed.
+  Local copy of the central STAR FcsJetFilter with the flux threshold
+  (ETHR, GeV, default 50) settable per submission (submit_sim_to_jet.sh -e).
 */
 
 #ifndef STAR_FcsJetFilter

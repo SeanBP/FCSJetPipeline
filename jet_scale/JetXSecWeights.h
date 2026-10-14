@@ -1,29 +1,14 @@
 #ifndef JET_XSEC_WEIGHTS_H
 #define JET_XSEC_WEIGHTS_H
 
-// Per-file MC cross-section weights for the JES fits, shared by
-// JetEnergyScaleFineGrid.cpp and JetEnergyScaleFineGrid_em_only.cpp.
+// Per-file MC cross-section weights, shared by the JES steps.
 //
-// Every sim_to_jet JetTree carries sigma_job (PYTHIA's cross section for
-// that job's ptHatMin/ptHatMax cut, mb) and N_job (its generated trial
-// count), constant for the whole file (see JetMatcher.cpp). An event's
-// share of integrated luminosity is sigma/N, but N has to be summed over
-// EVERY job generated with the same ptHat cut, not taken per job:
-// submit_sim_to_jet.sh -w gives different ptHat bins different numbers of
-// jobs, so a per-job sigma_job/N_job would overcount each bin by however
-// many jobs it happened to get. So files are grouped by
-// (mc_pthatmin_gev, mc_pthatmax_gev) and every event in a bin gets
-//
-//     w_bin = sigma_bin / sum_jobs(N_job),
-//
-// with sigma_bin the N_job-weighted mean of that bin's sigma_job values.
-// This is exact only if the ptHat bins are DISJOINT (every bin has a
-// ptcutmax); open-ended bins (ptcutmax = -1) overlap every bin above them
-// and the overlap region is then counted once per sample covering it --
-// ComputeXSecWeights() warns if it sees that.
-//
-// Weights are returned normalised to the largest one (only relative
-// weights matter to a mean/median), so they stay well inside float range.
+// Files are grouped by ptHat bin (mc_pthatmin_gev, mc_pthatmax_gev) and every
+// event in a bin gets w_bin = sigma_bin / sum_jobs(N_job), with sigma_bin the
+// N_job-weighted mean of the bin's sigma_job (bins can hold different numbers
+// of jobs). Exact only for disjoint bins; ComputeXSecWeights() warns about
+// open-ended bins (ptcutmax = -1) that overlap others. Weights are normalised
+// to the largest.
 
 #include <TFile.h>
 #include <TTree.h>
@@ -37,18 +22,10 @@
 #include <utility>
 #include <cstring>
 
-// Decodes a sigma_job that holds a Pythia 6 cross section in the raw form
-// the STAR framework reports it. StarPythia6::Stats() reads PYTHIA's cross
-// section through a PyInt5_t struct that omits the common block's leading
-// NGENPD integer, so every access is 4 bytes off: what comes back as
-// "sigmaGen" is a double whose LOW 32 bits are the HIGH 32 bits of the real
-// value (sign, exponent and the top 20 mantissa bits) and whose high 32
-// bits are zero -- a denormal around 5e-315. Moving those bits back into
-// place gives the real value to a relative precision of about 1e-6 (it
-// agrees with PYSTAT's own printed cross section). sim_to_jet's readMudst.C
-// applies the same decoding before storing sigma_job, so a tree normally
-// holds the decoded value already; any normal positive value (that, or
-// Pythia 8's) is returned as is.
+// Decodes a raw Pythia 6 sigma_job: StarPythia6::Stats() reads the cross
+// section 4 bytes off, giving a denormal (~5e-315) whose low word is the true
+// value's high word. readMudst.C already decodes before storing, so normal
+// values are returned unchanged.
 inline double DecodePythia6Sigma(double sigma_job)
 {
     if (!(sigma_job > 0.0) || sigma_job > 1e-300)

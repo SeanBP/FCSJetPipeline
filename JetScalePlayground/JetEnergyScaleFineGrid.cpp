@@ -1,8 +1,6 @@
-// DIAGNOSTICS FORK of ../jet_scale/JetEnergyScaleFineGrid.cpp (production) -- same
-// algorithm, plus an EM-only-conditional Emax (see Emax_em_only below).
-// ECAL+HCAL behavior (em_only=0) is byte-for-byte unchanged from
-// production. Once validated against the new EM-only production, merge
-// this Emax split back into the production file.
+// Diagnostics copy of the JES grid step with an em_only switch (argv[2]),
+// unweighted medians, and argument overrides of match_radius, E0 and Emax.
+// Driven by run_jet_energy_scale_diag.sh.
 
 #include <TFile.h>
 #include <TTree.h>
@@ -23,9 +21,9 @@
 
 // CONFIGURATION
 
+// Hardcoded default input; normally given as argv[1]
 std::string input_dir = "/star/data01/pwg/seanp/tunes/pythia8_nnpdf23lo/JetTrees/";
 std::string tree_name = "jetTree";
-// input_dir may be overridden via argv[1] in main()
 
 // reflection behavior
 bool reflect_to_positive_half = true;
@@ -39,21 +37,8 @@ double Emax = 200;
 int n_bins_E = 20;
 double energy_curvature = 1.5;
 
-// EM-only truth jets (JetMatcher.cpp em_only mode clusters truth
-// particles from photons only, produced within a tight vertex-
-// displacement window of the primary vertex) carry only their jet's
-// prompt-photon energy, so they're systematically much lower energy than
-// a full hadronic truth jet at the same pT-hat -- the production Emax=200
-// is mostly empty space for this sample. Data-driven from the complete
-// 21-bin/420-job EM-only pT-hat scan (FCSJetAnalysis/
-// compare_energy_distributions_temp.cpp): 98% of EM-only truth jets sit
-// below 32.4 GeV vs. 96.4 GeV for the ECAL+HCAL reference (ratio 0.34).
-// The cap itself is pushed out to the 99.9% cliff (71.0 GeV) rather than
-// the 98% cliff, matching FCSJetAnalysis/JetStatistics.cpp's own
-// Emax=70 -- an optimizer sweep there found job coverage barely moved
-// (99.74% -> 99.62%) scanning Emax from 32.4 up to 70 GeV, so there was
-// no reason to leave that tail out of the fit range. Keep the two files'
-// values in sync by hand if either changes.
+// EM-only truth jets carry only the prompt-photon energy, so their energies
+// are much lower (98% below 32 GeV); the EM-only Emax keeps 99.9% of them.
 const double Emax_ecal_hcal = 200;
 const double Emax_em_only = 70;
 
@@ -151,20 +136,9 @@ struct BinAccum
     std::vector<float> scale_vals;
 };
 
-// f_med(x) = median[Y|X=x], R_med(x) = median[Y/x|X=x] (Cukierman & Nachman,
-// "Mathematical Properties of Numerical Inversion for Jet Calibrations",
-// arXiv:1609.05195, Eqs. 29-30) -- replaces the earlier Gaussian-fit-mode
-// approach (f_mo/R_mo, Eqs. 3-4). That paper proves (Sec. 3.3.1, Eq. 35)
-// that median-based numerical inversion achieves EXACT closure for any
-// response function f, whereas mean- or mode-based calibration only closes
-// if f is linear (Eqs. 10, 20-23) -- and the non-closure grows with both
-// the response curve's curvature f''(x) and the resolution sigma(x) (Eq.
-// 24), which is exactly why the mode-based map's downstream closure test
-// showed its worst undershoot right where CalibrationMap.cpp's skew-
-// Gaussian bump (large f'') coincides with poor low-energy resolution.
-// Median is a strictly stronger fix than the median/MAD-SEEDED Gaussian
-// fit this replaces: that only fixed the seed against tail bias, it didn't
-// change which central-tendency definition was actually being reported.
+// Bin medians f_med(x) = median[Y|X=x], R_med(x) = median[Y/x|X=x]: exact
+// closure under numerical inversion for any response shape
+// (Cukierman & Nachman, arXiv:1609.05195, Eqs. 29-30, 35).
 double median_of(std::vector<double> v)
 {
     size_t mid = v.size() / 2;
@@ -187,13 +161,8 @@ FitResult median_fit(const std::vector<double> &v)
 
     double med = median_of(v);
 
-    // MAD-based robust sigma, used only to get an approximate standard
-    // error on the median below (Kenney & Keeping's asymptotic result for
-    // an approximately-Gaussian-core distribution: SE_median ~
-    // sqrt(pi/2)*sigma/sqrt(n) = 1.2533*sigma/sqrt(n)) -- this feeds
-    // CalibrationMap.cpp's downstream fit only as a relative point weight,
-    // not as a rigorous confidence interval, so the Gaussian-core
-    // approximation is good enough here.
+    // MAD-based sigma, only for an approximate standard error of the median
+    // (1.2533 sigma / sqrt(n)), used downstream as a relative fit weight
     std::vector<double> absdev(v.size());
     for (size_t i = 0; i < v.size(); i++)
         absdev[i] = std::fabs(v[i] - med);
@@ -205,9 +174,7 @@ FitResult median_fit(const std::vector<double> &v)
     r.mu = med;
     r.mu_err = 1.2533 * mad_sigma / std::sqrt((double)v.size());
     r.sigma = mad_sigma;
-    // sigma_err/chi2_ndf are meaningless for a plain median (no fit was
-    // performed) and aren't consumed downstream -- left at their NaN
-    // defaults from FitResult's constructor.
+    // sigma_err/chi2_ndf stay NaN (no fit)
 
     return r;
 }
@@ -219,24 +186,14 @@ int main(int argc, char** argv)
     if (argc > 1)
         input_dir = argv[1];
 
-    // argv[2]: 1 = these JetTrees are EM-only (ECAL hits only, no HCAL) --
-    // use the ECAL-only fiducial rectangle/buffer instead of the default
-    // ECAL+HCAL one. 0/omit = previous default behavior.
+    // argv[2]: 1 = EM-only JetTrees (ECAL-only fiducial rectangle and buffer)
     bool em_only = (argc > 2) && (std::string(argv[2]) == "1");
 
-    // argv[3]: optional match_radius override, for testing statistics-vs-
-    // smoothing tradeoffs without editing this file each time (see
-    // match_radius's declaration above for what it controls).
+    // argv[3]: match_radius override
     if (argc > 3)
         match_radius = std::atof(argv[3]);
 
-    // argv[4]: optional E0 (truth-energy binning floor) override. Default
-    // 10 GeV left the lowest response points around ~11.6 GeV, which
-    // turned out to be above where CalibrationMap.cpp's Gaussian bump
-    // fits actually want their peak (E0~6 GeV, found via direct chi2 scan
-    // of r10 production data) -- the fit was extrapolating into a region
-    // with no real data. Lowering this gives actual low-E statistics
-    // there instead of relying on extrapolation.
+    // argv[4]: E0 (truth-energy binning floor) override
     if (argc > 4)
         E0 = std::atof(argv[4]);
 
@@ -245,12 +202,8 @@ int main(int argc, char** argv)
 
     Emax = em_only ? Emax_em_only : Emax_ecal_hcal;
 
-    // argv[5]: optional Emax (truth-energy binning ceiling) override. Truth
-    // jets above Emax are dropped outright (FindBin returns -1), not merged
-    // into the top bin -- so raising this recovers real statistics rather
-    // than just extending an empty axis. min_total_entries still gates each
-    // resulting (position, E) bin, so any new high-E bins that end up too
-    // sparse are simply skipped rather than polluting the fit.
+    // argv[5]: Emax (truth-energy binning ceiling) override; jets above it
+    // are dropped
     if (argc > 5)
         Emax = std::atof(argv[5]);
 

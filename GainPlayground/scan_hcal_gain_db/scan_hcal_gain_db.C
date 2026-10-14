@@ -17,19 +17,10 @@
 // the real period boundaries and produce real correction files, with no
 // manual DB inspection needed.
 //
-// METHOD: samples getGainCorrection(det,id) for EVERY real HCAL channel
-// at regular date intervals (stepDays) across [startDate, endDate), via
-// the same live StFcsDb call GainPlayground/get_fcs_gain.C uses -- NOT
-// raw SQL blob parsing. (StDbLib's exact multi-entry conflict-resolution
-// rule for overlapping DB validity windows was investigated and left
-// unresolved in SpinPlayground/README.md; always asking the real
-// framework API directly, rather than re-deriving its resolution logic
-// in SQL, sidesteps that whole question -- this is guaranteed to match
-// what the production pipeline itself sees, by construction.) Repeated
-// SetDateTime()+InitRun() calls within one process correctly refresh
-// StFcsDb's cached values -- verified directly (Aug 2026) by scanning
-// two dates known to give different ECAL gainCorrection and confirming
-// both the change and the reversion back to the first date's value.
+// METHOD: samples getGainCorrection(det,id) for every HCAL channel every
+// stepDays across [startDate, endDate) through the live StFcsDb API (as
+// GainPlayground/get_fcs_gain.C), so it matches what the pipeline sees.
+// Repeated SetDateTime()+InitRun() calls refresh StFcsDb's cached values.
 // Consecutive samples with an identical full per-channel map are
 // coalesced into one period; a period boundary is drawn wherever ANY
 // channel's value changes between consecutive samples.
@@ -47,11 +38,8 @@
 //
 // CAUTION: overwrites manifest.txt and adds/updates correction files
 // directly in data_to_jet/hcal_gain_corrections/. Backs up any existing
-// manifest.txt to manifest.txt.bak first (overwriting any previous
-// backup) -- this repo has no version control, so that single backup is
-// the only undo available. The correction-factor files themselves are
-// NOT backed up (they're regenerated deterministically from the DB by
-// this same script, so there's nothing to lose by overwriting them).
+// manifest.txt to manifest.txt.bak first. Correction files are regenerated
+// from the DB, so they are not backed up.
 
 class StChain;
 StChain *chain;

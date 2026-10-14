@@ -1,21 +1,13 @@
-// EM-only version of ApplyCorrections.cpp (same folder): applies a JES
-// lookup JSON from the EM-only jet_scale step (CalibrationMap_em_only) to JetTrees,
-// IN PLACE (TFile "UPDATE", no undo), adding reco_E_corr and reco_x_F_corr.
-// Kept as a separate file so the ECAL+HCAL step is untouched. Differs from
-// it in:
-//   1. Model: reads the EM-only JSON schema ({i, j, A, B, C, D, E0, sigmaL,
-//      sigmaR}) and evaluates scale(x,y,E) = A + B/E + C/E^2 + D *
-//      exp(-(E-E0)^2 / 2 sigma^2), sigma = sigmaL (E<E0) or sigmaR (E>=E0),
-//      instead of the log-quadratic + symmetric-Gaussian form. The
-//      correction is still one direct evaluation per jet at its own
-//      measured E_reco (numerical inversion): E_corr = E_reco / scale.
-//   2. No "uniform" correction (reco_E_uniform_corr/reco_x_F_uniform_corr):
-//      its UNI_A/B/C constants were tuned for the ECAL+HCAL production and
-//      are meaningless for EM-only jets.
-// Jets whose (x,y) falls where the map is undefined (outside the
-// buffer-restricted fiducial acceptance -> NaN) are left uncorrected
-// (E_corr = E_reco) and counted as "Invalid entries", same as the
-// ECAL+HCAL step.
+// Applies an EM-only JES lookup JSON (CalibrationMap_em_only) to JetTrees in
+// place (TFile "UPDATE", no undo), adding reco_E_corr and reco_x_F_corr.
+//
+// scale(x,y,E) = A + B/E + C/E^2 + D exp(-(E-E0)^2 / 2 sigma^2), sigma = sigmaL
+// below E0, sigmaR above, evaluated at the jet's own UE-subtracted energy
+// E = reco_E - reco_ue_E (numerical inversion): reco_E_corr = E / scale.
+// A jet without a UE estimate keeps reco_E ("No UE estimate"); one outside the
+// map (NaN, beyond the buffered fiducial region) gets the subtracted but
+// uncalibrated energy ("Invalid entries"). A file without reco_ue_E is an
+// error unless "noue" is given (map built without subtraction).
 
 #include <TFile.h>
 #include <TTree.h>
@@ -170,7 +162,7 @@ int main(int argc, char** argv)
 {
     if (argc < 3)
     {
-        std::cerr << "Usage: " << argv[0] << " file_list.list calibration.json" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " file_list.list calibration.json [noue]" << std::endl;
         return 1;
     }
 
@@ -178,13 +170,14 @@ int main(int argc, char** argv)
 
     gROOT->SetBatch(kTRUE);
 
-    // Floor on the energy the model is evaluated at (the map has 1/E and
-    // 1/E^2 terms, so E=0 would be a division by zero). Well below the
-    // 3 GeV bottom of the fit range.
+    // Floor on the evaluation energy (the model has 1/E terms), well below
+    // the 3 GeV bottom of the fit range
     const double E_FLOOR = 1.0;
 
     std::string list_fname = argv[1];
     std::string calib_json = argv[2];
+    const bool subtract_ue = !(argc > 3 && std::string(argv[3]) == "noue");
+    long no_ue_counter = 0;
     std::string tree_name = "jetTree";
 
     std::cout << "Opening JSON: " << calib_json << std::endl;
@@ -444,18 +437,30 @@ int main(int argc, char** argv)
         tree->SetBranchAddress("reco_y",&reco_y);
         tree->SetBranchAddress("reco_eta",&reco_eta);
 
-        // Per-event sqrt(s) for x_F below -- see ApplyCorrections.cpp's
-        // identical guard/comment.
+        // Per-event sqrt(s) for x_F (fixed simulation value if absent)
         Double_t event_sqrt_s_gev = kSqrtS_MainRun22_GeV;
         if (tree->GetBranch("event_sqrt_s_gev")) tree->SetBranchAddress("event_sqrt_s_gev",&event_sqrt_s_gev);
+
+        std::vector<float>* reco_ue_E = 0;
+        std::vector<int>* reco_ue_nproxy = 0;
+        if (subtract_ue)
+        {
+            if (!tree->GetBranch("reco_ue_E") || !tree->GetBranch("reco_ue_nproxy"))
+            {
+                std::cerr << "ERROR: no reco_ue_E/reco_ue_nproxy branches; run underlying_event/UnderlyingEvent"
+                          << " first, or pass noue for a map built without UE subtraction" << std::endl;
+                return 1;
+            }
+            tree->SetBranchAddress("reco_ue_E",&reco_ue_E);
+            tree->SetBranchAddress("reco_ue_nproxy",&reco_ue_nproxy);
+        }
 
         std::vector<float> reco_E_corr;
         std::vector<float>* reco_E_corr_ptr = &reco_E_corr;
         TBranch* b_corr =
             tree->Branch("reco_E_corr",&reco_E_corr_ptr);
 
-        // Corrected x_F: corrected energy + unaffected reco_eta (see
-        // computeFeynmanX in JetParameters.h for why E, not pT, is used).
+        // Corrected x_F from the corrected energy and reco_eta
         std::vector<float> reco_x_F_corr;
         std::vector<float>* reco_x_F_corr_ptr = &reco_x_F_corr;
         TBranch* b_xF_corr =
@@ -496,6 +501,17 @@ int main(int argc, char** argv)
                 total_jets++;
 
                 double E = reco_E->at(j);
+                if (subtract_ue)
+                {
+                    if (reco_ue_nproxy->at(j) <= 0)
+                    {
+                        no_ue_counter++;
+                        reco_E_corr.push_back(E);
+                        reco_x_F_corr.push_back((float)computeFeynmanX(E, reco_eta->at(j), event_sqrt_s_gev));
+                        continue;
+                    }
+                    E -= reco_ue_E->at(j);
+                }
                 // x is reflected positive to match the grid (JetEnergyScaleFineGrid.cpp
                 // folds x, not y -- folding y here would look up the wrong bin).
                 double x = std::fabs(reco_x->at(j));
@@ -562,6 +578,8 @@ int main(int argc, char** argv)
     std::cout << "Total jets      : " << total_jets << std::endl;
     std::cout << "Corrected       : " << corrected << std::endl;
     std::cout << "Invalid entries : " << invalid_counter << std::endl;
+    if (subtract_ue)
+        std::cout << "No UE estimate  : " << no_ue_counter << std::endl;
 
     return 0;
 }

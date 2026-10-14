@@ -1,19 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <!--
-    EM-only jet-energy-scale calibration pipeline: the EM-only counterpart
-    of jet_scale.xml (same folder). Takes a folder of EM-only sim_to_jet
-    JetTrees (built with -E 1) and produces the JSON lookup table used to
-    correct reco jet energies. Two steps, one job:
-      1. JetEnergyScaleFineGrid_em_only: matches reco/truth jets and takes
-         the per-bin MEDIAN scale/response on a fine (E,x,y) grid ->
-         jet_calibration.root (uses ../shared/JetParameters.h for the
-         ECAL-only fiducial-cut geometry; EM-only is hardwired, no flag)
-      2. CalibrationMap_em_only: fits a smooth model (inverse-power
-         background + asymmetric skew Gaussian) per (x,y) bin from that
-         tree, writes the final JSON lookup. The JSON has the EM-only schema
-         (sigmaL/sigmaR): apply it with jet_calibration_em_only.xml, not
-         jet_calibration.xml.
+    EM-only jet-energy-scale calibration: a folder of EM-only sim_to_jet
+    JetTrees (-E 1, UE branches at both levels) -> JSON lookup table.
+      1. JetEnergyScaleFineGrid_em_only: weighted median scale/response of
+         matched jets on a fine (E,x,y) grid -> jet_calibration.root
+      2. CalibrationMap_em_only: smooth model (inverse-power background +
+         asymmetric Gaussian) per (x,y) bin -> JSON (EM-only schema, applied
+         by jet_calibration_em_only.xml)
 
     Configurable per submission (filled in by submit_jet_scale_em_only.sh,
     see its -h):
@@ -26,13 +20,9 @@
     star-submit must run from the pipeline root, since the SandBox
     <File> paths below are relative to it.
 
-    Single job (nProcesses=1): memory/CPU-bound (whole-folder scan + a
-    Minuit2 fit per position bin), not IO-bound, so not split across many
-    jobs; can also be compiled and run directly on the login node.
-    JetEnergyScaleFineGrid's peak memory scales with total matched-jet
-    count (each jet is duplicated across every nearby fine-grid point), so
-    a large input folder can exceed condor's default 2048 MB cgroup limit:
-    <ResourceUsage><Memory> below requests more headroom for every submission.
+    Single job: one scan of the whole folder plus one fit per position bin.
+    Peak memory grows with the number of matched jets (each is copied to
+    every nearby grid point), hence the <Memory> request below.
 -->
 
 <job nProcesses="1">

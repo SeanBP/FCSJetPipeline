@@ -1,7 +1,5 @@
-// macro to instantiate the Geant3 from within
-// STAR  C++  framework and get the starsim prompt
-// To use it do
-//  root4star starsim.C
+// starsim with Pythia8 and the FCS generator-level flux filter.
+// Run as root4star starsim.C(...)
 
 class St_geant_Maker;
 St_geant_Maker *geant_maker = 0;
@@ -21,7 +19,6 @@ void geometry( TString tag, Bool_t agml=true )
   TString cmd = "DETP GEOM "; cmd += tag;
   if ( !geant_maker ) geant_maker = (St_geant_Maker *)chain->GetMaker("geant");
   geant_maker -> LoadGeometry(cmd);
-  //  if ( agml ) command("gexec $STAR_LIB/libxgeometry.so");
 }
 // ----------------------------------------------------------------------------
 void command( TString cmd )
@@ -52,13 +49,13 @@ void Pythia8( TString config="pp:W", Double_t ckin3=0.0, Double_t ckin4=-1.0, In
       
       pythia8->Set("WeakSingleBoson:all=off");
       pythia8->Set("WeakSingleBoson:ffbar2W=on");
-      pythia8->Set("24:onMode=0");              // switch off all W+/- decaus
+      pythia8->Set("24:onMode=0");              // switch off all W+/- decays
       pythia8->Set("24:onIfAny 11 -11");        // switch on for decays to e+/-
       
     }
   if ( config=="pp:minbias" )
     {
-      // Real Run 22 energy: sqrt(s)~508.4 GeV (254.2 GeV/nucleon), not 500.
+      // Run 22 sqrt(s) = 508.4 GeV
       pythia8->SetFrame("CMS", 508.4);
       pythia8->SetBlue("proton");
       pythia8->SetYell("proton");    
@@ -86,10 +83,9 @@ void Pythia8( TString config="pp:W", Double_t ckin3=0.0, Double_t ckin4=-1.0, In
 
   // Pythia8 Tune:pp preset (e.g. 14=Monash, 33=Detroit, 3=Tune 2C, 5=Tune
   // 4C -- see pythia8.web.cern.ch/manuals/pythia8317/Tunes.html). Applied
-  // before the PDF override below so an explicit pdfSet still wins. NOTE:
-  // StarPythia8::Init() re-Sets Detroit's MPI/ColourReconnection values
-  // after this, so for presets other than 33 those five parameters are
-  // Detroit's, not the preset's (see PRODUCTION_TRACKER.md section 8.5).
+  // before the PDF override below so an explicit pdfSet still wins.
+  // StarPythia8::Init() re-sets Detroit's five MPI/ColourReconnection values
+  // afterwards, so presets other than 33 keep Detroit's for those.
   if ( ppTune > 0 )
     pythia8 -> Set(Form("Tune:pp = %d", ppTune));
 
@@ -109,7 +105,6 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t p
 
   gROOT->ProcessLine(".L bfc.C");
   {
-    //TString simple = "y2014x geant gstar usexgeom agml sdt20140530 DbV20150316 misalign ";
     TString simple = "y2023 geant gstar usexgeom agml ";
     bfc(0, simple );
   }
@@ -150,7 +145,6 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t p
   ((FcsJetFilter*)filter) -> SetEnergyThreshold( fcsFilterEthr );
   _primary -> AddFilter( filter );
 
-  //_primary->SetAttr("FilterKeepAll", int(1));  // keep rejected-event tracks too
 #endif
 
   // Particle acceptance cuts passed to geant (ptmin, ptmax / etamin, etamax / phimin, phimax)

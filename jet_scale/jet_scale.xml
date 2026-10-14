@@ -1,9 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <!--
-    Jet-energy-scale calibration pipeline: takes a folder of sim_to_jet
-    JetTrees and produces the JSON lookup table used to correct reco jet
-    energies. Two steps, one job:
+    ECAL+HCAL jet-energy-scale calibration: a folder of sim_to_jet JetTrees
+    -> JSON lookup table. Two steps, one job:
       1. JetEnergyScaleFineGrid: matches reco/truth jets, fits a
          scale/response Gaussian on a fine (E,x,y) grid -> jet_calibration.root
          (uses ../shared/JetParameters.h for the fiducial-cut geometry)
@@ -20,13 +19,9 @@
     star-submit must run from the pipeline root, since the SandBox
     <File> paths below are relative to it.
 
-    Single job (nProcesses=1): memory/CPU-bound (whole-folder scan + a
-    Minuit2 fit per position bin), not IO-bound, so not split across many
-    jobs; can also be compiled and run directly on the login node.
-    JetEnergyScaleFineGrid's peak memory scales with total matched-jet
-    count (each jet is duplicated across every nearby fine-grid point), so
-    a large input folder can exceed condor's default 2048 MB cgroup limit:
-    <ResourceUsage><Memory> below requests more headroom for every submission.
+    Single job: one scan of the whole folder plus one fit per position bin.
+    Peak memory grows with the number of matched jets (each is copied to
+    every nearby grid point), hence the <Memory> request below.
 -->
 
 <job nProcesses="1">

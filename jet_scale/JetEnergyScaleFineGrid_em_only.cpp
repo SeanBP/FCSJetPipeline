@@ -1,20 +1,17 @@
-// EM-only version of JetEnergyScaleFineGrid.cpp (same folder) -- step 1 of
-// the EM-only JES calibration (see the README's jet_scale_em_only section). Kept as
-// a separate file so the ECAL+HCAL production step is untouched. Differs
-// from it in three ways, all validated by closure test on the EM-only
-// production sample:
-//   1. Hardwired EM-only: ECAL-only fiducial rectangle/buffer and the
-//      EM-only energy range below; there is no em_only switch.
-//   2. Per-bin central tendency is the plain MEDIAN (median_fit below), not
-//      a Gaussian-fit mode. Numerical inversion with a mode/mean has a
-//      proven, non-zero closure bias wherever the response curve is curved
-//      (Cukierman & Nachman, arXiv:1609.05195, Eq. 24); the median closes
-//      exactly regardless of the curve's shape (Eq. 35).
-//   3. Defaults tuned for the EM-only sample: E0=3 GeV, Emax=100 GeV,
-//      match_radius=5 cm (overridable via argv, see main()).
+// Step 1 of the EM-only JES calibration: per position on a fine x-y grid and
+// per truth-energy bin, the weighted median scale and response of matched
+// EM-only jets, written to a "bins" tree for CalibrationMap_em_only.
+// Medians give exact closure under numerical inversion for any response
+// shape (Cukierman & Nachman, arXiv:1609.05195, Eq. 35).
+//
+// The underlying event is subtracted at both levels by default:
+// scale = (reco_E - reco_ue_E) / (truth_E - truth_ue_E), binned in subtracted
+// truth energy, using pairs where both jets have an estimate. Input should be
+// a calibration sample (sim_to_jet -C 1, UE rerun in minbias mode). A file
+// without the UE branches is an error unless "noue" is given.
 //
 // Usage: JetEnergyScaleFineGrid_em_only <jettrees_dir/> [match_radius_cm]
-//        [E0_GeV] [Emax_GeV]   (an empty string "" keeps that slot's default)
+//        [E0_GeV] [Emax_GeV] [noue]   (an empty string "" keeps that slot's default)
 
 #include <TFile.h>
 #include <TTree.h>
@@ -36,9 +33,9 @@
 
 // CONFIGURATION
 
+// Hardcoded default input; normally given as argv[1]
 std::string input_dir = "/star/data01/pwg/seanp/tunes/pythia8_nnpdf23lo/JetTrees/";
 std::string tree_name = "jetTree";
-// input_dir may be overridden via argv[1] in main()
 
 // reflection behavior
 bool reflect_to_positive_half = true;
@@ -46,26 +43,9 @@ bool reflect_to_positive_half = true;
 // thresholds
 int min_total_entries = 5;
 
-// energy binning (truth energy, GeV; bin edges follow a power law with
-// energy_curvature, so bins are finer at low E).
-//
-// EM-only truth jets (JetMatcher.cpp em_only mode clusters truth
-// particles from photons only, produced within a tight vertex-
-// displacement window of the primary vertex) carry only their jet's
-// prompt-photon energy, so they're systematically much lower energy than
-// a full hadronic truth jet at the same pT-hat -- the ECAL+HCAL Emax=200
-// is mostly empty space for this sample (98% of EM-only truth jets sit
-// below ~32 GeV vs. ~96 GeV for the ECAL+HCAL reference).
-//
-// E0 (binning floor) = 3 GeV: the skew-Gaussian bump CalibrationMap fits
-// peaks around E0~6 GeV, so a higher floor (the ECAL+HCAL default is 10,
-// which left the lowest response point near ~11.6 GeV) forces the fit to
-// extrapolate into a region with no real data. Emax (binning ceiling) =
-// 100 GeV: truth jets above Emax are dropped outright (FindBin returns
-// -1), not merged into the top bin, so raising it recovers real
-// statistics rather than just extending an empty axis;
-// min_total_entries still gates each resulting (position, E) bin, so any
-// too-sparse high-E bins are simply skipped rather than polluting the fit.
+// Truth-energy binning, GeV; edges follow a power law in energy_curvature
+// (finer at low E). EM-only truth jets are mostly below ~32 GeV; E0 = 3 GeV
+// reaches below the response bump near 6 GeV. Jets above Emax are dropped.
 double E0 = 3;
 double Emax = 100;
 int n_bins_E = 20;
@@ -167,26 +147,9 @@ struct BinAccum
     std::vector<float> w_vals;
 };
 
-// f_med(x) = median[Y|X=x], R_med(x) = median[Y/x|X=x] (Cukierman & Nachman,
-// "Mathematical Properties of Numerical Inversion for Jet Calibrations",
-// arXiv:1609.05195, Eqs. 29-30) -- replaces the earlier Gaussian-fit-mode
-// approach (f_mo/R_mo, Eqs. 3-4). That paper proves (Sec. 3.3.1, Eq. 35)
-// that median-based numerical inversion achieves EXACT closure for any
-// response function f, whereas mean- or mode-based calibration only closes
-// if f is linear (Eqs. 10, 20-23) -- and the non-closure grows with both
-// the response curve's curvature f''(x) and the resolution sigma(x) (Eq.
-// 24), which is exactly why the mode-based map's downstream closure test
-// showed its worst undershoot right where CalibrationMap.cpp's skew-
-// Gaussian bump (large f'') coincides with poor low-energy resolution.
-// Median is a strictly stronger fix than the median/MAD-SEEDED Gaussian
-// fit this replaces: that only fixed the seed against tail bias, it didn't
-// change which central-tendency definition was actually being reported.
-//
-// Each entry v[i] carries its MC cross-section weight w[i] (see
-// JetXSecWeights.h), so this is the WEIGHTED median: the value at which the
-// cumulative weight, in order of increasing v, reaches half the total. With
-// equal weights it reduces to the ordinary median (including the midpoint
-// average for an even count).
+// Weighted median (cumulative weight reaches half the total; with equal
+// weights, the ordinary median) of each bin: f_med(x) = median[Y|X=x],
+// R_med(x) = median[Y/x|X=x] (arXiv:1609.05195, Eqs. 29-30).
 double median_of(const std::vector<double> &v, const std::vector<double> &w)
 {
     std::vector<size_t> order(v.size());
@@ -218,14 +181,9 @@ FitResult median_fit(const std::vector<double> &v, const std::vector<double> &w)
 
     double med = median_of(v, w);
 
-    // MAD-based robust sigma, used only to get an approximate standard
-    // error on the median below (Kenney & Keeping's asymptotic result for
-    // an approximately-Gaussian-core distribution: SE_median ~
-    // sqrt(pi/2)*sigma/sqrt(n) = 1.2533*sigma/sqrt(n)) -- this feeds
-    // CalibrationMap.cpp's downstream fit only as a relative point weight,
-    // not as a rigorous confidence interval, so the Gaussian-core
-    // approximation is good enough here. A bin where one entry holds over
-    // half the total weight gets mad_sigma = 0 and is rejected just below.
+    // MAD-based sigma, only for an approximate standard error of the median
+    // (1.2533 sigma / sqrt(n)), used downstream as a relative fit weight. A
+    // bin where one entry holds over half the weight gets 0 and is rejected.
     std::vector<double> absdev(v.size());
     for (size_t i = 0; i < v.size(); i++)
         absdev[i] = std::fabs(v[i] - med);
@@ -235,13 +193,10 @@ FitResult median_fit(const std::vector<double> &v, const std::vector<double> &w)
         return r;
 
     r.mu = med;
-    // n is the Kish effective count, not v.size(): unequal weights carry
-    // less statistical power than the same number of equal-weight entries.
+    // n is the Kish effective count
     r.mu_err = 1.2533 * mad_sigma / std::sqrt(EffectiveEntries(w));
     r.sigma = mad_sigma;
-    // sigma_err/chi2_ndf are meaningless for a plain median (no fit was
-    // performed) and aren't consumed downstream -- left at their NaN
-    // defaults from FitResult's constructor.
+    // sigma_err/chi2_ndf stay NaN (no fit)
 
     return r;
 }
@@ -265,6 +220,11 @@ int main(int argc, char** argv)
         E0 = std::atof(argv[3]);
     if (argc > 4 && argv[4][0] != '\0')
         Emax = std::atof(argv[4]);
+    //   argv[5]: "noue" -- no underlying-event subtraction (see header)
+    const bool subtract_ue = !(argc > 5 && std::string(argv[5]) == "noue");
+    std::cout << (subtract_ue ? "Underlying event subtracted from reco and truth jet energies"
+                              : "No underlying-event subtraction (noue)") << std::endl;
+    long n_pairs = 0, n_no_ue = 0;
 
     const FiducialRect &rect = kFiducialRectEcal;
     float fid_buffer = reco_fiducial_buffer_ecal;
@@ -365,6 +325,22 @@ int main(int argc, char** argv)
         tree->SetBranchAddress("match_truth_idx", &match_truth_idx);
         tree->SetBranchAddress("match_reco_idx", &match_reco_idx);
 
+        std::vector<float> *reco_ue_E = nullptr, *truth_ue_E = nullptr;
+        std::vector<int> *reco_ue_nproxy = nullptr, *truth_ue_nproxy = nullptr;
+        if (subtract_ue)
+        {
+            if (!tree->GetBranch("reco_ue_E") || !tree->GetBranch("truth_ue_E"))
+            {
+                std::cerr << "ERROR: " << root_files[fidx] << " has no reco_ue_E/truth_ue_E branches;"
+                          << " run underlying_event/UnderlyingEvent on the sample first, or pass noue" << std::endl;
+                return 1;
+            }
+            tree->SetBranchAddress("reco_ue_E", &reco_ue_E);
+            tree->SetBranchAddress("truth_ue_E", &truth_ue_E);
+            tree->SetBranchAddress("reco_ue_nproxy", &reco_ue_nproxy);
+            tree->SetBranchAddress("truth_ue_nproxy", &truth_ue_nproxy);
+        }
+
         Long64_t n_events = tree->GetEntries();
 
         for (Long64_t ev = 0; ev < n_events; ev++)
@@ -378,6 +354,17 @@ int main(int argc, char** argv)
 
                 double reco = reco_E->at(ri);
                 double truth = truth_E->at(ti);
+                n_pairs++;
+                if (subtract_ue)
+                {
+                    if (reco_ue_nproxy->at(ri) <= 0 || truth_ue_nproxy->at(ti) <= 0)
+                    {
+                        n_no_ue++;
+                        continue;
+                    }
+                    reco -= reco_ue_E->at(ri);
+                    truth -= truth_ue_E->at(ti);
+                }
 
                 double x = reflect_to_positive_half ? std::fabs(reco_x->at(ri)) : reco_x->at(ri);
                 double y = reco_y->at(ri);
@@ -424,6 +411,9 @@ int main(int argc, char** argv)
         f->Close();
         delete f;
     }
+
+    if (subtract_ue)
+        std::cout << n_pairs << " matched pairs, " << n_no_ue << " left out for lack of a UE estimate" << std::endl;
 
     // Fit per-bin
 

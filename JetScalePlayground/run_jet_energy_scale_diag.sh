@@ -1,9 +1,6 @@
 #!/bin/bash
-# Compiles and runs the diagnostics fork of JetEnergyScaleFineGrid (this
-# folder's copy -- same algorithm as production, plus an EM-only-
-# conditional Emax, see its own header comment) against a folder of
+# Compiles and runs this folder's JetEnergyScaleFineGrid on a folder of
 # sim_to_jet JetTrees, producing a jet_calibration.root "bins" tree.
-# Always rebuilds fresh.
 #
 # Usage:
 #   ./run_jet_energy_scale_diag.sh -i <jettrees_dir> -o <output.root> [-E <0|1>] [-r <match_radius>] [-f <E0_floor>] [-x <Emax_ceiling>]
@@ -45,7 +42,7 @@ while getopts "i:o:E:r:f:x:h" opt; do
     f) E0_FLOOR="$OPTARG" ;;
     x) EMAX_CEIL="$OPTARG" ;;
     h|*)
-      sed -n '2,26p' "$0"
+      sed -n '2,25p' "$0"
       exit 0
       ;;
   esac

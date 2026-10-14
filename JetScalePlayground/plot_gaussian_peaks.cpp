@@ -1,15 +1,7 @@
-// Diagnostics-only, standalone tool: for a small hardcoded list of target
-// (x_center, y_center, E_low, E_high) bins (chosen externally -- see
-// query used to pick them), rescans a JetTrees folder collecting just
-// those bins' raw response/scale values (same match_radius/reflection
-// convention as JetEnergyScaleFineGrid.cpp), reproduces gaussian_fit()'s
-// exact windowing/fit logic, and saves a histogram + fit-window plot per
-// bin. Lets us see directly whether the [mean-1.5sigma, mean+1.5sigma]
-// window is well-placed on the true peak or clipping/missing it,
-// especially at low E where JetEnergyScaleFineGrid.cpp's per-bin fits
-// were found to converge far less often (85.6% vs 99.3% for ECAL+HCAL)
-// and sometimes land on physically nonsensical values (e.g. negative
-// response_mu).
+// For a hardcoded list of (x, y, E) bins (TARGETS in main()), collects the
+// raw response and scale values from a JetTrees folder, repeats the
+// Gaussian-fit windowing of the older mode-based grid step, and plots each
+// histogram with its fit window, to check whether the window sits on the peak.
 //
 // Usage: ./plot_gaussian_peaks <jettrees_dir> <output_dir>
 // (target bin list is hardcoded in main() -- see TARGETS below)

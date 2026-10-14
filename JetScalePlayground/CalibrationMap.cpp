@@ -1,26 +1,8 @@
-// Builds the JES lookup JSON from a jet_calibration_grid*.root "bins" tree:
-// per (x,y) bin, fit <scale> vs <response> (log-quadratic + optional
-// skew Gaussian), then smooth the A/B/C/D/E0/sigma maps over the grid.
-// C++ port of CalibrationMap.py -- same algorithm, no plotting.
-//
-// DIAGNOSTICS FORK of ../jet_scale/CalibrationMap.cpp (production) -- same algorithm,
-// plus an EM-only-conditional skew-Gaussian-parameter domain (E0_MAX/SIGMA_MAX, see
-// main()'s em_only handling below). ECAL+HCAL behavior (em_only=0, the
-// default) was byte-for-byte unchanged from production until the
-// buffer-restricted fiducial mask on the saved calibration was added (see
-// ACTIVE_FIDUCIAL_RECT/pass_fiducial_cut) -- production has no equivalent, so
-// em_only=0 now differs there too: this fork no longer extrapolates any
-// parameter past the true reconstructable region for either mode, which is a
-// deliberate, general fix, not em_only-specific. The skew Gaussian's
-// physical origin (near-pure-EM/electron-photon objects sitting close to
-// true energy inside the broader hadronic response) is exactly what
-// JetMatcher.cpp's new EM-only truth-clustering already IS by
-// construction, so whether a skew-Gaussian term is needed at all under the new
-// truth-jet definition is an open question this fork exists to check
-// against the new EM-only production -- these bounds are a provisional,
-// defensibly-scaled starting point (not yet empirically validated against
-// real EM-only calibration statistics) pending that check. Once validated,
-// merge this split back into the production file.
+// Diagnostics copy of jet_scale/CalibrationMap_em_only.cpp with an em_only
+// switch (argv[3] = 1: EM-only bounds and fiducial mask; otherwise ECAL+HCAL),
+// driven by run_calibration_map_diag.sh and
+// submit_calibration_map_diag_condor.sh. Same model, smoothing and
+// --shard / --merge modes; see that file for details.
 
 #include <TFile.h>
 #include <TTree.h>
@@ -44,102 +26,42 @@
 #include <limits>
 #include <memory>
 #include <algorithm>
-#include <thread>
 #include <cstdio>
 #include <cstdlib>
-#include <unistd.h>
-#include <sys/wait.h>
 
-// Forward declaration: defined below, needed here for compute_all_regions'
-// lossless (round-trippable) shard-file serialization.
-void write_double(std::ostream &os, double v);
 
-// CONFIGURATION (mirrors CalibrationMap.py)
+// CONFIGURATION
 
 std::string ROOT_FILE = "jet_calibration_grid_test.root";
 std::string OUTPUT_JSON = "JetEnergyScale_lookup_GridTest.json";
 
-// Below this many valid energy points, a 7-parameter skew-Gaussian fit would have
-// non-positive dof, so only the 3-parameter background is fit instead.
+// Below this many energy points only the 3-parameter background is fit
 const int MIN_POINTS_FOR_SKEW_GAUSSIAN = 8;
 
-// Sanity cuts dropping the noise tail from bins with too few jets for a
-// meaningful fitted mean (see CalibrationMap.py for derivation).
+// Sanity cuts dropping the noise tail of low-statistics bins
 const double RESPONSE_SANITY_FACTOR = 1.5;
 const double SCALE_SANITY_MAX = 1.5;
 
-// Skew Gaussian bounds; sigma's lower bound is pinned above zero (it's a
-// denominator). D_MIN/D_MAX (skew-Gaussian amplitude, a multiplicative scale
-// correction) and E0_MIN/SIGMA_MIN aren't tied to the absolute response
-// energy scale, so they're unconditional; E0_MAX/SIGMA_MAX bound where in
-// the response energy domain the skew Gaussian can sit, so they must fit within
-// whatever Emax that domain actually has -- set per em_only in main()
-// (JetEnergyScaleFineGrid.cpp's Emax_ecal_hcal=200/Emax_em_only=70).
-//
-// All three of D_MAX/E0_MIN/SIGMA_MAX_em_only were quietly clipping a real,
-// highly significant skew Gaussian: a direct chi2 scan (outside this pipeline, on
-// the r10 production sample's hottest bin, x=45.5 y=0.8) walked the bounds
-// out one at a time and each relaxation immediately pushed the converged
-// fit further, meaning Migrad kept landing exactly on whichever wall was
-// closest rather than at a genuine interior optimum -- and at_bound()
-// correctly discarded every one of those as boundary-pinned, silently
-// falling back to background-only. The true unconstrained optimum for that
-// bin is D~0.206, E0~5.6-6.1 GeV, sigma~17.1-17.3 GeV (chi2 182.6->13.7 for
-// +3 params, chi2/ndof~1.0 -- a genuine, well-converged minimum, not
-// another wall). E0~6 sitting below our lowest E bin (~11.6 GeV) is a
-// plausible low-energy threshold/turn-on effect extending past the edge of
-// our data, not a fit degeneracy. Set with real headroom above that
-// observed optimum (not just barely past it) so other bins' skew Gaussians, which
-// may differ, also get a fair chance to converge to an interior value
-// instead of hitting the same trap. If bins start pinning at these new
-// walls too, that's the same signal to investigate/relax further, not
-// evidence the fit is broken.
+// Skew-Gaussian bounds. E0_MAX/SIGMA_MAX are set in main() from em_only (EM-only
+// response domain: Emax = 100). The bounds sit well above the optima found in
+// the hottest bins, so a fit at a bound signals a problem, not a clipped peak.
 const double D_MIN = 0.0, D_MAX = 0.5;
 const double E0_MIN = 1.0;
 double E0_MAX = 35.0;
 const double E0_MAX_ecal_hcal = 35.0, E0_MAX_em_only = 40.0;
-// 1.0 GeV, not ~0: adjacent E-bins near the low-E turn-on are only ~1-2.5
-// GeV apart, so an unconstrained sigma can shrink well below that spacing
-// and fit a near-step transition pinned to a single data point -- smooth to
-// the eye of a Gaussian only in the mathematical sense, not a genuine
-// resolvable feature (seen directly on x=75.5,y=-39.2: sigmaL collapsed to
-// 0.026, producing a visibly sharp kink at E0 despite a technically
-// continuous formula). Flooring sigma at roughly the finest bin spacing
-// keeps the skew Gaussian to features the data can actually constrain.
+// About the finest E-bin spacing: narrower widths fit single-point steps
 const double SIGMA_MIN = 1.0;
 double SIGMA_MAX = 25.0;
 const double SIGMA_MAX_ecal_hcal = 25.0, SIGMA_MAX_em_only = 35.0;
 
-// Skew Gaussian kept only if its chi2 improvement beats the chance level for a
-// chi-square(3 dof) distribution (Wilks' theorem).
+// The skew Gaussian is kept only if its chi2 improvement beats this quantile
+// of a chi-square with 4 dof (D, E0, sigmaL, sigmaR)
 const double SKEW_GAUSSIAN_SIGNIFICANCE_CL = 0.5;
 
-// Duplicated from shared/JetParameters.h (source of truth -- keep these in
-// sync if the geometry survey or buffer values there ever change) rather
-// than #including that header directly, since it pulls in fastjet, a
-// dependency this ROOT/Minuit2-only diagnostic has no other reason to link.
-//
-// JetEnergyScaleFineGrid.cpp (the aggregation step upstream of this file)
-// already gates every grid point through this exact same
-// rect+buffer-restricted pass_fiducial_cut before it will accumulate a
-// single raw entry there (see its grid_valid array) -- so any grid point
-// failing this same check is guaranteed, by construction, to have zero
-// statistics, not just an unlucky zero this run. Without this, CalibrationMap
-// had no way to tell "genuinely outside the reconstructable region" apart
-// from "just empty by chance," and smooth_map's undecayed diffusion (see
-// SMOOTH_MAX_FILL_DISTANCE) extrapolated confident-looking A/B/C values (and,
-// before D_DECAY_LENGTH_BINS/clamp_isolated_D_islands, D too) tens of cm past
-// the true buffer-restricted acceptance -- caught directly by comparing the
-// r10 production constants map (extrapolated out to y=-96.7, the outer edge
-// of the defined grid) against the chi2 heatmap (whose real per-bin fits
-// stop at y=-76.7, matching cut_y_min_ecal+reco_fiducial_buffer_ecal
-// almost exactly). Applied as the final filter on the saved calibration
-// (see write_calibration_json), independent of and in addition to the
-// existing D-specific decay/clamp logic, which still does useful work
-// *within* this true acceptance region (filling statistically-empty-by-chance
-// cells from real neighbors, excising the real-but-unstable patches) --
-// this mask only stops the map from being defined at all past the boundary
-// those mechanisms were never told about.
+// Copied from shared/JetParameters.h (keep in sync; that header needs
+// fastjet). Upstream, JetEnergyScaleFineGrid only fills grid points inside
+// this region, so cells outside it have no statistics; the saved map is
+// masked to it so smoothing never extrapolates past the acceptance.
 struct FiducialRect
 {
     float x_inner, x_outer, y_min, y_max;
@@ -156,9 +78,7 @@ const FiducialRect kFiducialRectEcal = {cut_x_inner_ecal, cut_x_outer_ecal, cut_
 const float reco_fiducial_buffer = 10.0f;
 const float reco_fiducial_buffer_ecal = 20.0f;
 
-// Set in main() from the em_only flag, alongside E0_MAX/SIGMA_MAX -- points
-// at kFiducialRect/reco_fiducial_buffer (ECAL+HCAL) or
-// kFiducialRectEcal/reco_fiducial_buffer_ecal (EM-only).
+// Set in main() from em_only: the ECAL-only or ECAL+HCAL rectangle and buffer
 const FiducialRect *ACTIVE_FIDUCIAL_RECT = &kFiducialRect;
 float ACTIVE_FIDUCIAL_BUFFER = reco_fiducial_buffer;
 
@@ -170,48 +90,23 @@ inline bool pass_fiducial_cut(float jetXE, float jetYE, float buffer, const Fidu
     return in_x && in_y;
 }
 
-// "a few percent" of each parameter's own range; a fit within this of
-// either edge is treated as having hit the wall, not converged.
+// A fit within this fraction of a parameter range from a bound counts as at the bound
 const double BOUND_HIT_RTOL = 0.03;
 
 // Below this, D counts as "no skew Gaussian" for reporting purposes.
 const double SKEW_GAUSSIAN_PRESENT_THRESHOLD = 1e-4;
 
-// Map smoothing parameters (see plot_and_save_smoothed's call in
-// CalibrationMap.py).
+// Map smoothing parameters
 const int SMOOTH_N_ITER = 6;
 const int SMOOTH_RADIUS = 2;
-// -1 = no fill-distance clip: an unfit bin inherits smooth_map's diffusion
-// average instead of staying NaN (bins outside acceptance still end up NaN,
-// since diffusion has nothing finite nearby to average from).
+// -1 = unfit bins take the diffusion average (cells far outside the data stay NaN)
 const int SMOOTH_MAX_FILL_DISTANCE = -1;
 
-// The skew-Gaussian amplitude D is only meaningful where there's a genuine
-// direct fit behind it; unlike A/B/C (a smoothly-varying background that's
-// reasonable to extrapolate everywhere), a bump with no supporting data has
-// no business persisting. smooth_map's diffusion has no zero prior though,
-// so cells with zero raw statistics (never fit at all -- distinct from a
-// real background-only fit, which already has finite D=0) can inherit an
-// elevated D purely from repeated neighbor-averaging against other equally
-// unfit cells, worst at grid corners where that self-reinforcement has
-// nothing real nearby to pull it back down. Confirmed directly on the r10
-// production map: its highest D values (~0.25, vs. a real interior median
-// ~0.11) sit exactly at cells with n_entries=0. D_DECAY_LENGTH_BINS sets how
-// many grid cells (2.5cm each) the exponential decay takes to fall off once
-// away from the nearest cell that had an actual fit.
+// D is only meaningful where a direct fit supports it, but diffusion would
+// let unfit cells inherit a raised D from each other. D decays exponentially
+// with distance (in 2.5 cm grid cells) from the nearest fitted cell.
 const double D_DECAY_LENGTH_BINS = 3.0;
 
-// The r10 production map's two position-bin patches (upper-right
-// ~x:100-118,y:55-70 and lower-right ~x:100-118,y:-56..-80) that once looked
-// topologically separated from the main D blob, with elevated but still
-// real chi2 (up to ~19 vs. ~2-3 in the main region), turned out to just be
-// a real feature of the calibration surface, not a spurious rival region --
-// confirmed once statistics were doubled (see git history around
-// clamp_isolated_D_islands/fill_isolated_D_holes for the watershed-clamp +
-// chi2-rescue + hole-fill machinery this used to require; all removed once
-// the "confined to one region" premise it was built on turned out to be
-// wrong). D is now smoothed continuously across the whole grid exactly like
-// A/B/C, with no spatial exclusion.
 
 struct BinRow
 {
@@ -275,35 +170,14 @@ std::vector<BinRow> load_bins(const std::string &root_file)
     return rows;
 }
 
-// Inverse-power background (A + B/E + C/E^2), not the log-quadratic
-// (A + B*ln(E) + C*ln(E)^2) used previously. A log-quadratic is a parabola
-// in ln(E): once its curvature C is negative it MUST keep monotonically
-// decreasing past its vertex, so it can never asymptote to the flat
-// high-E plateau the data actually shows (confirmed by direct comparison
-// on the x=75.5,y=-39.2 bin: log-quad predicted scale=0.895 at E=150 vs.
-// the data's ~0.98-1.0 plateau; inverse-power predicted 0.982, matching,
-// and fit chi2 dropped 57.2->32.6 on the same bin). A naturally
-// asymptotes to the high-E plateau value as E->infinity, which is exactly
-// the behavior needed here. See EM-only-truth-jet-fix session notes for
-// the full derivation; this is diagnostics-fork-only for now, not yet
-// carried into production CalibrationMap.cpp or ApplyCorrections.cpp.
+// Inverse-power background: tends to the high-E plateau A as E -> infinity
 double bg_model(double E, double A, double B, double C)
 {
     return A + B / E + C / (E * E);
 }
 
-// Asymmetric skew Gaussian: independent rise (E<E0) and fall (E>=E0) widths. Survey
-// of high-statistics/high-chi2 interior bins (>=20cm from the fiducial
-// edge) found 33% dominated by one shape -- a fast rise then a much slower
-// decline -- that a symmetric Gaussian cannot represent (confirmed via
-// direct chi2 scan: for such bins the optimizer keeps pushing E0 toward its
-// lower bound rather than settling on a genuine interior optimum, since a
-// wide/low-E0 symmetric Gaussian is the closest symmetric approximation to
-// an asymmetric rise/fall and that approximation only improves monotonically
-// as E0->bound, with no separate competitive local minimum away from it --
-// i.e. a real structural mismatch, not a seeding failure). Splitting sigma
-// into sigmaL/sigmaR resolved it cleanly on every test bin (reduced chi2
-// dropped by 2-3x, landing on non-degenerate, non-bound-pinned parameters).
+// Asymmetric Gaussian: independent rise (E < E0) and fall widths, since many
+// bins show a fast rise and slow decline
 double bg_gauss_model(double E, double A, double B, double C, double D, double E0, double sigmaL, double sigmaR)
 {
     double sigma = (E < E0) ? sigmaL : sigmaR;
@@ -475,10 +349,7 @@ bool fit_log_gauss_function_constrained(
 
     std::vector<double> bgX;
     double bgF;
-    // A is now the high-E asymptotic scale (should sit near 1.0 for a
-    // roughly-calibrated detector), not a log-quadratic constant term --
-    // seeded accordingly, with B/C given O(1) steps matching the scale
-    // found in the inverse-power vs. log-quadratic comparison test.
+    // A is the high-E scale, near 1
     fit_with_restarts(bgFunc, {{1.0, 1.0, -1.0}}, lower_bg, upper_bg, bgX, bgF);
 
     auto background_only = [&](const std::string &reason)
@@ -504,46 +375,19 @@ bool fit_log_gauss_function_constrained(
 
     double A0 = bgX[0], B0 = bgX[1], C0 = bgX[2];
 
-    // Densified after finding x=30.5,y=0.8's neighborhood (28.0/25.5/33.0,0.8)
-    // converging to a narrow, early (E0~11-15) local optimum that fit none of
-    // those bins' own data well (raw reduced chi2 up to ~28, one falling back
-    // to background-only entirely), while the original sparse E0 grid --
-    // {1, 20.5, 40} for em_only's [1,40] domain -- had no candidate anywhere
-    // near the true, later-peaking optimum (E0~34, reduced chi2 3.3) that a
-    // couple of neighboring bins did manage to find. Smoothing then diffused
-    // that one good fit toward the bad neighborhood consensus, producing a
-    // saved curve that missed x=30.5,y=0.8's own data by 58x in chi2 (see
-    // session notes).
-    //
-    // A first attempt REPLACED the 3-point {1,20.5,40}/{0.15,0.3,0.6}*SIGMA_MAX
-    // grid with a denser 6-point/4-point one -- that improved the mean raw
-    // reduced chi2 across all 3443 bins (4.77->3.67), but because the new
-    // discretization doesn't contain the old one, a couple of previously-good
-    // bins (33.0,0.8: 8.85->14.0; 28.0,0.8: 17.9->20.5) lost the exact seed
-    // that used to work for them and landed somewhere worse instead -- a
-    // seed *swap* isn't guaranteed monotonic. Using the UNION of the old and
-    // new candidate sets instead is: every bin can still start from any seed
-    // the original grid offered, plus the new denser/wider ones, so no bin
-    // can do worse than the original 3x3x3 grid already found.
+    // E0 seeds: the union of a 3- and a 6-point grid. Some bins converge to a
+    // poor local optimum from a sparse grid; the union keeps every seed of the
+    // smaller grid, so no bin can do worse than with it.
     std::vector<double> e0_candidates = linspace(E0_MIN, E0_MAX, 3);
     {
         std::vector<double> e0_dense = linspace(E0_MIN, E0_MAX, 6);
         e0_candidates.insert(e0_candidates.end(), e0_dense.begin(), e0_dense.end());
-        // Both linspace calls share the same E0_MIN/E0_MAX endpoints, so the
-        // first/last entries duplicate exactly -- drop them rather than
-        // wastefully refitting the same seed twice.
+        // drop the duplicated endpoints
         std::sort(e0_candidates.begin(), e0_candidates.end());
         e0_candidates.erase(std::unique(e0_candidates.begin(), e0_candidates.end()), e0_candidates.end());
     }
-    // Narrow/wide pair, not just a single scale, and every (sigmaL,sigmaR)
-    // combination including the two asymmetric ones -- a plain sigma==sigma
-    // grid never seeds a fast-rise/slow-fall (or the reverse) starting
-    // point, so Migrad can converge to a spurious narrow "spike" near
-    // closely-spaced low-E points instead of the genuine, broader skew Gaussian
-    // (confirmed on x=75.5,y=-39.2: the spike's chi2/ndof was 6.2 while an
-    // asymmetric-seeded refit of the same data found chi2/ndof 3.0 at the
-    // visually correct peak -- a real, better optimum the old grid simply
-    // never gave Migrad a starting point near).
+    // Every (sigmaL, sigmaR) combination, including asymmetric ones, so
+    // Migrad can start near a fast-rise/slow-fall shape
     std::vector<double> sigma_candidates = {SIGMA_MAX * 0.1, SIGMA_MAX * 0.15, SIGMA_MAX * 0.2, SIGMA_MAX * 0.3,
                                              SIGMA_MAX * 0.35, SIGMA_MAX * 0.55, SIGMA_MAX * 0.6};
 
@@ -559,14 +403,8 @@ bool fit_log_gauss_function_constrained(
             for (double sigmaR : sigma_candidates)
                 x0_list.push_back({A0, B0, C0, 0.5 * D_MAX, e0, sigmaL, sigmaR});
 
-    // Data-driven seed: find the point of maximum positive residual above
-    // the background-only fit, and estimate the skew Gaussian's width from where
-    // the residual falls to half that peak on either side (FWHM). In
-    // high-statistics bins the chi2 landscape is sharp enough that Migrad
-    // won't wander far from a mediocre starting point, so the generic grid
-    // seeds above can converge to a spuriously small D even when a real,
-    // well-localized skew Gaussian is clearly present in the residuals -- this seed
-    // starts already close to the true optimum.
+    // Data-driven seed: the largest positive residual above the background
+    // fit, with widths from its half-maximum crossings on either side
     {
         int peak_idx = -1;
         double peak_resid = 0.0;
@@ -582,11 +420,6 @@ bool fit_log_gauss_function_constrained(
         }
         if (peak_idx >= 0)
         {
-            // Half-max crossings on each side of the peak, estimated
-            // independently -- the whole point of this seed is that these
-            // two crossings need not be symmetric about the peak (that
-            // asymmetry is exactly the shape the fixed-sigma model can't
-            // capture; see bg_gauss_model's header comment).
             double half = peak_resid / 2.0;
             double e_lo = response[0], e_hi = response.back();
             for (int i = peak_idx; i >= 0; i--)
@@ -603,20 +436,9 @@ bool fit_log_gauss_function_constrained(
         }
     }
 
-    // Track the best fit overall AND the best fit that isn't boundary-
-    // pinned, separately. The chi2-global-best restart is sometimes a
-    // degenerate fit -- an extremely broad, wall-pinned skew Gaussian that
-    // mimics extra background curvature rather than describing a genuine
-    // localized skew Gaussian (confirmed by direct inspection: relaxing the wall
-    // further just chases it lower with near-zero chi2 improvement,
-    // instead of settling at an interior optimum). Picking only the
-    // single global-best candidate and discarding everything on a bound
-    // hit throws away a perfectly good, non-degenerate, still highly
-    // significant local minimum (a well-localized skew Gaussian right at the
-    // visible peak) whenever it happens to fit slightly worse than the
-    // degenerate one -- so scan every restart and keep the best VALID
-    // (non-bound-pinned) candidate as a fallback instead of giving up
-    // entirely.
+    // Keep the best fit overall and the best fit not at a bound: the global
+    // best is sometimes a very broad, bound-pinned Gaussian mimicking
+    // background curvature, while a well-localized interior fit exists.
     std::vector<double> gX, bestValidX;
     double gF = std::numeric_limits<double>::infinity();
     double bestValidF = std::numeric_limits<double>::infinity();
@@ -636,12 +458,8 @@ bool fit_log_gauss_function_constrained(
             gX = x;
         }
 
-        // sigmaL/sigmaR: only the UPPER bound is degenerate (an extremely
-        // wide skew Gaussian mimicking background curvature, the original failure
-        // mode this check was built for). Hitting the LOWER bound just means
-        // a genuinely sharp rise/fall -- a real, common feature now that the
-        // two widths are independent, not a sign of a bad fit (same
-        // rationale as D's own check_lower=false below).
+        // Only the upper width bound is degenerate; a width at the lower
+        // bound is a sharp rise or fall
         bool pinned =
             at_bound(x[3], D_MIN, D_MAX, false) ||
             at_bound(x[4], E0_MIN, E0_MAX, true) ||
@@ -665,8 +483,7 @@ bool fit_log_gauss_function_constrained(
         at_bound(sigmaL, SIGMA_MIN, SIGMA_MAX, false) ||
         at_bound(sigmaR, SIGMA_MIN, SIGMA_MAX, false);
 
-    // The global-best candidate is boundary-pinned (likely degenerate) but
-    // a non-pinned alternative exists -- use it instead of giving up.
+    // Fall back to the best fit not at a bound
     if (skew_gaussian_at_bound && haveValid)
     {
         gX = bestValidX;
@@ -705,61 +522,17 @@ bool fit_log_gauss_function_constrained(
     return true;
 }
 
-// Per (x,y) bin, fit <scale> vs <response>; bins with <4 valid entries
-// (or <3 finite after masking) are dropped entirely.
-//
-// *** n_procs_hint > 1 (fork-based parallel path below) IS CURRENTLY UNRELIABLE.
-// *** DO NOT rely on it for a real calibration run. Both callers
-// *** (run_calibration_map_diag.sh, submit_calibration_map_diag_condor.sh)
-// *** have been reverted to force single-threaded (n_procs=1) until this is
-// *** actually root-caused and re-validated. Two independent runs (one via
-// *** condor with 8 shards, one interactive with 2) both silently lost
-// *** every shard's contribution except the parent's own (shard 0) --
-// *** merged bin counts landed suspiciously exactly at "total/n_procs" both
-// *** times (446 with n_procs=8; 1721 with n_procs=2), with every child
-// *** reporting a clean exit and, in the n_procs=2 case, the new
-// *** read_count==0 sanity check below NOT firing -- meaning the shard file
-// *** wasn't simply empty. A synthetic standalone reproduction of this exact
-// *** fork/write/waitpid/read sequence (same code shape, but fabricated
-// *** FitRow data instead of real Minuit2 fits, no ROOT involved at all)
-// *** round-tripped correctly (3478/3478). That isolates the bug to
-// *** something about forking specifically AFTER ROOT/Minuit2 has been
-// *** initialized and used (fit_log_gauss_function_constrained calls
-// *** ROOT::Math::Factory::CreateMinimizer) -- ROOT was never designed with
-// *** fork() safety in mind, and this is consistent with some kind of
-// *** post-fork corruption in its internal state that doesn't crash but
-// *** produces wrong results. Not yet understood well enough to trust.
-//
-// Each position bin's fit is completely independent of every other (it only
-// reads its own slice of `rows`), so this WOULD be an embarrassingly
-// parallel workload -- worth exploiting once fixed, now that the
-// restart-grid densification (see fit_log_gauss_function_constrained's
-// seed-grid comment) made each bin's fit several times more expensive: with
-// the seed grid alone, this was pushing full-production runs (3443 bins)
-// toward 40 minutes single-threaded.
-//
-// Parallelized via fork(), not std::thread: an earlier std::thread version
-// of this function (one thread per shard, each independently calling
-// ROOT::Math::Factory::CreateMinimizer) segfaulted in every worker within
-// ~10 seconds of starting, every time -- consistent with a race in ROOT
-// 5.34/Minuit2's lazy plugin-loading machinery (TPluginManager and friends),
-// which predates ROOT's later official thread-safety support and isn't
-// documented as safe to call concurrently from multiple threads in one
-// process. Forking separate OS processes was meant to sidestep that (each
-// child gets its own independent copy of the process image, so every child
-// does its own lazy initialization single-threaded, in total isolation --
-// no shared mutable memory left to race on) -- and it does avoid the
-// segfault, but has instead exposed the silent-corruption bug above.
+// Position bins are fit independently (bins with < 4 valid entries are
+// dropped). To parallelize, run separate processes with --shard / --merge;
+// ROOT 5.34's Minuit2 is safe neither with threads nor after fork().
 struct GroupEntry
 {
     double x_center, y_center;
     std::vector<int> idxs;
 };
 
-// Groups `rows` by (x_center, y_center) -- same deterministic std::map
-// ordering every caller gets, which is what makes "entries[k] with
-// k % n_shards == shard_index" a stable, reproducible partition across
-// completely independent process invocations (condor shards included).
+// Groups rows by (x_center, y_center), in deterministic map order, so the
+// partition k % n_shards == shard is the same in every process
 std::vector<GroupEntry> build_position_groups(const std::vector<BinRow> &rows)
 {
     std::map<std::pair<double, double>, std::vector<int>> groups;
@@ -773,15 +546,7 @@ std::vector<GroupEntry> build_position_groups(const std::vector<BinRow> &rows)
     return entries;
 }
 
-// Fits every position-bin group at flat index k where k % n_shards ==
-// shard_index (see build_position_groups). Used two ways: (1) directly from
-// main()'s --shard mode, one fresh OS process per condor job -- the
-// currently-recommended parallel path, since each shard starts clean with
-// no shared post-ROOT-init state to corrupt (see compute_all_regions'
-// header comment for why in-process fork() is NOT safe here); (2) by
-// compute_all_regions' own (disabled) fork()-based fit_shard, so that
-// dead-but-documented path and this one share one source of truth instead
-// of two copies of the same fit logic silently drifting apart.
+// Fits every group k with k % n_shards == shard_index
 std::vector<FitRow> compute_shard(const std::vector<BinRow> &rows, double chi2_improvement_min,
                                    unsigned shard_index, unsigned n_shards)
 {
@@ -849,175 +614,10 @@ std::vector<FitRow> compute_shard(const std::vector<BinRow> &rows, double chi2_i
     return local;
 }
 
-std::vector<FitRow> compute_all_regions(const std::vector<BinRow> &rows, double chi2_improvement_min, unsigned n_procs_hint = 0)
+// Fits every position bin in this process
+std::vector<FitRow> compute_all_regions(const std::vector<BinRow> &rows, double chi2_improvement_min)
 {
-    std::vector<GroupEntry> entries = build_position_groups(rows);
-
-    // Fits every entries[k] with k % n_procs == shard, via compute_shard
-    // (see its header comment). Called post-fork in each child (and
-    // directly for shard 0 in the parent), so this always runs
-    // single-threaded within whichever process calls it.
-    auto fit_shard = [&](unsigned shard, unsigned n_procs) -> std::vector<FitRow>
-    {
-        return compute_shard(rows, chi2_improvement_min, shard, n_procs);
-    };
-
-    // n_procs_hint (from main()'s argv[4]) takes priority over auto-detection:
-    // on a shared/multi-tenant machine, or a condor execute node whose
-    // granted core count isn't reliably reflected by
-    // hardware_concurrency(), auto-detecting the FULL local core count and
-    // forking that many processes can over-fork relative to what's actually
-    // available -- explicit is safer whenever the caller knows the real
-    // number (e.g. a condor job passing exactly its own request_cpus).
-    unsigned n_procs = n_procs_hint;
-    if (n_procs == 0)
-    {
-        n_procs = std::thread::hardware_concurrency();
-        if (n_procs == 0)
-            n_procs = 1;
-    }
-    n_procs = std::min<unsigned>(n_procs, (unsigned)std::max<size_t>(entries.size(), 1));
-
-    if (n_procs == 1)
-        return fit_shard(0, 1);
-
-    // One shard file per child (shard 0 is handled by the parent directly,
-    // no file needed), written into the CURRENT WORKING DIRECTORY rather
-    // than /tmp. A first version of this used mkstemp() under /tmp, and on
-    // a real condor execute node (not this machine -- a local repro of the
-    // exact same mkstemp/fork/ofstream/ifstream sequence round-tripped fine
-    // here) it silently produced EMPTY shard files: every child ran and
-    // burned real CPU (confirmed via the job's own resource usage log), and
-    // every child exited 0, yet the parent merged in zero rows from any of
-    // them -- only shard 0 (computed directly in the parent) survived,
-    // silently discarding ~87% of all position bins' fits with no error of
-    // any kind. That corrupted a saved calibration lookup table before
-    // anyone noticed. Root cause not fully pinned down (the leading
-    // suspect is /tmp on that specific execute node behaving differently
-    // under the singularity bind-mount than a plain login-node /tmp does),
-    // but rather than keep guessing at a remote filesystem's behavior, this
-    // writes into the same GPFS directory every other read/write in this
-    // program already uses successfully (the input ROOT file, the output
-    // JSON/CSV) -- a path already proven reliable in this exact job,
-    // instead of a new, unverified one. Never let this fail silently again:
-    // every open is checked, and a shard whose child had entries to fit but
-    // produced zero readable rows back is now a hard error, not something
-    // that just quietly ships a wrong answer.
-    char cwd_buf[4096];
-    std::string cwd = getcwd(cwd_buf, sizeof(cwd_buf)) ? cwd_buf : ".";
-    pid_t self_pid = getpid();
-
-    std::vector<std::string> shard_files(n_procs);
-    for (unsigned s = 1; s < n_procs; s++)
-    {
-        std::ostringstream path;
-        path << cwd << "/.calibmap_shard_" << self_pid << "_" << s << ".tmp";
-        shard_files[s] = path.str();
-    }
-
-    std::vector<pid_t> pids;
-    for (unsigned s = 1; s < n_procs; s++)
-    {
-        pid_t pid = fork();
-        if (pid < 0)
-        {
-            std::cerr << "ERROR: fork failed for shard " << s << std::endl;
-            exit(1);
-        }
-        if (pid == 0)
-        {
-            // Child: fit this shard, serialize the results, then exit
-            // immediately -- must not fall through and return into the rest
-            // of main() a second time.
-            std::vector<FitRow> local = fit_shard(s, n_procs);
-            std::ofstream out(shard_files[s].c_str());
-            if (!out.is_open())
-            {
-                std::cerr << "ERROR: shard " << s << " could not open " << shard_files[s]
-                          << " for writing" << std::endl;
-                _exit(1);
-            }
-            for (const auto &r : local)
-            {
-                write_double(out, r.x_center); out << " ";
-                write_double(out, r.y_center); out << " ";
-                write_double(out, r.A); out << " ";
-                write_double(out, r.B); out << " ";
-                write_double(out, r.C); out << " ";
-                write_double(out, r.D); out << " ";
-                write_double(out, r.E0); out << " ";
-                write_double(out, r.sigmaL); out << " ";
-                write_double(out, r.sigmaR); out << " ";
-                write_double(out, r.chi2); out << " ";
-                out << r.n_params << " " << r.ndof << "\n";
-            }
-            out.close();
-            if (out.fail())
-            {
-                std::cerr << "ERROR: shard " << s << " failed writing " << shard_files[s] << std::endl;
-                _exit(1);
-            }
-            _exit(0);
-        }
-        pids.push_back(pid);
-    }
-
-    // Parent takes shard 0 itself while the children run.
-    std::vector<FitRow> fit_rows = fit_shard(0, n_procs);
-
-    for (pid_t pid : pids)
-    {
-        int status = 0;
-        waitpid(pid, &status, 0);
-        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-        {
-            std::cerr << "ERROR: a fit worker process (pid " << pid << ") failed" << std::endl;
-            exit(1);
-        }
-    }
-
-    for (unsigned s = 1; s < n_procs; s++)
-    {
-        // Cheap re-derivation (no fitting) of how many of this shard's
-        // candidate bins existed, purely to sanity-check the read-back
-        // below -- not every candidate produces a row (some have <4 valid
-        // points), so this is an upper bound, not an exact expectation.
-        size_t raw_assigned = 0;
-        for (size_t k = s; k < entries.size(); k += n_procs)
-            raw_assigned++;
-
-        std::ifstream in(shard_files[s].c_str());
-        if (!in.is_open())
-        {
-            std::cerr << "ERROR: could not read back shard " << s << " file " << shard_files[s] << std::endl;
-            exit(1);
-        }
-
-        size_t read_count = 0;
-        FitRow r;
-        while (in >> r.x_center >> r.y_center >> r.A >> r.B >> r.C >> r.D >> r.E0 >>
-               r.sigmaL >> r.sigmaR >> r.chi2 >> r.n_params >> r.ndof)
-        {
-            fit_rows.push_back(r);
-            read_count++;
-        }
-        in.close();
-        std::remove(shard_files[s].c_str());
-
-        // The exact failure mode this whole rewrite exists to catch: a
-        // shard with real candidate bins to fit that came back with
-        // nothing readable at all.
-        if (read_count == 0 && raw_assigned > 0)
-        {
-            std::cerr << "ERROR: shard " << s << " had " << raw_assigned
-                      << " candidate bins but 0 were read back -- refusing to silently"
-                      << " produce a corrupted calibration (see compute_all_regions'"
-                      << " header comment)" << std::endl;
-            exit(1);
-        }
-    }
-
-    return fit_rows;
+    return compute_shard(rows, chi2_improvement_min, 0, 1);
 }
 
 Grid2D make_nan_grid(int nx, int ny)
@@ -1170,8 +770,7 @@ Grid2D chebyshev_distance_to_finite(const Grid2D &Z)
     return dist;
 }
 
-// Neighbor-averaging smoother with MAD-based outlier rejection (see
-// CalibrationMap.py's smooth_map docstring for full parameter rationale).
+// Neighbor-averaging smoother with MAD-based outlier rejection
 Grid2D smooth_map(
     const Grid2D &Z,
     int n_iter = SMOOTH_N_ITER,
@@ -1286,17 +885,9 @@ Grid2D smooth_map(
                 else if (outlier[i][j])
                     Z_new[i][j] = neighbor_average;
                 else
-                    // Matches production CalibrationMap.cpp exactly: every
-                    // finite, non-outlier cell still gets blended toward its
-                    // neighborhood average. This is deliberate, not the
-                    // dilution bug it was mistaken for earlier -- the
-                    // downstream consumer linearly interpolates between grid
-                    // points, so the saved surface needs to vary smoothly;
-                    // full per-bin independence (no blending) would leave
-                    // physically-unmotivated bin-to-bin discontinuities. A
-                    // direct fit that disagrees sharply with every neighbor
-                    // is more likely a statistical fluctuation in that one
-                    // bin than a genuine sub-grid-spacing feature.
+                    // Every finite, non-outlier cell is blended toward its
+                    // neighborhood too: the map is interpolated downstream and
+                    // must vary smoothly
                     Z_new[i][j] = (1 - neighbor_weight) * Z_smooth[i][j] + neighbor_weight * neighbor_average;
             }
         }
@@ -1362,13 +953,8 @@ void write_calibration_json(
     for (const auto &param : all_params)
         smoothed_maps[param] = smooth_map(coarse_maps[param]);
 
-    // Pull D back toward 0 with distance from the nearest cell that actually
-    // had a direct fit (real skew Gaussian OR a real background-only D=0
-    // fit -- both count, since coarse_maps["D"] is finite=0.0 for
-    // background-only bins, not NaN). Cells with a direct fit are left
-    // exactly as smooth_map computed them (distance 0, decay factor 1); only
-    // the pure-diffusion fill for cells with no fit at all is tapered. See
-    // D_DECAY_LENGTH_BINS' comment for why this is needed.
+    // Taper D with distance from the nearest directly fitted cell (a
+    // background-only fit counts, with D = 0); fitted cells are unchanged
     {
         Grid2D d_dist = chebyshev_distance_to_finite(coarse_maps["D"]);
         for (size_t i = 0; i < xs.size(); i++)
@@ -1426,11 +1012,7 @@ void write_calibration_json(
     {
         for (size_t j = 0; j < ys.size(); j++)
         {
-            // The calibration must not be defined past the true
-            // buffer-restricted fiducial acceptance -- see ACTIVE_FIDUCIAL_RECT's
-            // comment. Checked first so nothing smooth_map extrapolated out
-            // here (for ANY parameter, not just D) ever reaches the saved
-            // table, regardless of how confident-looking that extrapolation is.
+            // Outside the buffered fiducial region the map is undefined
             if (!pass_fiducial_cut((float)xs[i], (float)ys[j], ACTIVE_FIDUCIAL_BUFFER, *ACTIVE_FIDUCIAL_RECT))
             {
                 n_outside_fiducial++;
@@ -1537,12 +1119,7 @@ void write_calibration_json(
     std::cout << "Lookup table saved to " << save_file << std::endl;
 }
 
-// Full-precision FitRow serialization for the condor shard/merge path (see
-// main()'s --shard/--merge modes): one shard's worth of independent
-// position-bin fits, written by a condor job that exits immediately after
-// (no smoothing/save), later concatenated across every shard by --merge
-// before running the existing smoothing/decay/clamp/fiducial-mask/save
-// pipeline exactly as the single-process path does.
+// Full-precision FitRow serialization for --shard / --merge
 void write_fitrow_csv(const std::vector<FitRow> &fit_rows, const std::string &save_file)
 {
     std::ofstream out(save_file.c_str());
@@ -1621,9 +1198,7 @@ std::vector<FitRow> read_fitrow_csv(const std::string &path)
     return rows;
 }
 
-// Side CSV of per-bin chi2/ndof (final model kept -- background+skew Gaussian
-// where significant, background-only otherwise), for chi2/dof heatmap
-// plots. Not consumed by anything downstream of the JSON lookup.
+// Side CSV of per-bin chi2/ndof of the final model (diagnostics only)
 void write_chi2_csv(const std::vector<FitRow> &fit_rows, const std::string &save_file)
 {
     std::ofstream out(save_file.c_str());
@@ -1639,11 +1214,8 @@ void write_chi2_csv(const std::vector<FitRow> &fit_rows, const std::string &save
     std::cout << "chi2/ndof CSV saved to " << save_file << std::endl;
 }
 
-// Side CSV of the raw per-position DIRECT fit (pre-smoothing/pre-decay/
-// pre-clamp A,B,C,D,E0,sigmaL,sigmaR -- exactly what build_coarse_maps
-// reads into coarse_maps before smooth_map() runs), for diagnostic plots
-// that compare "direct fit" vs "final (smoothed)" per position. Not
-// consumed by anything downstream of the JSON lookup.
+// Side CSV of the direct (pre-smoothing) per-position fit parameters
+// (diagnostics only)
 void write_direct_fits_csv(const std::vector<FitRow> &fit_rows, const std::string &save_file)
 {
     std::ofstream out(save_file.c_str());
@@ -1670,38 +1242,16 @@ int main(int argc, char **argv)
     if (argc > 2)
         output_file = argv[2];
 
-    // argv[3]: 1 = the jet_calibration_grid*.root this ran over came from an
-    // EM-only JetEnergyScaleFineGrid run (Emax=43 there) -- narrow the skew-Gaussian
-    // position/width domain to match, rather than the ECAL+HCAL default
-    // (Emax=200). 0/omit = previous default behavior.
+    // argv[3]: 1 = EM-only (argv[4] is ignored)
     bool em_only = (argc > 3) && (std::string(argv[3]) == "1");
     E0_MAX = em_only ? E0_MAX_em_only : E0_MAX_ecal_hcal;
     SIGMA_MAX = em_only ? SIGMA_MAX_em_only : SIGMA_MAX_ecal_hcal;
     ACTIVE_FIDUCIAL_RECT = em_only ? &kFiducialRectEcal : &kFiducialRect;
     ACTIVE_FIDUCIAL_BUFFER = em_only ? reco_fiducial_buffer_ecal : reco_fiducial_buffer;
 
-    // argv[5]: optional mode for true multi-PROCESS parallelism via separate
-    // condor job invocations (see compute_shard's header comment for why
-    // this is safe where in-process fork() is not). Omitted/"" = existing
-    // single-process behavior below, unchanged.
-    //
-    //   --shard <shard_index> <n_shards> <shard_output_csv>
-    //       Fits only this shard's position bins (see build_position_groups)
-    //       and writes them to shard_output_csv, then exits immediately --
-    //       no smoothing/decay/clamp/fiducial-mask/save. One condor job per
-    //       shard, run with identical argv[1-3] (same input file, same
-    //       em_only flag) across all n_shards jobs.
-    //   --merge <shard_list_file> <output_file>
-    //       shard_list_file is a plain text file, one shard CSV path per
-    //       line (as written by every --shard job above). Concatenates all
-    //       of them into one fit_rows vector, then runs the exact same
-    //       smoothing/decay/clamp/fiducial-mask/save pipeline the
-    //       single-process path uses -- this is the only place that
-    //       pipeline runs, so results are identical in shape/logic to a
-    //       single-process run over the same input, just assembled from
-    //       shards instead of one big in-process fit. Fast (no fitting): run
-    //       this locally right after condor_wait confirms every shard job
-    //       finished, no need to route it through condor itself.
+    // argv[5]: --shard <i> <n> <shard.csv> fits only shard i of n and writes
+    // it; --merge <shard_list> <out.json> concatenates the shard CSVs and runs
+    // the smoothing and save steps. Omitted = fit everything in one process.
     if (argc > 5 && std::string(argv[5]) == "--shard")
     {
         if (argc < 9)
@@ -1784,45 +1334,15 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    // argv[4]: optional explicit worker-process count for compute_all_regions'
-    // fork()-based parallel fit (see its header comment for why fork, not
-    // std::thread). 0/omit = auto-detect via hardware_concurrency(), which is
-    // right for an interactive box you have to yourself but WRONG on a
-    // shared login node (would fork one process per physical core on the
-    // whole machine, not just your fair share) or on a condor execute node
-    // whose granted core count isn't guaranteed to be reflected by
-    // hardware_concurrency(). Pass this explicitly -- matching whatever was
-    // actually requested/allotted -- in either of those cases.
-    //
-    // HARD-DISABLED (>1 forced back to 1) until compute_all_regions' known
-    // silent-corruption bug is actually root-caused: two separate runs
-    // (n_procs=8 via condor, n_procs=2 interactive) each silently dropped
-    // every shard's results except the parent's own, both times exiting 0
-    // with no error. Do not remove this clamp without first fixing that --
-    // see compute_all_regions' header comment for what's already been ruled
-    // out. Auto-detect (argv[4] omitted -> hardware_concurrency()) is
-    // clamped too: it hits the exact same bug, not just the login-node
-    // fairness issue the comment above describes.
-    unsigned n_procs_hint = (argc > 4) ? (unsigned)std::atoi(argv[4]) : 0;
-    if (n_procs_hint != 1)
-    {
-        if (n_procs_hint > 1)
-            std::cout << "WARNING: n_procs=" << n_procs_hint
-                       << " requested but the fork-based parallel fit is currently"
-                       << " known to silently corrupt results -- forcing single-threaded (1)."
-                       << " See compute_all_regions' header comment." << std::endl;
-        n_procs_hint = 1;
-    }
-
     std::cout << "Loading " << input_file << " ..." << std::endl;
     std::vector<BinRow> rows = load_bins(input_file);
     std::cout << "Loaded " << rows.size() << " (E,x,y) bin entries" << std::endl;
 
-    // 4 dof: the skew Gaussian adds D, E0, sigmaL, sigmaR over the 3-param background.
+    // 4 dof: D, E0, sigmaL, sigmaR over the background
     double chi2_improvement_min = TMath::ChisquareQuantile(SKEW_GAUSSIAN_SIGNIFICANCE_CL, 4);
 
     std::cout << "Fitting position bins ..." << std::endl;
-    std::vector<FitRow> fit_rows = compute_all_regions(rows, chi2_improvement_min, n_procs_hint);
+    std::vector<FitRow> fit_rows = compute_all_regions(rows, chi2_improvement_min);
     std::cout << "Fit " << fit_rows.size() << " position bins" << std::endl;
 
     std::set<double> xs_set, ys_set;

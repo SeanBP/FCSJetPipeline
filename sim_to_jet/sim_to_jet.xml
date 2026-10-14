@@ -25,41 +25,28 @@
       {{NEVENTS}}           events per job
       {{SAVE_SIMPLETREE}}   1 = keep intermediate SimpleTree_*.root, 0 = discard
       {{TRIGGER_FILTER}}    comma-separated FCS trigger names (FcsTriggerDefs.h);
-                             jetTree entry only if one fired, empty = keep all.
+                             an event is written (SimpleTree and jetTree)
+                             only if one fired, empty = keep all.
                              Emulated via fcs_trg_base in readMudst.C (sim
                              events have no real trigger decision)
-      {{CALIB_RUN}}         real Run 22 run number to pin the FCS gain
-                             calibration era to (RunNumberToDateTime() in
-                             runSimBfc.C); 0 = BFC's own nominal date
-      {{FILTER_ETHR}}       FcsJetFilter's forward-flux accept threshold
-                             (GeV, -e flag; default 50.0, its original
-                             hardcoded value). Generator-level: an event is
-                             kept only if projected flux onto one FCS arm
-                             exceeds this. 0 disables the filter (accepts
-                             every event): see StRoot/StarGenerator/FILT/.
-      {{EM_ONLY}}           1 = build reco jets from ECAL hits only (no HCAL),
-                             using the ECAL-only fiducial boundary for both
-                             reco and truth jets (-E flag). 0 (default) =
-                             previous ECAL+HCAL behavior. See JetParameters.h's
-                             kFiducialRectEcal/reco_fiducial_buffer_ecal.
-      {{USE_POINTS}}        1 = build reco jets from FCS points (StMuFcsPoint)
-                             instead of tower hits (-F flag). 0 (default) =
-                             hits, the previous behavior. Truth jets are
-                             unaffected. HCAL currently produces no points at
-                             all, so this is ECAL-only input regardless of
-                             EM_ONLY when enabled.
+      {{CALIB_RUN}}         Run 22 run number fixing the FCS gain calibration
+                             era (runSimBfc.C); 0 = BFC's nominal date
+      {{FILTER_ETHR}}       FcsJetFilter forward-flux threshold, GeV (-e;
+                             0 disables the filter)
+      {{EM_ONLY}}           1 = ECAL-only reco jets and fiducial boundary (-E)
+      {{USE_POINTS}}        1 = reco jets from FCS points instead of tower
+                             hits (-F)
+      {{CALIB_SAMPLE}}      1 = JES calibration sample (-C): no jet pT
+                             minimums, minimum-bias UE step
       {{OUTDIR}}            absolute output directory
       {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
 
     star-submit must run from the pipeline root (one level up), since the
     SandBox <File> paths below are relative to it.
 
-    ../shared/JetParameters.h is shared with data_to_jet.xml. ../StRoot/
-    is the local source for StSimpleReaderMaker/StSimpleTreeMaker/
-    FcsJetFilter (the last is a local override of the central STAR maker of
-    the same name, adding a settable energy threshold, see its header
-    comment); ../.sl73_x8664_gcc485/ is its prebuilt binary cache: rebuild
-    it if StRoot/ changes.
+    StRoot/ holds StSimpleReaderMaker, StSimpleTreeMaker and a local
+    FcsJetFilter (settable threshold); .sl73_x8664_gcc485/ is its prebuilt
+    library cache and must be rebuilt when StRoot/ changes.
 -->
 
 <job nProcesses="1">
@@ -74,6 +61,7 @@
         # .sl73_x8664_gcc485/ stay as-is -- the build system expects those paths).
         cp sim_to_jet/* .
         cp shared/* .
+        cp underlying_event/* .
 
         if ( "{{GENERATOR}}" == "pythia8" ) then
             ln -sf starsim_pythia8_filter.C starsim.C
@@ -100,6 +88,7 @@
         echo "FcsJetFilter Ethr = {{FILTER_ETHR}} GeV"
         echo "EM-only        = {{EM_ONLY}}"
         echo "Use points     = {{USE_POINTS}}"
+        echo "Calib sample   = {{CALIB_SAMPLE}}"
         echo "nevents        = {{NEVENTS}}"
         echo "Save SimpleTree = {{SAVE_SIMPLETREE}}"
         echo "JOBINDEX       = ${JOBINDEX}"
@@ -114,23 +103,16 @@
 
         echo "Finished detector simulation."
 
-        # Rescue StarPrimaryMaker's end-of-run StarGenStats file (cross
-        # section for this job's ptHatMin/ptHatMax cut, read back by
-        # readMudst.C's ReadMCJobStats()) before runSimBfc.C's own output
-        # file -- which collides on the exact same name, ${pid}.starsim.root
-        # -- silently overwrites it below. ${ptcut}/${ptcutmax} themselves
-        # (the ptHatMin/ptHatMax cut values, not just the resulting cross
-        # section) are passed straight through to readMudst.C below and
-        # recorded on every row as mc_pthatmin_gev/mc_pthatmax_gev.
+        # Keep the StarGenStats file (cross section, read by readMudst.C):
+        # runSimBfc.C's output would overwrite this name
         mv ${pid}.starsim.root ${pid}.genstats.root
 
         echo ""
         echo "Starting reconstruction..."
 
-        # Full positional arg list needed so {{CALIB_RUN}} (last param) can
-        # be set -- CINT can't skip earlier args; rest are runSimBfc.C's own defaults.
+        # CINT cannot skip arguments, so all are given to reach CALIB_RUN
         root4star -b -q runSimBfc.C\({{NEVENTS}},1,\"${pid}\",202207,0,0,1.5,0.0,\"0.0100\",0,0,input_dir,output_dir,input_chain,0,{{CALIB_RUN}}\)
-        root4star -b -q readMudst.C\(0,1,\"${pid}.MuDst.root\",\".\",\"\",202209,${ptcut},${ptcutmax}\)
+        root4star -b -q readMudst.C\(0,1,\"${pid}.MuDst.root\",\".\",\"\",202209,${ptcut},${ptcutmax},\"{{TRIGGER_FILTER}}\"\)
 
         echo "Finished reconstruction."
 
@@ -148,8 +130,24 @@
 
         echo "SimpleTree_mudst.root" > single_file.list
 
-        ./JetMatcher single_file.list "${TRIGGER_FILTER}" {{EM_ONLY}} {{USE_POINTS}}
+        if ( {{CALIB_SAMPLE}} == 1 ) then
+            set jet_pt_cuts = 0
+            set ue_args = "0 minbias"
+        else
+            set jet_pt_cuts = 1
+            set ue_args = ""
+        endif
+
+        ./JetMatcher single_file.list "${TRIGGER_FILTER}" {{EM_ONLY}} {{USE_POINTS}} ${jet_pt_cuts}
         mv jet_output.root jet_output_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
+
+        # In-job underlying event (reco_ue_* branches), with this job's own
+        # events as proxies; must run before the SimpleTree is renamed
+        echo "Compiling UnderlyingEvent..."
+        g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent \
+            `root-config --cflags --libs` -std=c++11
+        echo "jet_output_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root SimpleTree_mudst.root" > ue_pairs.list
+        ./UnderlyingEvent ue_pairs.list ${ue_args}
 
         if ( {{SAVE_SIMPLETREE}} == 1 ) then
             mv SimpleTree_mudst.root SimpleTree_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
@@ -157,10 +155,7 @@
             rm -f SimpleTree_mudst.root
         endif
 
-        # Temporary, job-local only; never meant to leave scratch. Its
-        # useful content (sigmaGen/nTried) is already baked into every
-        # jetTree/SimpleTree row above via sigma_job/N_job.
-        rm -f single_file.list ${pid}.genstats.root
+        rm -f single_file.list ue_pairs.list ${pid}.genstats.root
 
         echo "Files in scratch:"
         ls -l
@@ -183,6 +178,7 @@
             <File>file:./.sl73_x8664_gcc485</File>
             <File>file:./StRoot</File>
             <File>file:./shared/JetParameters.h</File>
+            <File>file:./underlying_event</File>
         </Package>
     </SandBox>
 

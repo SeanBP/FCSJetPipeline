@@ -15,12 +15,13 @@ the pipeline -- nothing here is used by `sim_to_jet`, `data_to_jet`,
   points to be at least 2R apart in eta-phi. Build/run line is at the top of
   the file; writes `min_opposite_angle.pdf/.png/.root`.
 - `max_dr_jet_placement.cpp` -- for every point P in the fiducial region, how
-  far a jet axis J (either half) can be kept, in eta-phi, from both P and the
-  point 180 deg in azimuth from P, while having zero overlap with a jet at P
-  (dR(J, P) >= 2R). Draws the map and the worst case, with the three R-radius
-  cones projected on the surface and the jet-axis regions allowed by a 0.1,
+  far a jet axis J on the opposite half can be kept, in eta-phi, from the
+  P' line (180 deg in azimuth from P, any eta: where a back-to-back jet can
+  be), while having zero overlap with a jet at P (dR(J, P) >= 2R). Draws the
+  map and the worst case, with the R-radius cones at P and J and the P' line
+  projected on the surface, and the jet-axis regions allowed by a 0.1,
   0.2 and 0.3 R tolerance. Writes `max_dr_jet_placement.pdf/.png/.root`.
-- `UESelection.h` -- the UE event-selection geometry (P', jet distance, best
+- `UESelection.h` -- the UE event-selection geometry (P' line, jet distance, best
   achievable distance, the 2R and 0.3 R constants), shared by
   `max_dr_jet_placement.cpp` and `ue_map.cpp` so both use one definition.
 - `ue_map.cpp` -- builds the UE energy map on half the FCS ECAL (x > 0, the
@@ -38,10 +39,13 @@ the pipeline -- nothing here is used by `sim_to_jet`, `data_to_jet`,
 - The UE correction is an energy subtraction (not pT), from an averaged map
   in position, to be built separately for data, simulated reco and truth.
   No pT binning yet.
-- Event selection for the UE cone at a point P: no reco jet within 2R of P,
+- Event selection for the UE cone at a point P: exactly one reco jet in the
+  event (pT and fiducial cuts as stored in the JetTree), not within 2R of P,
   and a reco jet inside the region found by `max_dr_jet_placement.cpp` with
-  a 0.3 R tolerance (distance to the nearer of P and P' within 0.3 R of the
-  best achievable).
+  a 0.3 R tolerance (at least 2R from P, and distance to the P' line, the line
+  180 deg in azimuth from P at any eta, within 0.3 R of the
+  best achievable or at least 2R, beyond which a jet cannot overlap one on
+  the line).
 - The cone sums the same points the jets are built from (ECAL, 1 GeV to
   sqrt(s)/2), so sub-threshold deposits are not counted.
 - Truth-jet contamination of the cone is recorded as a diagnostic.

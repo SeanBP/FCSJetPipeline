@@ -1,3 +1,6 @@
+// Applies an ECAL+HCAL JES lookup JSON (CalibrationMap) to JetTrees in place
+// (TFile "UPDATE", no undo), adding reco_E_corr, reco_x_F_corr and the
+// position-independent reco_E_uniform_corr, reco_x_F_uniform_corr.
 #include <TFile.h>
 #include <TTree.h>
 #include <TROOT.h>
@@ -424,12 +427,7 @@ int main(int argc, char** argv)
         tree->SetBranchAddress("reco_y",&reco_y);
         tree->SetBranchAddress("reco_eta",&reco_eta);
 
-        // Per-event sqrt(s) for x_F below (see JetParameters.h's
-        // computeSqrtSForRun()). Only real-data JetTrees (RecoJets.cpp)
-        // carry this branch; sim_to_jet's JetMatcher.cpp uses a fixed
-        // value directly instead (no per-event run number), so falls
-        // back to that same fixed value here when the branch is absent --
-        // correct either way, not just a placeholder.
+        // Per-event sqrt(s) for x_F (data only; simulation uses the fixed value)
         Double_t event_sqrt_s_gev = kSqrtS_MainRun22_GeV;
         bool haveSqrtSBranch = (tree->GetBranch("event_sqrt_s_gev") != 0);
         if (haveSqrtSBranch) tree->SetBranchAddress("event_sqrt_s_gev",&event_sqrt_s_gev);

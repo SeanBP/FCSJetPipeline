@@ -1,4 +1,5 @@
-// RecoJets.cpp
+// Clusters reco jets from real-data SimpleTree files.
+// Usage: ./RecoJets file_list.list [trigger_filter] [em_only] [use_points]
 #include <iostream>
 #include <vector>
 #include <cmath>
@@ -27,23 +28,16 @@ int main(int argc, char** argv) {
         cerr << "  trigger_filter: comma-separated FCS trigger flag names (see FcsTriggerDefs.h)." << endl;
         cerr << "                  An event is kept if ANY of them fired. Omit/empty = keep all events." << endl;
         cerr << "  em_only: 1 = form reco jets from ECAL hits only (no HCAL), and use the" << endl;
-        cerr << "           ECAL-only fiducial boundary. 0/omit = use both ECAL+HCAL," << endl;
-        cerr << "           the previous default behavior." << endl;
+        cerr << "           ECAL-only fiducial boundary. 0/omit = use both ECAL+HCAL." << endl;
         cerr << "  use_points: 1 = build reco jets from FCS points (StMuFcsPoint, the" << endl;
         cerr << "              single-photon-candidate level) instead of raw tower hits." << endl;
-        cerr << "              0/omit = hits, the previous default behavior. HCAL currently" << endl;
-        cerr << "              produces no points at all (checked directly), so this is" << endl;
+        cerr << "              0/omit = hits. HCAL produces no points, so this is" << endl;
         cerr << "              ECAL-only input regardless of em_only when enabled." << endl;
         return 1;
     }
 
-    // Optional 3rd arg: 1 = EM-only reco jets (ECAL hits only, ECAL-only
-    // fiducial boundary). Default 0 keeps the previous ECAL+HCAL behavior.
     bool em_only = (argc >= 4) && (string(argv[3]) == "1");
 
-    // Optional 4th arg: 1 = build reco jets from FCS points instead of
-    // tower hits (see Usage above). Default 0 keeps the previous
-    // hit-based behavior.
     bool use_points = (argc >= 5) && (string(argv[4]) == "1");
 
     string list_fname = argv[1];
@@ -128,18 +122,8 @@ int main(int argc, char** argv) {
     outTree->Branch("reco_tau1", &reco_tau1);
     outTree->Branch("reco_tau2", &reco_tau2);
 
-    // Per-jet photon count: FCS points (StMuFcsPoint, the single-photon-
-    // candidate level -- see StSimpleReaderMaker.cxx's Cal_pt_* branches)
-    // with energy > 1 GeV whose (x,y) position falls within deltaR < R of
-    // the jet axis, same E>1 GeV / deltaR<R convention as the FMS EM-jet
-    // analyses' photon definition. ECAL points only (det 0/1) -- points
-    // are reconstructed FCS-wide, but a "photon" count should not include
-    // HCAL showers. NOTE: when use_points=1 below, the jet itself is built
-    // from these same points, so reco_nphotons becomes largely redundant
-    // with reco_nconst (every point inside the jet's own clustering radius
-    // is both a constituent and, almost always, within the (wider) R used
-    // here) -- same relationship as truth_nphotons/truth_nconst in
-    // JetMatcher.cpp's em_only mode.
+    // ECAL FCS points with energy > point_energy_min within deltaR < R of the
+    // jet axis (the FMS photon definition)
     outTree->Branch("reco_nphotons", &reco_nphotons);
 
     // Per-event FCS trigger flags, passed through from the SimpleTree (FcsTriggerDefs.h)
@@ -152,44 +136,35 @@ int main(int argc, char** argv) {
     Int_t Spin_config;
     outTree->Branch("Spin_config", &Spin_config, "Spin_config/I");
 
-    // Event-level z-vertex, passed through from the SimpleTree:
-    // TPC-primary-vertex-first, then VPD, then BBC, whichever is first
-    // with |z|<80cm (see StSimpleReaderMaker.h's event_vertex_z comment
-    // for the full population comparison and why). -9999 = none of the
-    // three resolved. event_vertex_source says which one won: 0=none,
-    // 1=TPC, 2=VPD, 3=BBC.
+    // Event z-vertex from the SimpleTree: TPC, then VPD, then BBC, the first
+    // with |z| < 80 cm (-9999 = none). event_vertex_source: 0 none, 1 TPC,
+    // 2 VPD, 3 BBC.
     Float_t event_vertex_z;
     Int_t event_vertex_source;
     outTree->Branch("event_vertex_z", &event_vertex_z, "event_vertex_z/F");
     outTree->Branch("event_vertex_source", &event_vertex_source, "event_vertex_source/I");
 
-    // Per-event sqrt(s), GeV, passed through from the SimpleTree and used
-    // below for reco_x_F instead of the old fixed SQRT_S=500 constant
-    // (see JetParameters.h's computeSqrtSForRun()).
+    // Per-event sqrt(s), GeV, used for reco_x_F
     Double_t event_sqrt_s_gev;
     outTree->Branch("event_sqrt_s_gev", &event_sqrt_s_gev, "event_sqrt_s_gev/D");
 
-    // Per-event MC job-level weighting branches, passed through from the
-    // SimpleTree for schema parity with sim_to_jet's jetTree (see
-    // JetMatcher.cpp / StSimpleReaderMaker::SetMCJobStats()). Always the -1
-    // sentinel here -- data_to_jet's runMudst.C never calls
-    // SetMCJobStats(), real data has no generator cross section.
+    // Always -1 in data; kept for schema parity with sim_to_jet
     Double_t sigma_job;
     Int_t N_job;
     outTree->Branch("sigma_job", &sigma_job, "sigma_job/D");
     outTree->Branch("N_job", &N_job, "N_job/I");
 
-    // 1 if this file's reco jets were built from ECAL hits only (no HCAL,
-    // ECAL-only fiducial boundary), 0 for the previous ECAL+HCAL default.
-    // Constant for the whole job/file -- see the em_only CLI arg above.
+    // Per-file settings: em_only, use_points
     Int_t reco_em_only = em_only ? 1 : 0;
     outTree->Branch("reco_em_only", &reco_em_only, "reco_em_only/I");
 
-    // 1 if this file's reco jets were built from FCS points instead of
-    // tower hits, 0 for the previous hit-based default. Constant for the
-    // whole job/file -- see the use_points CLI arg above.
     Int_t reco_from_points = use_points ? 1 : 0;
     outTree->Branch("reco_from_points", &reco_from_points, "reco_from_points/I");
+
+    // Entry of the source event in its SimpleTree "data" tree (used by the
+    // underlying-event step to read the event back)
+    Long64_t simpletree_entry = -1;
+    outTree->Branch("simpletree_entry", &simpletree_entry, "simpletree_entry/L");
 
     const int MAX_HITS = 10000;
     const int MAX_PTS = 200; // matches StSimpleReaderMaker.h's Cal_pt_* array size
@@ -237,15 +212,7 @@ int main(int argc, char** argv) {
             tree->SetBranchAddress("N_job", &N_job);
         }
 
-        // Backward-compat: older SimpleTrees (produced before this
-        // investigation) don't have these branches. event_vertex_z/
-        // event_vertex_source fall back to the same -9999/0 "not
-        // resolved" sentinels StSimpleReaderMaker itself uses;
-        // event_sqrt_s_gev falls back to the main-period real value (not
-        // the old wrong 500) since that's right for the overwhelming
-        // majority (91.7%) of Run 22 events either way, and Cal_npts
-        // falls back to 0 (reco_nphotons stays 0 for every jet in that
-        // file, same as if the file genuinely had no points).
+        // Defaults for files without these branches
         event_vertex_z = -9999; event_vertex_source = 0;
         if ( tree->GetBranch("event_vertex_z") ) {
             tree->SetBranchAddress("event_vertex_z", &event_vertex_z);
@@ -273,6 +240,7 @@ int main(int argc, char** argv) {
 
         for (Long64_t ev = 0; ev < nentries; ev++) {
             tree->GetEntry(ev);
+            simpletree_entry = ev;
             if (Cal_nhits > MAX_HITS) continue;
 
             if (!filterFlagIndices.empty()) {
@@ -306,12 +274,9 @@ int main(int argc, char** argv) {
             vector<PseudoJet> reco_particles;
             vector<int> reco_detid;
 
-            // Either tower hits (default) or FCS points (use_points=1,
-            // see the CLI arg above) feed the same anti-kt clustering
-            // below -- same (x,y,z) direction-vector construction either
-            // way, just swapping which arrays are read. The energy floor
-            // differs: hits use the MIP-fraction tower cut, points use
-            // pass_point_energy_cut() (see JetParameters.h).
+            // Tower hits (default) or FCS points (use_points) feed the same
+            // clustering. Hits use the MIP-fraction threshold, points
+            // pass_point_energy_cut().
             int nSource = use_points ? Cal_npts : Cal_nhits;
 
             for (int i=0; i<nSource; i++) {
@@ -345,8 +310,7 @@ int main(int argc, char** argv) {
             ClusterSequence cs_reco(reco_particles, JetDefinition(antikt_algorithm, R));
             vector<PseudoJet> reco_jets_selected;
 
-            // EM-only reco jets carry a minimum pT (reco_jet_pt_min_em, see
-            // JetParameters.h); ECAL+HCAL reco jets have none.
+            // reco_jet_pt_min_em for EM-only reco jets; ECAL+HCAL jets have none
             for (auto &jet : cs_reco.inclusive_jets(em_only ? reco_jet_pt_min_em : 0.0)) {
                 float jetXE = z_proj*jet.px()/jet.pz();
                 float jetYE = z_proj*jet.py()/jet.pz();
@@ -376,9 +340,6 @@ int main(int argc, char** argv) {
                 reco_x_F.push_back(computeFeynmanX(jet.E(), jet.eta(), event_sqrt_s_gev));
                 reco_side.push_back(computeSide(rx));
 
-                // Photon count: ECAL FCS points (det 0/1) with E>1 GeV
-                // inside deltaR<R of the jet axis -- see
-                // reco_nphotons' branch comment above.
                 int nphotons = 0;
                 for (int p = 0; p < Cal_npts; p++) {
                     if (Cal_pt_detid[p] != 0 && Cal_pt_detid[p] != 1) continue;

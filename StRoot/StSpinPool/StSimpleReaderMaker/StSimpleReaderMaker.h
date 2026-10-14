@@ -52,15 +52,8 @@ class StSimpleReaderMaker : public StMaker
   float Cal_clus_y[100];
   float Cal_clus_z[100];
 
-  // FCS "points" (StMuFcsPoint): the official single-photon-candidate
-  // level, one level finer than clusters -- a cluster may resolve into
-  // one or more points. Not previously read here; added to support a
-  // per-jet photon count downstream (JetMatcher.cpp/RecoJets.cpp), the
-  // same object the FMS EM-jet analyses build their photon multiplicity
-  // from. 200-entry arrays: observed up to ~50 clusters/event in real
-  // Run 22 data and up to ~35 points/event in a quick sim check, with
-  // real-data points consistently fewer than clusters -- generous margin
-  // over both.
+  // FCS points (StMuFcsPoint): single-photon candidates, used for reco jets
+  // (-F 1) and the per-jet photon count. Up to ~50 per event observed.
   int Cal_npts;
   int Cal_pt_detid[200];
   float Cal_pt_energy[200];
@@ -92,7 +85,6 @@ class StSimpleReaderMaker : public StMaker
   float Trk_proj_hcal_z[500];
 
   int mcpart_num;
-  //int mcpart_index[1000]; //Counts particles sequentially
   int mcpart_geid[1000];
   int mcpart_idVtx[1000];
   int mcpart_idVtxEnd[1000];
@@ -108,107 +100,56 @@ class StSimpleReaderMaker : public StMaker
   float mcpart_VtxEnd_y[1000];
   float mcpart_VtxEnd_z[1000];
 
-  // Boolean flags: one per known FCS trigger name from TriggerIDs.txt,
-  // resolved event-by-event either from the fired trigger id(s) + run
-  // number (real data, see FcsTriggerDefs.h) or, if SetTriggerSim() was
-  // called, from the fcs_trg_base trigger-simulation engine run on this
-  // event's FCS hits (for simulated events, which have no real fired
-  // trigger id -- see SetTriggerSim()). kNTrigFlags must match
-  // kNTrigFlags in FcsTriggerDefs.h.
+  // One flag per FCS trigger name (FcsTriggerDefs.h): from the fired trigger
+  // ids and run number in data, or from fcs_trg_base in simulation
+  // (SetTriggerSim()).
   enum { kNTrigFlags = 64 };
   int Trig_flag[kNTrigFlags];
 
-  // Simulated-trigger mode: mTrgSim's fcs_trg_base engine only computes
-  // 20 of the 64 named flags (see StSimpleReaderMaker.cxx); this maps
-  // each of those 20 to its index in Trig_flag[]/kTrigFlagName, built
-  // once in Init(). The rest of Trig_flag[] stays 0 in this mode --
-  // there is no way to simulate the other (mostly historical-naming-era)
-  // triggers from a physics-condition simulation.
+  // Simulation: fcs_trg_base computes 20 of the named flags; this maps them
+  // to Trig_flag[] indices (built in Init()). The others stay 0.
   StFcsTriggerSimMaker* mTrgSim = 0 ;
+
+  // See SetTriggerFilter(). mTrigFilterIndex holds the Trig_flag[] index
+  // of each requested name, resolved once in Init().
+  TString mTrigFilterNames ;
+  std::vector<int> mTrigFilterIndex ;
   fcs_trg_base* mTrgBase = 0 ;
   Int_t mTrgLastRunNumber = -1 ;
   enum { kNSimTrg = 21 };
   int mSimFlagIndex[kNSimTrg] ;
 
-  // Per-event spin configuration for real data (StSpinDbMaker's spin4bits
-  // combined code, see spin4usingBX7()): -1 means "no data" -- either no
-  // StSpinDbMaker was attached (SetSpinDb() not called, e.g. sim_to_jet,
-  // where simulated events have no real polarization to report), the
-  // offline spin DB (Calibrations/rhic) has no entry covering this run
-  // (real DB coverage gaps exist -- see SpinPlayground/
-  // run_number_to_spin_coverage.sh), or this specific bunch crossing
-  // wasn't resolved even though the run is otherwise covered (e.g. an
-  // abort gap). Always -1 for simulated events -- there is no way to
-  // simulate a real polarization pattern the way SetTriggerSim() computes
-  // a simulated trigger decision, since spin state isn't a physics
-  // condition of the generated event, it's a property of which real
-  // bunch happened to collide.
+  // Spin configuration (StSpinDbMaker spin4bits, see spin4usingBX7()); -1 if
+  // no spin DB is attached (simulation), the run is not covered, or the
+  // bunch crossing is unresolved.
   StSpinDbMaker* mSpinDb = 0 ;
   Int_t mSpinLastRunNumber = -1 ;
   int Spin_config ;
 
-  // Event-level z-vertex, real data only (sim has no reconstructed
-  // vertex to read). -9999 is the "not resolved" sentinel, same
-  // convention as Trk_proj_ecal_x/etc below. Picked by priority --
-  // TPC primary vertex (ranking()>0) first, then VPD, then BBC,
-  // whichever is the first with |z|<80cm -- see event_vertex_source for
-  // which one actually won on a given event, and Make()'s comment for
-  // why this priority order and cut. Checked directly (2026-10) on P24ia
-  // (st_fwd): TPC and VPD are 0% populated at every run sampled
-  // (22359013, 23060001) -- P24ia was produced with TPC tracking off and
-  // ZDC-only vertexing before run 23050001, and ZDC vertex itself is
-  // known bad, so it isn't read here at all; BBC is the only source with
-  // real data in P24ia (~18-34% of events, run-dependent). P25ib
-  // (st_physics, not st_fwd -- see data_to_jet/MakeRunList.pl's
-  // Sname2 condition) was still being checked as of this writing for
-  // whether its TPC/VPD population differs.
+  // Event z-vertex, data only; -9999 = none. The first of TPC primary vertex
+  // (ranking > 0), VPD, BBC with |z| < 80 cm. In P24ia (st_fwd) only BBC is
+  // populated (18-34% of events); the ZDC vertex is not used.
   Float_t event_vertex_z = -9999;
   Int_t event_vertex_source = 0; // 0=none, 1=TPC, 2=VPD, 3=BBC
 
-  // Per-run beam energy -> sqrt(s), GeV, so downstream x_F
-  // (computeFeynmanX in JetParameters.h) uses the real value instead of
-  // the stale SQRT_S=500 constant. See JetParameters.h's
-  // computeSqrtSForRun() for the two real Run 22 values and the run
-  // threshold between them (RunLog.beamInfo-derived).
+  // Per-run sqrt(s), GeV (computeSqrtSForRun() in JetParameters.h)
   Double_t event_sqrt_s_gev = -1;
 
-  // MC job-level generator bookkeeping (sim_to_jet only -- see
-  // SetMCJobStats()). Constant for the whole job/file (one generator run =
-  // one ptHatMin bin), so these are set once via SetMCJobStats() and just
-  // repeated on every Fill() rather than recomputed per event. sigma_job is
-  // PYTHIA's raw final cross-section estimate (StarGenStats::sigmaGen, mb,
-  // unconverted) and N_job is its true total generated trial count
-  // (StarGenStats::nTried) for this job. -1 is the "not MC / not set"
-  // sentinel, same convention as Spin_config for real data (there
-  // SetMCJobStats() is never called, so both stay -1 for every event).
+  // Simulation only, constant per job (SetMCJobStats()): PYTHIA's cross
+  // section (mb) and number of trials. -1 if unset (data).
   Double_t sigma_job = -1;
   Int_t N_job = -1;
 
-  // Generator-level ptHatMin/ptHatMax cut for this job (sim_to_jet only --
-  // see SetMCPtHatMin()/SetMCPtHatMax()). GeV; matches the ckin3/ckin4
-  // arguments passed to Pythia8()/Pythia6() in
-  // starsim_pythia8_filter.C/starsim_pythia6_filter.C (the ${ptcut}/
-  // ${ptcutmax} shell variables in sim_to_jet.xml). Constant for the whole
-  // job/file, same convention/sentinel as sigma_job above. mc_pthatmax_gev
-  // stays -1 (no upper cut) unless the job was actually given one.
+  // Simulation only: the job's generator ptHat range, GeV (-1 = unset / no
+  // upper cut)
   float mc_pthatmin_gev = -1;
   float mc_pthatmax_gev = -1;
 
-  // Retroactive HCAL gain-correction machinery (real data only -- see
-  // FCSJetPipeline/data_to_jet/hcal_gain_corrections/README.md).
-  // StFcsDb's HCAL gainCorrection is currently a flat 1.0 placeholder (no
-  // real per-tower HCAL calibration exists yet -- see
-  // GainPlayground/README.md); this multiplies each HCAL hit's energy
-  // (already read from the muDst -- real data's calibration was baked in
-  // once by official production and is never touched otherwise, see
-  // Cal_hit_energy's comment in Make()) by a per-channel factor looked up
-  // from a manifest of date-ranged correction files. This means
-  // already-produced SimpleTree files can be corrected for the real HCAL
-  // calibration later just by rerunning with an updated manifest/file --
-  // no muDst-level reprocessing needed. Not wired into sim_to_jet:
-  // simulated events already get real, live gainCorrection straight from
-  // StFcsDb (StFcsFastSimulatorMaker calls getGain()/getGainCorrection()
-  // directly), so there is nothing to retroactively fix there.
+  // Data only: per-channel HCAL gain correction applied to hit energies,
+  // looked up from a manifest of date-ranged files
+  // (data_to_jet/hcal_gain_corrections/README.md), so SimpleTrees can be
+  // recalibrated without reprocessing the MuDst. Simulation takes its gains
+  // from StFcsDb directly.
   struct HcalRetroCorrPeriod { int startDate; int endDate; TString filename; };
   std::vector<HcalRetroCorrPeriod> mHcalCorrPeriods;
   bool mUseHcalRetroCorr = false;
@@ -234,52 +175,31 @@ class StSimpleReaderMaker : public StMaker
 
   void SetOutputFileName(TString name) {mOutputFileName = name;} // Make name available to member functions
 
-  // Simulated-events mode (sim_to_jet): use trgSim's fcs_trg_base engine
-  // to compute Trig_flag[] from this event's FCS hits, instead of the
-  // real-data trigger-id lookup. trgSim must already be constructed and
-  // configured (setTrigger/setSimMode(1)/setThresholdFile/etc.) and
-  // still be in the chain at Init() time (its own Init()/InitRun() do
-  // real setup we rely on -- gains, pedestals, stage_version -- even
-  // though we bypass its Make(), which segfaults reading a muDst with no
-  // StEvent present; the caller must SetActive(kFALSE) on it after
-  // chain->Init() for the same reason data_to_jet's runMudst.C does).
+  // Simulation: compute Trig_flag[] with trgSim's fcs_trg_base engine.
+  // trgSim must be configured and in the chain at Init() (its Init/InitRun
+  // set up gains and pedestals); its Make() needs an StEvent, so the caller
+  // deactivates it after chain->Init().
   void SetTriggerSim(StFcsTriggerSimMaker* trgSim) { mTrgSim = trgSim; }
 
-  // Real-data mode (data_to_jet): attach an StSpinDbMaker (already
-  // constructed and in the chain, same pattern as SetTriggerSim's
-  // trgSim) to resolve Spin_config per event from the event's real
-  // bunch-crossing id. Not called by sim_to_jet -- see Spin_config's
-  // comment above for why simulated events always report -1 regardless.
+  // Comma-separated trigger flag names: only events that fired one are
+  // written. Empty (default) writes all; unknown names fail Init().
+  void SetTriggerFilter(const char* names) { mTrigFilterNames = names ? names : ""; }
+
+  // Data: StSpinDbMaker (in the chain) used to resolve Spin_config
   void SetSpinDb(StSpinDbMaker* spinDb) { mSpinDb = spinDb; }
 
-  // Sim-only mode (sim_to_jet): record this job's generator-level cross
-  // section/trial-count bookkeeping on the SimpleTree, so it survives all
-  // the way to the JetTree (see JetMatcher.cpp) for per-jet MC weighting.
-  // sigmaGen is PYTHIA's raw final cross-section estimate (mb, unconverted)
-  // for this job's ptHatMin/ptHatMax phase-space cut; nTried is PYTHIA's
-  // true total generated trial count that estimate corresponds to (NOT the
-  // smaller count that survives FcsJetFilter: the filter only decides what
-  // gets written to disk, it doesn't change how much luminosity each
-  // surviving event represents). Not called by data_to_jet -- see
-  // sigma_job's comment in the header for why real data keeps the -1
-  // sentinel.
+  // Simulation: the job's cross section (mb) and total trial count (before
+  // FcsJetFilter, which does not change the luminosity per event)
   void SetMCJobStats(double sigmaGen, int nTried) {
     sigma_job = sigmaGen; N_job = nTried;
   }
 
-  // Sim-only mode (sim_to_jet): record this job's generator-level ptHatMin/
-  // ptHatMax cut (ckin3/ckin4 in
-  // starsim_pythia8_filter.C/starsim_pythia6_filter.C), so it survives to
-  // the JetTree (see JetMatcher.cpp) alongside sigma_job. Not called by
-  // data_to_jet -- see mc_pthatmin_gev's comment in the header.
+  // Simulation: the job's generator ptHat range
   void SetMCPtHatMin(double pthatmin_gev) { mc_pthatmin_gev = pthatmin_gev; }
   void SetMCPtHatMax(double pthatmax_gev) { mc_pthatmax_gev = pthatmax_gev; }
 
-  // Real-data mode (data_to_jet): enable retroactive HCAL gain
-  // correction. manifestDir is the folder containing manifest.txt and
-  // the correction-factor files it references (see
-  // data_to_jet/hcal_gain_corrections/README.md for the format). Not
-  // called by sim_to_jet -- see mUseHcalRetroCorr's comment above.
+  // Data: enable the HCAL gain correction; manifestDir holds manifest.txt and
+  // the correction files
   void SetHcalRetroactiveGainCorr(const char* manifestDir) { mUseHcalRetroCorr = true; mHcalCorrDir = manifestDir; }
 
   ClassDef(StSimpleReaderMaker,1)                  //  Macro for CINT compatability

@@ -1,7 +1,6 @@
-// Builds the JES lookup JSON from a jet_calibration_grid*.root "bins" tree:
-// per (x,y) bin, fit <scale> vs <response> (log-quadratic + optional
-// Gaussian bump), then smooth the A/B/C/D/E0/sigma maps over the grid.
-// C++ port of CalibrationMap.py -- same algorithm, no plotting.
+// Builds the ECAL+HCAL JES lookup JSON from a jet_calibration_grid*.root
+// "bins" tree: per (x,y) bin, fit scale vs response (log-quadratic plus an
+// optional Gaussian bump), then smooth the A/B/C/D/E0/sigma maps over the grid.
 
 #include <TFile.h>
 #include <TTree.h>
@@ -26,7 +25,7 @@
 #include <memory>
 #include <algorithm>
 
-// CONFIGURATION (mirrors CalibrationMap.py)
+// CONFIGURATION
 
 std::string ROOT_FILE = "jet_calibration_grid_test.root";
 std::string OUTPUT_JSON = "JetEnergyScale_lookup_GridTest.json";
@@ -35,8 +34,7 @@ std::string OUTPUT_JSON = "JetEnergyScale_lookup_GridTest.json";
 // non-positive dof, so only the 3-parameter background is fit instead.
 const int MIN_POINTS_FOR_BUMP = 7;
 
-// Sanity cuts dropping the noise tail from bins with too few jets for a
-// meaningful fitted mean (see CalibrationMap.py for derivation).
+// Sanity cuts dropping the noise tail of low-statistics bins
 const double RESPONSE_SANITY_FACTOR = 1.5;
 const double SCALE_SANITY_MAX = 1.5;
 
@@ -56,8 +54,7 @@ const double BOUND_HIT_RTOL = 0.03;
 // Below this, D counts as "no bump" for reporting purposes.
 const double BUMP_PRESENT_THRESHOLD = 1e-4;
 
-// Map smoothing parameters (see plot_and_save_smoothed's call in
-// CalibrationMap.py).
+// Map smoothing parameters
 const int SMOOTH_N_ITER = 6;
 const int SMOOTH_RADIUS = 2;
 // -1 = no fill-distance clip: an unfit bin inherits smooth_map's diffusion
@@ -560,8 +557,7 @@ std::vector<std::vector<bool>> dilate(const std::vector<std::vector<bool>> &mask
     return out;
 }
 
-// Neighbor-averaging smoother with MAD-based outlier rejection (see
-// CalibrationMap.py's smooth_map docstring for full parameter rationale).
+// Neighbor-averaging smoother with MAD-based outlier rejection
 Grid2D smooth_map(
     const Grid2D &Z,
     int n_iter = SMOOTH_N_ITER,

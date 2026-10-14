@@ -81,7 +81,6 @@
             ./ApplyCorrections my_files.list {{CALIB_JSON}}
         endif
 
-        # Temporary, job-local only; never meant to leave scratch.
         rm -f all_files.list my_files.list
 
         echo "Done."

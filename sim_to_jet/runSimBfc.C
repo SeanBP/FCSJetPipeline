@@ -1,14 +1,11 @@
 TString input_dir   = "./";
 TString output_dir  = "./";
-//TString input_chain = "sdt20161210.120000,fzin,geant,evout,y2015,FieldOn,logger,MakeEvent,McEvout,IdTruth,ReverseField,db,fcsSim,fcsCluster,fcsPoint,-tpcDB";
-//TString input_chain = "sdt20211025.120000,fzin,geant,FieldOn,logger,MakeEvent,fcsSim,fcsWFF,fcsCluster,fcsPoint";
 TString input_chain = "y2023,AgML,USExgeom,fzin,geant,FieldOn,logger,MakeEvent,fcsSim,fcsWFF,fcsCluster,fcsPoint,cmudst";
 class StFmsSimulatorMaker;
 
-// Fallback only; RunNumberToDateTime() below tries the real RunLog DB first.
-// Converts a Run 22 run number (YYDDDnnnnn) to a YYYYMMDD date. NOTE: the
-// year code is one less than the real calendar year (e.g. 22359013 is
-// really 2021-12-25, not 2022-12-25); verified against RunLog for several runs.
+// Fallback for RunNumberToDateTime(): Run 22 run number (YYDDDnnnnn) to
+// YYYYMMDD. The year code is one less than the calendar year (22359013 is
+// 2021-12-25).
 int RunNumberToDateArithmetic(int runNumber){
     int yy  = runNumber / 1000000;
     int ddd = (runNumber / 1000) % 1000;
@@ -24,10 +21,9 @@ int RunNumberToDateArithmetic(int runNumber){
     return year*10000 + month*100 + day;
 }
 
-// Looks up a run's real start time from RunLog.runDescriptor, for
-// St_db_Maker::SetDateTime() to pin the FCS calibration era. Falls back to
-// RunNumberToDateArithmetic() if the DB is unreachable (e.g. from a batch node).
-// Port 3421 covers the earliest Run 22 runs the formula port (3400+year-1) misses.
+// A run's start time from RunLog.runDescriptor, for St_db_Maker::SetDateTime().
+// Falls back to RunNumberToDateArithmetic() if the DB is unreachable. Port 3421
+// covers the earliest Run 22 runs that the formula port (3400+year-1) misses.
 void RunNumberToDateTime(int runNumber, int &idat, int &itim){
     int yearCode = runNumber/1000000;
     int formulaPort = 3400 + (yearCode-1) - 1;
@@ -73,7 +69,6 @@ void runSimBfc( Int_t nEvents=1000, Int_t run=1, const char* pid="jet", int TrgV
 		Int_t calibRun=0){
     
   gROOT->LoadMacro("bfc.C");
-  //  gROOT->Macro("loadMuDst.C");
 
   TString myDat;
   TString proc(pid);
@@ -128,13 +123,10 @@ if(proc.Contains("dy") || proc.Contains("mb") || proc.Contains("jet") || proc.Co
 
   StFcsDbMaker* fcsdbmkr = (StFcsDbMaker*) chain->GetMaker("fcsDbMkr");
   cout << "fcsdbmkr="<<fcsdbmkr<<endl;
-  //fcsdbmkr->setDbAccess(0);
 
   StFcsDb* fcsdb = (StFcsDb*) chain->GetDataSet("fcsDb");
   cout << "fcsdb="<<fcsdb<<endl;
-  // Left on default GAINMODE::DB: StFcsDb pulls real calibrated gain/
-  // gainCorrection from the conditions DB (ECAL per-tower, HCAL flat 1.0
-  // pending real per-tower calibration). Do not force a uniform override here.
+  // Default GAINMODE::DB: gain/gainCorrection from the conditions DB
 
   StFcsFastSimulatorMaker *fcssim = (StFcsFastSimulatorMaker*) chain->GetMaker("fcsSim");
   fcssim->setDebug(0);
@@ -162,10 +154,6 @@ if(proc.Contains("dy") || proc.Contains("mb") || proc.Contains("jet") || proc.Co
   fcsTrgSim->setTrigger(TrgVersion);
   fcsTrgSim->setDebug(debug);
   fcsTrgSim->setEtGain(1.0); //ET match
-  //fcsTrgSim->setEtGain(0.5); //halfway
-  //fcsTrgSim->setEtGain(0.0); //E match
-  //fcsTrgSim->setReadPresMask(Form("mask/fcs_ecal_epd_mask.ele.pt0.6.vz0.thr%s.txt",epdmask));
-  //TString txfile(outfile); txfile.ReplaceAll(".root",".event.txt");  fcsTrgSim->setWriteEventText(txfile.Data());
   TString qafile(outfile); qafile.ReplaceAll(".root",".qahist.root"); fcsTrgSim->setWriteQaHist(qafile.Data());
   fcsTrgSim->setThresholdFile("stage_params.txt");
 
@@ -188,7 +176,7 @@ if(proc.Contains("dy") || proc.Contains("mb") || proc.Contains("jet") || proc.Co
   StMaker::lsMakers(chain);
   chain->EventLoop(mnEvents,nEvents);
 
-  // Confirms which gain/gainCorrection actually got used, for a quick log check.
+  // Log the gain/gainCorrection used
   cout << "Gain check (calibRun=" << calibRun << ", det,id,gain,gainCorr): "
        << "ecal(0,50)=" << fcsdb->getGain(0,50) << "/" << fcsdb->getGainCorrection(0,50)
        << " hcal(2,50)=" << fcsdb->getGain(2,50) << "/" << fcsdb->getGainCorrection(2,50) << endl;

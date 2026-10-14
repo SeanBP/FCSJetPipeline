@@ -1,5 +1,5 @@
 // Underlying-event (UE) energy map for EM-only reco jets, with a truth-level
-// jet-contamination diagnostic. Workshop version -- see README.md.
+// jet-contamination diagnostic (see README.md).
 //
 // Input: a folder of sim_to_jet output made with -E 1 -F 1 -s 1, i.e.
 // jet_output_<suffix>.root (JetTree) and SimpleTree_<suffix>.root side by
@@ -15,11 +15,17 @@
 // left-right mirrored, which is done here by also evaluating the mirrored
 // grid point (-x, y) in the unmirrored event -- the same thing.
 //
+// Only events with exactly one reco jet are used: a second jet in the event
+// raises the chance that jet activity not seen as a reco jet lands in the UE
+// cone. "Reco jet" means one stored in the JetTree, i.e. passing sim_to_jet's
+// EM-only pT cut and reco fiducial cut.
+//
 // For every grid point P and every event (and its mirror):
-//   1. veto:  no reco jet within 2R of P
-//   2. tag:   at least one reco jet whose distance, min(dR(J,P), dR(J,P')),
+//   1. veto:  the reco jet is not within 2R of P
+//   2. tag:   the reco jet's distance, |dphi(J,P' line)|,
 //             is within ue_tag_tolerance_in_R * R of the best achievable one
-//             for P (UESelection.h; P' = 180 deg in azimuth from P)
+//             or at least 2R (zero overlap with any jet on the line)
+//             for P (UESelection.h; P' line = 180 deg in azimuth from P, any eta)
 //   3. UE:    E_UE = summed energy of the FCS points within R of P, using the
 //             same point selection as the jets (ECAL, pass_point_energy_cut)
 //   4. contamination (diagnostic): E_contam = summed energy of TRUTH-JET
@@ -37,7 +43,16 @@
 // Build and run from this folder:
 //   g++ -m64 ue_map.cpp ../shared/VectorDict.cxx -o ue_map -I. -I../shared -I../jet_scale \
 //       `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11
-//   ./ue_map <input_dir/> [output.root] [grid_spacing_cm]
+//   ./ue_map <input_dir/> [output.root] [grid_spacing_cm] [tag_mode]
+//
+// tag_mode "line" is a control selection that replaces step 2 with its
+// opposite: the reco jet must be WITHIN ue_tag_tolerance_in_R * R of the P'
+// line, i.e. back-to-back in azimuth with P, the configuration the nominal
+// tag is designed to avoid. Comparing its contamination with the nominal
+// map's shows how much the tag buys. tag_mode "opposite" is a simpler
+// alternative to step 2 with no reference to the best achievable distance:
+// the reco jet only has to be on the half of the detector opposite P (and,
+// as always, at least 2R from P). Anything else (or nothing) is nominal.
 //
 // Writes <output.root> (default ue_map.root: grids as TH2D, a "points" tree
 // with everything per grid point, and the per-point distributions under
@@ -191,7 +206,7 @@ struct GridPoint
     int ix, iy;
     double x, y, eta, phi;
     double best_distance;   // best achievable jet distance (UESelection.h)
-    double min_tag_distance; // best_distance - tolerance
+    double min_tag_distance; // MinTagDistance(best_distance)
 
     int n_events;           // raw entries passing veto + tag (both mirrors)
     Accum ue;               // E_UE, all selected events
@@ -219,6 +234,13 @@ int main(int argc, char **argv)
         out_name = argv[2];
     if (argc > 3 && argv[3][0] != '\0')
         grid_spacing = std::atof(argv[3]);
+
+    // Control selection: tag jets near the P' line instead of far from it
+    const bool tag_near_line = argc > 4 && std::string(argv[4]) == "line";
+    const double max_line_distance = ue_tag_tolerance_in_R * R;
+
+    // Simple selection: tag any jet on the half opposite the point
+    const bool tag_opposite_half = argc > 4 && std::string(argv[4]) == "opposite";
 
     // ---------------- input files ----------------
 
@@ -289,7 +311,7 @@ int main(int argc, char **argv)
         p.best_distance = BestJetDistance(p.eta, p.phi, candidates);
         if (p.best_distance < 0)
             continue;
-        p.min_tag_distance = p.best_distance - ue_tag_tolerance_in_R * R;
+        p.min_tag_distance = MinTagDistance(p.best_distance);
 
         p.n_events = 0;
         p.sw_ue_zero = 0.0;
@@ -307,14 +329,21 @@ int main(int argc, char **argv)
 
     std::cout << "Grid: " << n_grid_x << " x " << n_grid_y << " points at " << grid_spacing
               << " cm spacing, " << points.size() << " inside the fiducial region" << std::endl;
-    std::cout << "Selection: no reco jet within " << ue_min_dr_to_point / R << " R of the point; a reco jet within "
-              << ue_tag_tolerance_in_R << " R of the best achievable distance; cone radius " << cone_radius << std::endl;
+    std::cout << "Selection: exactly one reco jet in the event; no reco jet within " << ue_min_dr_to_point / R << " R of the point; ";
+    if (tag_opposite_half)
+        std::cout << "SIMPLE: a reco jet on the half opposite the point";
+    else if (tag_near_line)
+        std::cout << "CONTROL: a reco jet within " << ue_tag_tolerance_in_R << " R of the P' line";
+    else
+        std::cout << "a reco jet within " << ue_tag_tolerance_in_R << " R of the best achievable distance (capped at "
+                  << ue_tag_distance_cap / R << " R)";
+    std::cout << "; cone radius " << cone_radius << std::endl;
 
     // ---------------- event loop ----------------
 
     const int MAX_PTS = 200; // matches StSimpleReaderMaker.h's Cal_pt_* array size
 
-    Long64_t n_events_read = 0, n_events_with_jet = 0;
+    Long64_t n_events_read = 0, n_events_with_jet = 0, n_events_one_jet = 0;
     int n_pairs_used = 0, n_pairs_skipped = 0;
 
     for (size_t fidx = 0; fidx < jet_files.size(); fidx++)
@@ -383,10 +412,15 @@ int main(int argc, char **argv)
                 continue;
             n_events_read++;
 
-            // The tag requirement needs at least one reco jet
+            // The tag requirement needs a reco jet
             if (reco_eta->empty())
                 continue;
             n_events_with_jet++;
+
+            // Single-jet events only
+            if (reco_eta->size() != 1)
+                continue;
+            n_events_one_jet++;
 
             jets.clear();
             for (size_t j = 0; j < reco_eta->size(); j++)
@@ -441,7 +475,10 @@ int main(int argc, char **argv)
                             vetoed = true;
                             break;
                         }
-                        if (std::min(d_p, DeltaR(jets[j].eta, jets[j].phi, p.eta, p_phi + M_PI)) >= p.min_tag_distance)
+                        const double d_line = JetDistance(jets[j].phi, p_phi);
+                        if (tag_opposite_half ? std::cos(jets[j].phi) * std::cos(p_phi) < 0.0
+                            : tag_near_line   ? d_line <= max_line_distance
+                                              : d_line >= p.min_tag_distance)
                             tagged = true;
                     }
                     if (vetoed || !tagged)
@@ -474,7 +511,8 @@ int main(int argc, char **argv)
     }
 
     std::cout << "Read " << n_events_read << " events from " << n_pairs_used << " file pairs ("
-              << n_pairs_skipped << " skipped); " << n_events_with_jet << " have at least one reco jet" << std::endl;
+              << n_pairs_skipped << " skipped); " << n_events_with_jet << " have at least one reco jet, "
+              << n_events_one_jet << " exactly one (used)" << std::endl;
 
     // ---------------- output ----------------
 
@@ -499,7 +537,7 @@ int main(int argc, char **argv)
         "Contamination method (1 = Gaussian fit, 0 = numerical);x (cm);y (cm)",
         "Selected events (raw entries, both mirrors);x (cm);y (cm)",
         "Selected events (effective, cross-section weighted);x (cm);y (cm)",
-        "Best achievable jet distance / R;x (cm);y (cm)",
+        "Best achievable jet distance (J on the opposite half) / R;x (cm);y (cm)",
         "Mean contamination energy over all selected events;x (cm);y (cm);GeV"};
 
     TH2D *grid[n_grids];

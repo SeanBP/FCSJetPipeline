@@ -1,27 +1,11 @@
 // Class TrgSimHelperMaker
 //
-// Playground-only maker: runs the fcs_trg_base trigger-simulation engine
-// on real MuDst FCS hits and cross-checks its decision against the real
-// fired trigger id(s) already in the muDst (StMuEvent's
-// triggerIdCollection + TriggerIDs.txt).
-//
-// This is cons-built (not ACLiC), and does its ENTIRE per-event loop
-// inside Make() (called by chain->EventLoop(), no CINT round-trip per
-// event) -- an earlier version drove the per-event loop from an
-// interpreted macro calling out to compiled helper functions, which
-// reproducibly corrupted CINT's interpreter state (crash on the *next*
-// interpreted statement after a successful compiled call, not inside
-// it) regardless of whether the helper was ACLiC- or cons-built. Since
-// StSimpleReaderMaker (chain->EventLoop() calling straight into a
-// compiled Make(), no CINT round-trip mid-event) has been rock solid in
-// this same environment, that's the pattern this follows too.
-//
-// Bypasses StFcsTriggerSimMaker::Make(), which segfaults in its
-// MuDst-fallback path when run outside a full StEvent chain;
-// StFcsTriggerSimMaker is still used (via setTrgSim()) for its working
-// Init()/InitRun() setup of gains/pedestals/stage_version -- this maker
-// just drives its fcs_trg_base engine directly instead of calling its
-// Make().
+// Playground maker: runs the fcs_trg_base trigger simulation on real MuDst
+// FCS hits and compares its decision with the fired trigger ids
+// (TriggerIDs.txt). The whole per-event loop is in the compiled Make():
+// driving it from an interpreted macro corrupts CINT's state. Drives
+// fcs_trg_base directly; StFcsTriggerSimMaker (setTrgSim()) is used only for
+// its Init()/InitRun() setup, since its Make() needs a full StEvent chain.
 
 #ifndef TrgSimHelperMaker_def
 #define TrgSimHelperMaker_def

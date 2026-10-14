@@ -17,51 +17,20 @@ static const double z_proj = 721.5402;
 static const float ecal_mip = 3.1;
 static const float hcal_mip = 15.0;
 
-// ------------------ Threshold ------------------
-// Tower hits (reco jets built from hits): minimum energy as a fraction of
-// the MIP values above.
+// ------------------ Thresholds ------------------
+// Tower hits: minimum energy as a fraction of the MIP values above
 static const float mip_threshold = 0.1;
 
-// FCS points (reco jets built from points, -F 1): minimum point energy,
-// GeV. Same value as the STAR FMS EM-jet analysis's photon-candidate cut
-// (kFmsEngMin, see UnderlyingEventPlayground/fms_emjet_reference.txt),
-// which that analysis chose to reject low-energy photons / hadronic
-// contributions and to match data better. The MIP-based tower cut above
-// does not apply to points. Also the energy floor of reco_nphotons.
-// Applied through pass_point_energy_cut() below, together with the upper
-// limit.
+// FCS points (-F 1): minimum point energy, GeV, as the FMS EM-jet analysis
+// (kFmsEngMin, UnderlyingEventPlayground/fms_emjet_reference.txt). Also the
+// energy floor of reco_nphotons. Applied via pass_point_energy_cut().
 static const float point_energy_min = 1.0f;
 
 // ------------------ Geometry cut (symmetric two-window detector) ------------------
-// HCAL's own projected footprint (north/south combined into one shared
-// rectangle -- see below), inner column (nearest the beam pipe) bounding
-// the y-range, at the ECAL front plane. Reproducible directly from the
-// STAR conditions DB via GeometryPlayground/run_number_to_fiducial.sh
-// <run_number> (no simulation needed): stage 1 (get_fcs_geometry.C) pulls
-// StFcsDb's detector-position geometry for that run's era, stage 2
-// (fiducial_from_corners.cpp, plain C++) reproduces this exact rectangle.
-//
-// Investigated (Aug 2026) whether north and south actually need separate
-// values: they don't, currently -- StFcsDb's detector-position DB table is
-// exactly mirror-symmetric (bit-identical at full double precision, both
-// before and after the one real position update in Run 22's history), and
-// a direct check against real reconstructed hits in a production muDst
-// (run 22359013, ~1.9M ECAL hits) found identical extremal hit positions
-// AND identical observed column/row extent (both sides fully saturate the
-// max 22x34 tower grid) on both arms. So a single shared rectangle is
-// correct, not an approximation -- there's no known source of real
-// geometric north/south asymmetry to split this on. (Real per-side hit
-// *counts* do differ by a few percent in that same check, but that's an
-// occupancy/rate effect, not a geometric one, and doesn't belong in a
-// position-based fiducial cut.)
-//
-// Detector position itself is constant across essentially all of Run 22:
-// checked at DB level, hour-granularity, from a pre-survey placeholder
-// value through 2021-12-20 18:00 UTC, to the real surveyed position from
-// 2021-12-21 onward through the y2023 nominal BFC date -- one single
-// transition, no drift after. get_fcs_geometry.C warns (but does not
-// block) if pointed at a run before that transition; these values are
-// only valid from 2021-12-21 onward.
+// HCAL's projected footprint at the ECAL front plane, one rectangle shared by
+// north and south (the DB geometry is mirror-symmetric). Valid for runs from
+// 2021-12-21 onward (surveyed detector position). Regenerate with
+// GeometryPlayground/run_number_to_fiducial.sh <run_number>.
 static const float cut_x_inner = 24.15591212f;
 static const float cut_x_outer = 131.82035143f;
 
@@ -69,21 +38,9 @@ static const float cut_y_min = -83.19687629f;
 static const float cut_y_max =  86.41376856f;
 
 // ------------------ ECAL-only geometry cut (EM-only reco jets) ------------------
-// Same derivation as cut_x_inner/etc above (GeometryPlayground/
-// run_number_to_fiducial.sh, ECAL front plane, run 22359013's geometry --
-// see fcs_corners_run22.txt), but using ECAL's OWN footprint instead of
-// being clipped to HCAL's smaller projected footprint: when reco jets are
-// built from ECAL hits only (no HCAL), there is no reason to cut them down
-// to HCAL's acceptance. ECAL's front face is tilted, not perpendicular to
-// z (confirmed from the real corner data -- the inner-column corners sit
-// at larger z than the outer-column ones), so these values are ECAL's own
-// corners projected onto the shared z_ecal plane like everything else
-// here, not their raw (x,y) -- only the outer-column corners happen to
-// already sit at z_ecal itself. North/south again confirmed bit-identical
-// (same DB-level symmetry as the default rectangle above), so one shared
-// rectangle applies here too. Regenerate via
-// GeometryPlayground/fiducial_from_corners.cpp's "ECAL-only rectangle"
-// output if the detector position ever changes.
+// ECAL's own footprint, its tilted front-face corners projected onto the
+// z_proj plane. Regenerate with GeometryPlayground/fiducial_from_corners.cpp
+// ("ECAL-only rectangle").
 static const float cut_x_inner_ecal = 20.53604584f;
 static const float cut_x_outer_ecal = 137.59500000f;
 
@@ -94,70 +51,60 @@ static const float cut_y_max_ecal =  86.25565167f;
 static const float cut_buffer = 0.0f;
 static const float R_buffer = 0.0f * R / 4.0f;
 
-// margin for the simple rectangle cut (pass_fiducial_cut): reco jets use a
-// margin since the jet energy response is poorly calibrated near the
-// fiducial edge. Truth jets use pass_jet_scale_cut instead, extending this
-// same boundary outward in eta-phi (see below): by half a jet radius for
-// ECAL+HCAL jets, by a full jet radius (truth_fiducial_margin_em) for
-// EM-only jets.
+// Reco jet margin inside the rectangle (pass_fiducial_cut), cm: the energy
+// response is poorly calibrated near the edge. Truth jets use
+// pass_jet_scale_cut, extending the boundary outward in eta-phi instead.
 static const float reco_fiducial_buffer = 10.0f;
 
-// Same role as reco_fiducial_buffer, but for EM-only reco jets against the
-// ECAL-only rectangle above. Characterized via the EM-only JES calibration
-// diagnostics fork (JetScalePlayground/): a survey of high-statistics,
-// high-chi2 position bins found the poor-fit failure modes concentrated
-// within ~20cm of the fiducial edge, so bins inside that margin were
-// excluded from the calibration survey entirely -- 20.0f bakes that same
-// exclusion into jet-finding itself, rather than only filtering for it
-// downstream in the calibration/analysis stage.
+// Same, for EM-only reco jets against the ECAL-only rectangle. JES fits
+// degrade within ~20 cm of the edge.
 static const float reco_fiducial_buffer_ecal = 20.0f;
 
 // ------------------ EM-only reco jets ------------------
-// Minimum pT (GeV) of an EM-only reco jet at jet finding. Same value as the
-// STAR FMS EM-jet analysis (kPtMin, see
-// UnderlyingEventPlayground/fms_emjet_reference.txt). That analysis applies
-// the same 2 GeV again after its UE subtraction and energy/pT correction;
-// that second, analysis-level cut is not applied here.
+// Minimum pT (GeV) of an EM-only reco jet at jet finding, as the FMS EM-jet
+// analysis (kPtMin). Its second, post-correction 2 GeV cut is analysis level.
 static const double reco_jet_pt_min_em = 2.0;
 
 // ------------------ EM-only truth jets ------------------
-// Minimum pT (GeV) of an EM-only truth jet at jet finding. Same value as
-// the STAR FMS EM-jet analysis's particle-level jets (AntiKtR070Particle,
-// see UnderlyingEventPlayground/fms_emjet_reference.txt).
+// Minimum pT (GeV) of an EM-only truth jet, as the FMS particle-level jets
 static const double truth_jet_pt_min_em = 1.0;
 
-// How far outside the reco fiducial region (kFiducialRectEcal inset by
-// reco_fiducial_buffer_ecal) an EM-only truth jet's axis may sit, in
-// eta-phi: one full jet radius. A truth jet further out than R has no
-// overlap with any jet whose axis is inside the fiducial region, so it
-// cannot affect what is observed there and is dropped.
+// How far outside the reco fiducial region an EM-only truth jet axis may sit,
+// in eta-phi. Beyond R it cannot overlap any jet inside the region.
 static const float truth_fiducial_margin_em = (float)R;
 
+// EM-only truth particles: photons created within this distance (cm) of the
+// primary vertex, i.e. prompt and pi0/eta-decay photons but not GEANT shower
+// secondaries. Shared by the truth jets (sim_to_jet/JetMatcher.cpp) and the
+// truth-level UE (underlying_event/UnderlyingEvent.cpp).
+static const double em_truth_displacement_max = 0.01;
+
+// Geant3 particle code of the photon
+static const int kGeant3Photon = 1;
+
+// The primary vertex: the creation point of the first particle made at
+// StMcVertex 1 (idVtx == 1). False if there is none.
+inline bool FindEmTruthPrimaryVertex(int n, const int *idVtx, const float *vx, const float *vy, const float *vz,
+                                     float &x, float &y, float &z)
+{
+    for (int i = 0; i < n; i++)
+        if (idVtx[i] == 1) { x = vx[i]; y = vy[i]; z = vz[i]; return true; }
+    return false;
+}
+
+// Whether a particle enters the EM-only truth: a photon created within
+// em_truth_displacement_max of the primary vertex (px, py, pz)
+inline bool IsEmTruthParticle(int geid, float vx, float vy, float vz, float px, float py, float pz)
+{
+    if (geid != kGeant3Photon) return false;
+    const double dx = vx - px, dy = vy - py, dz = vz - pz;
+    return std::sqrt(dx * dx + dy * dy + dz * dz) <= em_truth_displacement_max;
+}
+
 // ------------------ Feynman x / detector side ------------------
-// Real Run 22 pp sqrt(s), GeV -- confirmed from RunLog.beamInfo (the
-// authoritative real-time beam-energy readback DB), investigated
-// 2026-10. Run 22's forward-production period actually had TWO distinct
-// beam energies, not one constant: blueEnergy=yellowEnergy=254.867 GeV
-// for runs <=23002045 (~2021-12-15 to 2022-01-02, 321/3368 forward
-// runs / ~8.3% of events) and =254.213 GeV for runs >=23002052
-// (2022-01-02 onward, 3047/3368 runs / ~91.7% of events) -- cross-checked
-// externally against 2022 IPAC accelerator-physics proceedings, which
-// describe RHIC changing the Run 22 collision energy from ~255 to 254.2
-// GeV mid-run (snake-magnet damage mitigation). No production runs fall
-// between those two run numbers, so there's no real ambiguity right at
-// the threshold. kSqrtS_MainRun22_GeV is also what sim_to_jet's
-// generator-level SetFrame("CMS",508.4) already uses (fixed previously;
-// see starsim_pythia8_filter.C/starsim_pythia6_filter.C) -- sim has no
-// real per-event run number, so it always uses this one fixed value
-// rather than the per-run lookup below.
-//
-// The OLD SQRT_S=500.0 constant below is kept only so any code that
-// hasn't been updated to pass a real sqrt(s) into computeFeynmanX() yet
-// fails loudly (no default parameter) rather than silently reusing a
-// value that was wrong by ~1.7-1.9% for every x_F this pipeline has ever
-// written (sim and real data both) -- see PRODUCTION_TRACKER.md / the
-// 2026-10 x_F investigation for the full writeup. Do not reintroduce a
-// default here.
+// Run 22 pp sqrt(s), GeV, from RunLog.beamInfo: RHIC lowered the beam energy
+// from 254.867 to 254.213 GeV between runs 23002045 and 23002052.
+// Simulation uses kSqrtS_MainRun22_GeV (as the generator frame does).
 static const double kSqrtS_EarlyRun22_GeV = 509.734; // runs <= 23002045
 static const double kSqrtS_MainRun22_GeV  = 508.426; // runs >= 23002052 (and sim's fixed value)
 static const int    kSqrtSRunThreshold    = 23002045;
@@ -169,41 +116,25 @@ inline double computeSqrtSForRun(int runNumber)
 
 // ------------------ Shared functions ------------------
 
-// x_F = 2*pz/sqrt(s). Uses jet energy (not pT) for pz, so that an energy
-// correction applied downstream (see ApplyCorrections.cpp) propagates into
-// a genuinely different corrected x_F rather than reproducing the
-// uncorrected value -- pT and eta are unaffected by the energy-only
-// correction, but E*tanh(eta) is not. sqrtS is a required argument (no
-// default) -- call with computeSqrtSForRun(runNumber) for real data, or
-// kSqrtS_MainRun22_GeV for simulation; see the comment above.
+// x_F = 2 pz / sqrt(s), with pz = E tanh(eta) so an energy correction
+// propagates into x_F. Pass computeSqrtSForRun(run) for data,
+// kSqrtS_MainRun22_GeV for simulation.
 inline double computeFeynmanX(double E, double eta, double sqrtS)
 {
     double pz = E * std::tanh(eta);
     return 2.0 * pz / sqrtS;
 }
 
-// Energy window for an FCS point to be used (reco jets built from points,
-// and reco_nphotons): above point_energy_min and no more than one beam's
-// energy, sqrt(s)/2. A single photon cannot carry more than the beam
-// energy, so anything above it is unphysical (hot/miscalibrated channels,
-// beam background) -- the same role as the STAR FMS EM-jet analysis's
-// upper photon-energy cut (kFmsEngMax = 100 GeV at sqrt(s) = 200 GeV).
-// Shared by sim_to_jet and data_to_jet so both apply exactly the same
-// code; it removes nothing physical in simulation. Pass
-// computeSqrtSForRun(runNumber) for real data, kSqrtS_MainRun22_GeV for
-// simulation.
+// FCS point energy window: above point_energy_min and at most one beam's
+// energy, sqrt(s)/2 (higher is unphysical: hot channels, beam background).
+// Shared by sim_to_jet and data_to_jet.
 inline bool pass_point_energy_cut(float e, double sqrtS)
 {
     return e > point_energy_min && e <= 0.5 * sqrtS;
 }
 
-// Rejects unphysical reco jets, as the STAR FMS EM-jet analysis does: a
-// jet cannot carry more than one beam's energy (E <= sqrt(s)/2), and its
-// x_F must lie in (0, 1]. ANALYSIS-LEVEL ONLY: these limits are only
-// meaningful for the final jet energy, i.e. after underlying-event
-// subtraction and energy calibration, so nothing in sim_to_jet or
-// data_to_jet calls this -- it lives here so the analysis has one
-// definition to use. Pass the corrected E.
+// Analysis-level cut on the corrected jet (after UE subtraction and energy
+// calibration), as the FMS analysis: E <= sqrt(s)/2 and 0 < x_F <= 1.
 inline bool pass_physical_jet_cut(double E, double eta, double sqrtS)
 {
     double xF = computeFeynmanX(E, eta, sqrtS);
@@ -341,24 +272,16 @@ inline double etaPhiSignedDistance(float jetXE, float jetYE,
     return inside ? best : -best;
 }
 
-// A fiducial rectangle's four bounds, so pass_jet_scale_cut/pass_fiducial_cut
-// below can be pointed at either the default (ECAL+HCAL-limited) rectangle
-// or the ECAL-only one (EM-only reco jets), instead of always hardcoding
-// cut_x_inner/etc.
+// A fiducial rectangle's bounds (|x| for both detector halves)
 struct FiducialRect { float x_inner, x_outer, y_min, y_max; };
 
 static const FiducialRect kFiducialRect     = { cut_x_inner,      cut_x_outer,      cut_y_min,      cut_y_max };
 static const FiducialRect kFiducialRectEcal = { cut_x_inner_ecal, cut_x_outer_ecal, cut_y_min_ecal, cut_y_max_ecal };
 
-// symmetric two-window acceptance, with an eta-phi margin relative to a
-// rectangle boundary (rect inset by cmBuffer). A positive etaPhiMargin
-// erodes the acceptance region: the jet must clear the boundary by that
-// much in eta-phi (used to define where the jet-energy-scale calibration
-// map is valid). A negative etaPhiMargin dilates it: the jet may fall
-// outside the boundary by up to that much in eta-phi (used to accept truth
-// jets whose reco counterpart can still land inside the reco fiducial cut).
-// rect defaults to the standard ECAL+HCAL rectangle; pass kFiducialRectEcal
-// for EM-only reco jets.
+// Acceptance with an eta-phi margin from the boundary of rect inset by
+// cmBuffer. A positive margin requires the jet to clear the boundary by that
+// much (JES map validity); a negative one accepts jets up to that far outside
+// (truth jets whose reco partner can still land inside).
 inline bool pass_jet_scale_cut(float jetXE, float jetYE, float cmBuffer, float etaPhiMargin,
                                 const FiducialRect &rect = kFiducialRect)
 {
@@ -371,9 +294,7 @@ inline bool pass_jet_scale_cut(float jetXE, float jetYE, float cmBuffer, float e
 }
 
 
-// symmetric two-window acceptance at ECAL front plane, used for reco jet
-// selection (with an adjustable margin). rect defaults to the standard
-// ECAL+HCAL rectangle; pass kFiducialRectEcal for EM-only reco jets.
+// Reco jet acceptance: inside rect inset by buffer (cm) at the ECAL front plane
 inline bool pass_fiducial_cut(float jetXE, float jetYE, float buffer,
                                const FiducialRect &rect = kFiducialRect)
 {

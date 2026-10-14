@@ -19,10 +19,9 @@
 # easily land in a gap between fills and wrongly look empty even when the
 # DB is well populated nearby, so this checks the exact run start time
 # directly against each entry's [beginTime, endTime) window instead of
-# sampling arbitrary dates. Investigated Aug 2026: spinV124 (254 entries)
-# and spinStar (3362 entries) cover 2021-12-14 through 2022-04-18 with no
-# gap over ~2.3 days; there is zero coverage of either table after
-# 2022-04-18, for the rest of Run 22.
+# sampling arbitrary dates. spinV124 (254 entries) and spinStar (3362)
+# cover 2021-12-14 through 2022-04-18 with no gap over ~2.3 days, and
+# nothing after 2022-04-18.
 #
 # spinBXmask is also checked but is a known red herring: its most recent
 # real entry is from 2013-06-02 with an open-ended endTime (2037-01-01),
