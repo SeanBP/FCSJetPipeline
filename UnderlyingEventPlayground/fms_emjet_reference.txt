@@ -279,10 +279,9 @@ Different from FMS:
     (STAR's Pythia 6 wrapper leaves pi0/eta stable and GEANT decays them), versus PYTHIA
     status-1 photons with pi0/eta decayed in PYTHIA. Photons from long-lived
     parents (K0S, Lambda, ...) are excluded.
-  - Truth jets are clustered from all photons, as in FMS, although reco points
-    need 1 GeV; the calibration absorbs the difference. The photon counts use
-    the same window at both levels: truth_nphotons counts photon constituents
-    and reco_nphotons counts points, both 1 GeV < E <= sqrt(s)/2.
+  - (Same as FMS:) truth photons carry no energy cut, for the jets and for
+    truth_nphotons, although reco points need 1 GeV. How to cut truth photons
+    to match the detector photons is left open, as in FMS.
   - Acceptance: reco jet axis inside the ECAL x-y fiducial rectangle with a
     20 cm buffer; truth jet axis up to R outside that region in eta-phi.
     FMS: 2.8 < eta < 3.8 on the jet axis.
