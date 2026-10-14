@@ -56,7 +56,7 @@ One job generates `-n` events and writes
 
 | Flag | Meaning |
 |---|---|
-| `-w` | JSON of relative ptHatMin (and ptHatMax) shares across the `-j` jobs, e.g. `pthat_distribution_optimized.json`; replaces `-p`/`-P` |
+| `-w` | JSON of relative ptHat-range shares across the `-j` jobs (`pthat_distribution_optimized.json`: disjoint 5 GeV bins, exact weights); replaces `-p`/`-P` |
 | `-f` | keep only events that fired one of these FCS triggers (`FcsTriggerDefs.h` names, emulated with `fcs_trg_base`) |
 | `-c` | run number fixing the FCS gain calibration era (default: BFC's nominal date) |
 | `-e` | `FcsJetFilter` forward-flux threshold, GeV (default 50, 0 = off) |
