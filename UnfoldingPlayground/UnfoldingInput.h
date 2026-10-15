@@ -101,14 +101,14 @@ inline bool LoadJetPairs(const std::vector<std::string> &files, MatchMode mode, 
         t->SetBranchAddress("fcsEM2", &em2);
         if (ue)
         {
-            const char *ub[] = {"reco_ue_E", "reco_ue_pt", "reco_ue_nproxy", "truth_ue_E", "truth_ue_pt", "truth_ue_nproxy"};
+            const char *ub[] = {"reco_ue_E", "reco_ue_pt", "reco_ue_nproxy", "truth_ue_E", "truth_ue_pt", "truth_ue_ncone"};
             for (int k = 0; k < 6; k++) t->SetBranchStatus(ub[k], 1);
             t->SetBranchAddress("reco_ue_E", &rueE);
             t->SetBranchAddress("reco_ue_pt", &ruept);
             t->SetBranchAddress("reco_ue_nproxy", &rue_n);
             t->SetBranchAddress("truth_ue_E", &tueE);
             t->SetBranchAddress("truth_ue_pt", &tuept);
-            t->SetBranchAddress("truth_ue_nproxy", &tue_n);
+            t->SetBranchAddress("truth_ue_ncone", &tue_n);
         }
 
         for (Long64_t ev = 0; ev < t->GetEntries(); ev++)

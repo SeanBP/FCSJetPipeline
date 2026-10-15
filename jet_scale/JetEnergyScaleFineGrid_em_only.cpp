@@ -326,7 +326,7 @@ int main(int argc, char** argv)
         tree->SetBranchAddress("match_reco_idx", &match_reco_idx);
 
         std::vector<float> *reco_ue_E = nullptr, *truth_ue_E = nullptr;
-        std::vector<int> *reco_ue_nproxy = nullptr, *truth_ue_nproxy = nullptr;
+        std::vector<int> *reco_ue_nproxy = nullptr, *truth_ue_ncone = nullptr;
         if (subtract_ue)
         {
             if (!tree->GetBranch("reco_ue_E") || !tree->GetBranch("truth_ue_E"))
@@ -338,7 +338,7 @@ int main(int argc, char** argv)
             tree->SetBranchAddress("reco_ue_E", &reco_ue_E);
             tree->SetBranchAddress("truth_ue_E", &truth_ue_E);
             tree->SetBranchAddress("reco_ue_nproxy", &reco_ue_nproxy);
-            tree->SetBranchAddress("truth_ue_nproxy", &truth_ue_nproxy);
+            tree->SetBranchAddress("truth_ue_ncone", &truth_ue_ncone);
         }
 
         Long64_t n_events = tree->GetEntries();
@@ -357,7 +357,7 @@ int main(int argc, char** argv)
                 n_pairs++;
                 if (subtract_ue)
                 {
-                    if (reco_ue_nproxy->at(ri) <= 0 || truth_ue_nproxy->at(ti) <= 0)
+                    if (reco_ue_nproxy->at(ri) <= 0 || truth_ue_ncone->at(ti) <= 0)
                     {
                         n_no_ue++;
                         continue;

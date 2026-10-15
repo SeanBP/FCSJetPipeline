@@ -268,11 +268,11 @@ Same as FMS:
     PyTune 370, PARP(90) = 0.213, PARP(91) = 1, CTEQ6L1, MSEL 1.
 
 Different from FMS:
-  - UE subtraction: energy, not pT, per jet from proxy events (other events
-    of the same run or ptHat bin and EM trigger level, with a jet of similar
-    pT near 90 deg from the cone; ../underlying_event/), at reco and truth
-    level; FMS uses off-axis cones in the same event. Jet areas are not
-    computed.
+  - UE subtraction: energy, not pT. Reco: per jet from proxy events (other
+    events of the same run or ptHat bin and EM trigger level, with a jet of
+    similar pT near 90 deg from the cone; ../underlying_event/), since the FCS
+    does not cover full azimuth. Truth: same-event cones at phi +- 90 deg, as
+    FMS. Jet areas are not computed.
   - Jet direction: constituent directions are taken from the origin, as if
     there were no vertex information; event_vertex_z is stored but not used.
   - Truth source: GEANT tracks created within 100 um of the primary vertex
@@ -283,7 +283,8 @@ Different from FMS:
     truth_nphotons, although reco points need 1 GeV. How to cut truth photons
     to match the detector photons is left open, as in FMS.
   - Acceptance: reco jet axis inside the ECAL x-y fiducial rectangle with a
-    20 cm buffer; truth jet axis up to R outside that region in eta-phi.
+    20 cm buffer (eta 2.34-3.57); truth photons and jet axes in full-azimuth
+    eta bands around that range, R (1.64-4.27) and R/2 (1.99-3.92) wide.
     FMS: 2.8 < eta < 3.8 on the jet axis.
   - Matching: one-to-one, closest pairs first, dR < R/2 = 0.35 (the CMS
     choice, arXiv:1607.03663), versus nearest within 0.2, not one-to-one.

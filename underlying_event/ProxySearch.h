@@ -76,16 +76,12 @@ public:
         int pt_first, pt_n;         // range in the point arrays
     };
 
-    explicit ProxyPool(double table_grid_cm = 2.0) : require_em_trigger_(true), require_fiducial_(true), pt_min_(reco_jet_pt_min_em) { table_.Build(table_grid_cm); }
+    explicit ProxyPool(double table_grid_cm = 2.0) : require_em_trigger_(true), pt_min_(reco_jet_pt_min_em) { table_.Build(table_grid_cm); }
 
-// Minimum-bias mode (samples without trigger or jet pT cuts, e.g. the JES
-// calibration sample): every fiducial jet is estimated and can be a proxy
-// jet, and untriggered events match untriggered ones. Call before AddEvent.
+    // Minimum-bias mode (samples without trigger or jet pT cuts, e.g. the JES
+    // calibration sample): every fiducial jet is estimated and can be a proxy
+    // jet, and untriggered events match untriggered ones. Call before AddEvent.
     void SetMinimumBias() { require_em_trigger_ = false; pt_min_ = 0.0; }
-
-// Also estimate jets outside the fiducial region (truth jets), using the
-// half-width of the nearest fiducial position. Proxy jets stay fiducial.
-    void SetRequireFiducial(bool require) { require_fiducial_ = require; }
 
     // Adds one event and returns its index. Events must be added in time
     // order. Points are ECal points that already passed the energy cut.
@@ -124,16 +120,16 @@ public:
         return (events_.size() * sizeof(Event) + jets_.size() * (sizeof(ProxyJet) + sizeof(Ref)) + 3.0 * p_E_.size() * sizeof(float)) / 1048576.0;
     }
 
-// UE estimate for a jet. n = -1 if the event fired no EM trigger, the jet is
-// below the reco pT threshold, or it is outside the fiducial region (in
-// minimum-bias mode only the last applies). n_max <= 0: no limit.
+    // UE estimate for a jet. n = -1 if the event fired no EM trigger, the jet is
+    // below the reco pT threshold, or it is outside the fiducial region (in
+    // minimum-bias mode only the last applies). n_max <= 0: no limit.
     ProxyResult Estimate(int event, int jet_in_event, int n_max = proxy_n_max) const
     {
         const int n_target = n_max > 0 ? n_max : 2000000000;
         ProxyResult res;
         const Event &ev = events_[event];
         const ProxyJet &jet = jets_[ev.jet_first + jet_in_event];
-        if ((ev.em_level < 0 && require_em_trigger_) || jet.pt < pt_min_ || !(jet.pt > 0) || (require_fiducial_ && !ProxyInFiducial(jet.x, jet.y)))
+        if ((ev.em_level < 0 && require_em_trigger_) || jet.pt < pt_min_ || !(jet.pt > 0) || !ProxyInFiducial(jet.x, jet.y))
             return res;
         res.n = 0;
 
@@ -169,7 +165,7 @@ private:
     static KeyType Key(int group, int em_level, int pt_bin) { return KeyType((long long)group * 4 + em_level, pt_bin); }
     // 5% wide; bin 0 starts at reco_jet_pt_min_em, lower pT gives negative bins
     static int PtBin(double pt) { return (int)std::floor(std::log(pt / reco_jet_pt_min_em) / std::log(1.05)); }
-    bool require_em_trigger_, require_fiducial_;
+    bool require_em_trigger_;
     double pt_min_;
 
     // Adds proxy events whose proxy jet is inside the given pT window, nearest

@@ -550,6 +550,11 @@ Int_t StSimpleReaderMaker::Make( )
 	// Retrieve i-th MC tracks from MuDst
   	StMuMcTrack *mcTrack = (StMuMcTrack*)mcTracks->UncheckedAt(iTrk);
 	if ( !mcTrack ) continue;
+	// The mcpart_* arrays are fixed size: keep the first ones that fit
+	if ( mcpart_num >= (int)(sizeof(mcpart_px)/sizeof(mcpart_px[0])) ) {
+		LOG_WARN << "StSimpleReaderMaker: more MC tracks than the mcpart_* arrays hold; keeping " << mcpart_num << endm;
+		break;
+	}
 
 	mcpart_geid[mcpart_num] = mcTrack->GePid();
   	mcpart_idVtx[mcpart_num] = mcTrack->IdVx();       // ID of creation vertex

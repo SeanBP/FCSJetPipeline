@@ -9,6 +9,7 @@
       {{UE_ARGS}}       options passed on to UnderlyingEvent (e.g. "0 minbias")
       {{MIN_STORAGE}}   scratch space to request, MB (largest bin x 2.5 + 1 GB:
                         the inputs, the rewritten copies, and the build)
+      {{JETMATCHER_ARGS}}  empty, or JetMatcher options to rebuild the jets first
       {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
     star-submit must run from the pipeline root, since the SandBox <File>
     paths below are relative to it.
@@ -32,13 +33,17 @@
 
         cp underlying_event/* .
         cp shared/* .
+        cp sim_to_jet/* .
         g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent `root-config --cflags --libs` \
             `fastjet-config --cxxflags` -std=c++11
-        # Stop before copying any input if the build failed
-        if ( ! -x UnderlyingEvent ) then
-            echo "UnderlyingEvent did not build"
+        g++ -m64 -O2 JetMatcher.cpp VectorDict.cxx -o JetMatcher `root-config --cflags --libs` -lEG \
+            `fastjet-config --cxxflags --libs` -std=c++11
+        # Stop before copying any input if a build failed
+        if ( ! -x UnderlyingEvent || ! -x JetMatcher ) then
+            echo "build failed"
             exit 1
         endif
+        setenv JETMATCHER_ARGS "{{JETMATCHER_ARGS}}"
 
         echo "pairs list: {{WORKDIR}}/bin_${JOBINDEX}.list"
         date
@@ -49,6 +54,8 @@
     <SandBox installer="ZIP">
         <Package>
             <File>file:./underlying_event</File>
+            <File>file:./sim_to_jet/JetMatcher.cpp</File>
+            <File>file:./sim_to_jet/FcsTriggerDefs.h</File>
             <File>file:./shared/JetParameters.h</File>
             <File>file:./shared/VectorDict.cxx</File>
             <File>file:./shared/VectorDict.h</File>

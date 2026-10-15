@@ -7,7 +7,11 @@
 # <file>.ue_new beside the original and renamed over it, so a file on disk is
 # never left half written. Nothing is copied back if UnderlyingEvent fails.
 #
-# Usage (inside the job, UnderlyingEvent already built here):
+# With JETMATCHER_ARGS set (e.g. "1 1 0": em_only use_points jet_pt_cuts), each
+# jet file is first rebuilt from its SimpleTree with JetMatcher (no trigger
+# filter), in scratch.
+#
+# Usage (inside the job, UnderlyingEvent and JetMatcher already built here):
 #   ./run_ue_bin.sh <pairs list> [UnderlyingEvent options, e.g. "0 minbias"]
 # The list has one line per pair: "<jet_output file> <SimpleTree file>".
 
@@ -28,6 +32,17 @@ while read -r jet simple; do
     echo "$PWD/ue_in/$n/$(basename "$jet") $PWD/ue_in/$n/$(basename "$simple")" >> ue_local.list
 done < "$LIST"
 echo "run_ue_bin.sh: copied $n file pairs to scratch ($(du -sh ue_in | cut -f1))"
+
+if [ -n "$JETMATCHER_ARGS" ]; then
+    n=0
+    while read -r jet simple; do
+        [ -z "$jet" ] && continue
+        n=$((n + 1))
+        (cd "ue_in/$n" && basename "$simple" > jm.list && "$OLDPWD/JetMatcher" jm.list "" $JETMATCHER_ARGS > /dev/null \
+            && mv jet_output.root "$(basename "$jet")" && rm -f jm.list)
+    done < "$LIST"
+    echo "run_ue_bin.sh: rebuilt $n jet files with JetMatcher $JETMATCHER_ARGS"
+fi
 
 ./UnderlyingEvent ue_local.list "$@"
 

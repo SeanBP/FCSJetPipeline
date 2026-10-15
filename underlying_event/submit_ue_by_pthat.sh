@@ -9,7 +9,7 @@
 #
 # Usage:
 #   ./submit_ue_by_pthat.sh -i <sample_dir>[,<sample_dir>...] -w <workdir> \
-#       [-m minbias|default] [-l <label>] [-k <0|1>] [-n]
+#       [-m minbias|default] [-J "<em_only> <use_points> <jet_pt_cuts>"] [-l <label>] [-k <0|1>] [-n]
 #
 #   -i  comma-separated sim_to_jet output folders, either split by
 #       sim_to_jet/organize_sim_output.sh (jet_output/pt<N>/, SimpleTree/pt<N>/)
@@ -19,6 +19,9 @@
 #   -m  "minbias" (default): every fiducial jet estimated, untriggered events
 #       matched with untriggered ones; "default": the analysis behaviour
 #       (EM-triggered jets above the reco pT threshold only)
+#   -J  rebuild every jet file from its SimpleTree with JetMatcher first, with
+#       these options and no trigger filter (e.g. "1 1 0" for an EM-only,
+#       point-based calibration sample)
 #   -l  label for the generated XML's filename, default "run"
 #   -k  1 = keep each job's stdout/stderr under <workdir>/log/ (default 1)
 #   -n  dry run: write the lists and the XML, but do not submit
@@ -27,12 +30,12 @@
 # <workdir>/unpaired.txt and left out.
 
 set -e
-INPUTS=""; WORKDIR=""; MODE="minbias"; LABEL="run"; KEEPLOGS=1; DRYRUN=0
-while getopts "i:w:m:l:k:nh" opt; do
+INPUTS=""; WORKDIR=""; MODE="minbias"; LABEL="run"; KEEPLOGS=1; DRYRUN=0; JMARGS=""
+while getopts "i:w:m:J:l:k:nh" opt; do
   case $opt in
     i) INPUTS="$OPTARG" ;; w) WORKDIR="$OPTARG" ;; m) MODE="$OPTARG" ;;
-    l) LABEL="$OPTARG" ;; k) KEEPLOGS="$OPTARG" ;; n) DRYRUN=1 ;;
-    h|*) sed -n '2,27p' "$0"; exit 0 ;;
+    J) JMARGS="$OPTARG" ;; l) LABEL="$OPTARG" ;; k) KEEPLOGS="$OPTARG" ;; n) DRYRUN=1 ;;
+    h|*) sed -n '2,30p' "$0"; exit 0 ;;
   esac
 done
 if [ -z "$INPUTS" ] || [ -z "$WORKDIR" ]; then echo "Missing -i or -w. Run with -h for usage."; exit 1; fi
@@ -89,7 +92,7 @@ else
 fi
 OUTXML="${SCRIPT_DIR}/ue_by_pthat_${LABEL}.xml"
 sed -e "s#{{WORKDIR}}#${WORKDIR}#g" -e "s#{{UE_ARGS}}#${UE_ARGS}#g" -e "s#{{MIN_STORAGE}}#${MIN_STORAGE}#g" \
-    -e "s#{{STDOUT_URL}}#${STDOUT_URL}#g" -e "s#{{STDERR_URL}}#${STDERR_URL}#g" \
+    -e "s#{{STDOUT_URL}}#${STDOUT_URL}#g" -e "s#{{STDERR_URL}}#${STDERR_URL}#g" -e "s#{{JETMATCHER_ARGS}}#${JMARGS}#g" \
     -e "s#nProcesses=\"1\"#nProcesses=\"${NBINS}\"#" "${SCRIPT_DIR}/ue_by_pthat.xml" > "$OUTXML"
 echo "Generated $OUTXML"
 
@@ -100,6 +103,7 @@ submitted_utc=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 inputs=${INPUTS}
 mode=${MODE}
 ue_args=${UE_ARGS}
+jetmatcher_args=${JMARGS:-<none>}
 n_bins=${NBINS}
 min_storage_mb=${MIN_STORAGE}
 pipeline_commit=${GITHASH}

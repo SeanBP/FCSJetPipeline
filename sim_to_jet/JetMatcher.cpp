@@ -372,8 +372,14 @@ int main(int argc, char** argv) {
 
                 int pdg = pdgDB->ConvertGeant3ToPdg(mcpart_geid[i]);
 
-                // EM-only truth jets are clustered from photons only
+                // EM-only truth jets are clustered from photons only, within
+                // the truth particle eta band (full azimuth)
                 if (em_only && !EM_ONLY_TRUTH_PIDS.count(pdg)) continue;
+                if (em_only)
+                {
+                    const double ptp = std::sqrt(mcpart_px[i] * mcpart_px[i] + mcpart_py[i] * mcpart_py[i]);
+                    if (!(ptp > 0) || !InTruthParticleEtaRange(std::asinh(mcpart_pz[i] / ptp))) continue;
+                }
 
                 truth_particles.emplace_back(mcpart_px[i], mcpart_py[i], mcpart_pz[i], mcpart_E[i]);
                 truth_pid_particles.push_back(pdg);
@@ -390,10 +396,12 @@ int main(int argc, char** argv) {
                 // Backward jets would project onto the forward plane spuriously
                 if (jet.pz() <= 0) continue;
 
+                // EM-only: the truth jet eta band (full azimuth); ECAL+HCAL:
+                // the fiducial rectangle dilated by R/2
                 float jetXE = z_proj * jet.px() / jet.pz();
                 float jetYE = z_proj * jet.py() / jet.pz();
                 bool passesFiducial = em_only
-                    ? pass_jet_scale_cut(jetXE, jetYE, reco_fiducial_buffer_ecal, -truth_fiducial_margin_em, kFiducialRectEcal)
+                    ? InTruthJetEtaRange(jet.eta())
                     : pass_jet_scale_cut(jetXE, jetYE, reco_fiducial_buffer, -R/2.0f);
                 if (passesFiducial) truth_jets_selected.push_back(jet);
             }

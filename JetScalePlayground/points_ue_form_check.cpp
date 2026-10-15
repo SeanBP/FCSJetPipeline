@@ -170,7 +170,7 @@ int main(int argc, char **argv)
         if (!tree || !tree->GetBranch("reco_ue_E") || !tree->GetBranch("truth_ue_E")) { f->Close(); delete f; continue; }
 
         std::vector<float> *reco_E = nullptr, *reco_x = nullptr, *reco_y = nullptr, *truth_E = nullptr, *truth_pt = nullptr, *reco_ue_E = nullptr, *truth_ue_E = nullptr;
-        std::vector<int> *match_truth_idx = nullptr, *match_reco_idx = nullptr, *reco_ue_nproxy = nullptr, *truth_ue_nproxy = nullptr;
+        std::vector<int> *match_truth_idx = nullptr, *match_reco_idx = nullptr, *reco_ue_nproxy = nullptr, *truth_ue_ncone = nullptr;
         tree->SetBranchAddress("reco_E", &reco_E);
         tree->SetBranchAddress("reco_x", &reco_x);
         tree->SetBranchAddress("reco_y", &reco_y);
@@ -181,10 +181,10 @@ int main(int argc, char **argv)
         tree->SetBranchAddress("reco_ue_E", &reco_ue_E);
         tree->SetBranchAddress("reco_ue_nproxy", &reco_ue_nproxy);
         tree->SetBranchAddress("truth_ue_E", &truth_ue_E);
-        tree->SetBranchAddress("truth_ue_nproxy", &truth_ue_nproxy);
+        tree->SetBranchAddress("truth_ue_ncone", &truth_ue_ncone);
         tree->SetBranchStatus("*", 0);
         const char *used[] = {"reco_E", "reco_x", "reco_y", "truth_E", "truth_pt", "match_truth_idx", "match_reco_idx",
-                              "reco_ue_E", "reco_ue_nproxy", "truth_ue_E", "truth_ue_nproxy"};
+                              "reco_ue_E", "reco_ue_nproxy", "truth_ue_E", "truth_ue_ncone"};
         for (int k = 0; k < 11; k++) tree->SetBranchStatus(used[k], 1);
 
         Long64_t n_events = tree->GetEntries();
@@ -203,7 +203,7 @@ int main(int argc, char **argv)
                 j.r = std::sqrt(x * x + y * y);
                 j.w = unweighted ? 1.0f : file_weight[fidx];
                 j.has_ue = reco_ue_nproxy->at(ri) > 0;
-                j.has_truth_ue = truth_ue_nproxy->at(ti) > 0;
+                j.has_truth_ue = truth_ue_ncone->at(ti) > 0;
                 j.truth_sub = j.has_truth_ue ? j.truth - truth_ue_E->at(ti) : 0.0f;
                 j.sub = j.has_ue ? j.reco - reco_ue_E->at(ri) : 0.0f;
                 jets.push_back(j);

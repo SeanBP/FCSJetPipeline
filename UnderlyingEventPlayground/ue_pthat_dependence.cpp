@@ -3,7 +3,8 @@
 // only from its own ptHat bin (events are unweighted within a bin), while in
 // data the proxies come from the natural mix of events. If the UE at fixed
 // jet pT and position varies with ptHat, the simulation subtraction differs
-// from the data one.
+// from the data one. The truth level uses same-event cones, so for it the
+// table shows the physical ptHat dependence of the UE, not a pooling effect.
 //
 // For matched, fiducial jets with an estimate, in bins of jet pT and in three
 // radial bands (thirds of the jets), takes the mean reco_ue_E (and
@@ -89,7 +90,7 @@ int main(int argc, char **argv)
         Float_t pthat = 0;
         t->SetBranchStatus("*", 0);
         const char *used[] = {"reco_pt", "reco_E", "reco_x", "reco_y", "reco_ue_E", "reco_ue_nproxy", "truth_pt", "truth_E",
-                              "truth_ue_E", "truth_ue_nproxy", "match_reco_idx", "match_truth_idx", "mc_pthatmin_gev"};
+                              "truth_ue_E", "truth_ue_ncone", "match_reco_idx", "match_truth_idx", "mc_pthatmin_gev"};
         for (int k = 0; k < 13; k++) t->SetBranchStatus(used[k], 1);
         t->SetBranchAddress("reco_pt", &reco_pt);
         t->SetBranchAddress("reco_E", &reco_E);
@@ -100,7 +101,7 @@ int main(int argc, char **argv)
         t->SetBranchAddress("truth_pt", &truth_pt);
         t->SetBranchAddress("truth_E", &truth_E);
         t->SetBranchAddress("truth_ue_E", &truth_ue_E);
-        t->SetBranchAddress("truth_ue_nproxy", &truth_ue_n);
+        t->SetBranchAddress("truth_ue_ncone", &truth_ue_n);
         t->SetBranchAddress("match_reco_idx", &mr);
         t->SetBranchAddress("match_truth_idx", &mt);
         t->GetEntry(0);

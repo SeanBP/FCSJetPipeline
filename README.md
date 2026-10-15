@@ -71,11 +71,13 @@ Folder layout: after a submission finishes,
 files.
 
 **Jets.** Anti-kt, R = 0.7. Reco jets must be inside the fiducial rectangle
-minus a margin (10 cm, or 20 cm for EM-only); truth jets may extend outside
-it by R/2 (R for EM-only) in eta-phi. Matching is one-to-one within
-dR < R/2. EM-only truth jets are clustered from photons created within
-100 um of the primary vertex (prompt and pi0/eta decay photons, not GEANT
-secondaries). EM-only jet pT minimums: reco 2 GeV, truth 1 GeV (as the FMS
+minus a margin (10 cm, or 20 cm for EM-only). Matching is one-to-one within
+dR < R/2. ECAL+HCAL truth jets may extend R/2 outside the reco rectangle.
+EM-only truth jets are clustered from photons created within 100 um of the
+primary vertex (prompt and pi0/eta decay photons, not GEANT secondaries), in
+azimuthally symmetric eta bands around the eta range of the reco fiducial
+region (2.34-3.57): photons within R of it (1.64-4.27) and jet axes within
+R/2 (1.99-3.92), since a matched jet's constituents reach at most R beyond. EM-only jet pT minimums: reco 2 GeV, truth 1 GeV (as the FMS
 analysis), unless `-C 1`. FCS points must have 1 GeV < E <= sqrt(s)/2.
 
 **Cross sections.** Every tree carries `sigma_job` (PYTHIA cross section,
@@ -112,21 +114,24 @@ together and rebuild StRoot), `Spin_config` (spin DB, covers 2021-12-14 to
 
 ## underlying_event
 
-The UE under a jet is the mean ECal point energy in an R cone at the jet's
-position, averaged over other events (proxy events) of the same group (run in
-data, ptHat bin in simulation) and EM trigger level whose own jet has a
-similar pT (within 5%) and lies near 90 deg in azimuth from the cone, at least
-2.5R away (`ProxySelection.h`, `ProxySearch.h`). Every jet_output file gets
-`reco_ue_E`, `reco_ue_pt`, `reco_ue_nproxy`, `reco_ue_pt_window`, and in
-simulation the truth-level equivalents `truth_ue_*` (from truth jets and
-EM-only truth photons).
+**Reco.** The UE under a reco jet is the mean ECal point energy in an R cone at
+the jet's position, averaged over other events (proxy events) of the same
+group (run in data, ptHat bin in simulation) and EM trigger level whose own jet
+has a similar pT (within 5%) and lies near 90 deg in azimuth from the cone, at
+least 2.5R away (`ProxySelection.h`, `ProxySearch.h`). Branches `reco_ue_E`,
+`reco_ue_pt`, `reco_ue_nproxy`, `reco_ue_pt_window`.
+
+**Truth** (simulation). Same event, as the FMS analysis: the mean energy of the
+EM-only truth photons in two R cones at the jet's eta and phi +- 90 deg, kept
+whatever they contain. The truth eta bands have full azimuth, so the cones are
+always inside them. Branches `truth_ue_E`, `truth_ue_pt`, `truth_ue_ncone` (2).
 
 The in-job step only sees one job's events. For a simulation sample, rerun it
 over all files of each ptHat bin, one condor job per bin, inputs copied to
-scratch:
+scratch; `-J` first rebuilds the jets from the SimpleTrees with JetMatcher:
 
 ```
-./submit_ue_by_pthat.sh -i <sample>[,<sample>...] -w <workdir> [-m minbias|default] [-n]
+./submit_ue_by_pthat.sh -i <sample>[,<sample>...] -w <workdir> [-m minbias|default] [-J "<em_only> <use_points> <jet_pt_cuts>"] [-n]
 ```
 
 ## jet_scale

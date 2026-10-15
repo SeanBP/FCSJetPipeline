@@ -19,8 +19,9 @@ whose own reco jet:
   every cone position the same allowed eta-phi area;
 - is at least 2.5R from the cone, and no other jet of that event is closer.
 
-Every event that passes is used. The same is done at truth level in
-simulation, with truth jets and EM-only truth photons. The subtraction is in
+Every event that passes is used. At truth level (simulation) the UE is taken
+from the same event instead: the EM-only truth photons in two R cones at the
+jet's eta and phi +- 90 deg, as the FMS analysis. The subtraction is in
 energy, per jet, at both levels, before the JES calibration.
 
 ## Studies
@@ -43,26 +44,24 @@ energy, per jet, at both levels, before the JES calibration.
 
 ## Results
 
-**ptHat grouping in simulation** (`ue_pthat_dependence.cpp`, 2026-10, first
-calibration sample `fms_tune_calib_v1`, 966 files). Simulation proxies come
-from the jet's own ptHat bin, data proxies from the natural event mix. The
-cross-section-weighted RMS shift of the UE estimate caused by per-bin pooling,
-as a percentage of the mean jet energy, at fixed jet pT and radial position
-(inner / middle / outer thirds of the acceptance):
+**ptHat grouping of reco proxies in simulation** (`ue_pthat_dependence.cpp`,
+2026-10, first calibration sample `fms_tune_calib_v1`, 966 files). Simulation
+proxies come from the jet's own ptHat bin, data proxies from the natural event
+mix. The cross-section-weighted RMS shift of the reco UE estimate caused by
+per-bin pooling, as a percentage of the mean jet energy, at fixed jet pT and
+radial position (inner / middle / outer thirds of the acceptance):
 
-| Jet pT (GeV) | Reco | Truth |
-|---|---|---|
-| 0.25-0.5 | 12.7 / 7.7 / 3.4 | 5.0 / 3.7 / 2.2 |
-| 0.5-1 | 4.0 / 2.8 / 2.0 | 2.4 / 2.1 / 1.4 |
-| 1-2 | 2.3 / 1.9 / 1.4 | 1.1 / 1.2 / 1.2 |
-| 2-3 | 0.8 / 0.8 / 0.8 | 0.8 / 0.7 / 0.8 |
-| 3-4 | 0.4 / 0.4 / 0.6 | 0.3 / 0.5 / 0.6 |
-| 4-6 | 0.3 / 0.4 / 0.4 | 0.1 / 0.2 / 0.3 |
-| 6-10 | 0.4 / 0.4 / 0.5 | 0.3 / 0.3 / 0.5 |
+| Jet pT (GeV) | Shift (%) |
+|---|---|
+| 0.25-0.5 | 12.7 / 7.7 / 3.4 |
+| 0.5-1 | 4.0 / 2.8 / 2.0 |
+| 1-2 | 2.3 / 1.9 / 1.4 |
+| 2-3 | 0.8 / 0.8 / 0.8 |
+| 3-4 | 0.4 / 0.4 / 0.6 |
+| 4-6 | 0.3 / 0.4 / 0.4 |
+| 6-10 | 0.4 / 0.4 / 0.5 |
 
 Below 1% for analysis jets (pT >= 2 GeV), so the per-bin grouping is kept.
-Reco and truth shift the same way (0.15-0.3 GeV above 2 GeV pT), so the effect
-on the JES ratio is smaller still. 60-77% of the weight is in the 5-10 GeV
-ptHat bin. At fixed jet pT and position the mean UE falls with ptHat (above
-ptHat 20 GeV it is about half the 0-10 GeV value), at both levels; not yet
-understood.
+60-77% of the weight is in the 5-10 GeV ptHat bin. At fixed jet pT and
+position the mean UE falls with ptHat (above ptHat 20 GeV it is about half the
+0-10 GeV value); not yet understood.

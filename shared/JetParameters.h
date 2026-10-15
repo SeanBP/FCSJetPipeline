@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <cmath>
+#include <algorithm>
 #include "fastjet/PseudoJet.hh"
 #include "fastjet/ClusterSequence.hh"
 #include "fastjet/JetDefinition.hh"
@@ -69,9 +70,12 @@ static const double reco_jet_pt_min_em = 2.0;
 // Minimum pT (GeV) of an EM-only truth jet, as the FMS particle-level jets
 static const double truth_jet_pt_min_em = 1.0;
 
-// How far outside the reco fiducial region an EM-only truth jet axis may sit,
-// in eta-phi. Beyond R it cannot overlap any jet inside the region.
-static const float truth_fiducial_margin_em = (float)R;
+// EM-only truth acceptance: azimuthally symmetric eta bands around the eta
+// range of the reco fiducial region (EmFiducialEtaRange() below). A truth jet
+// matched to a fiducial reco jet (dR < R/2) has its axis at most R/2 outside
+// that range, so its constituents lie at most R outside it.
+static const double truth_jet_eta_margin_em = 0.5 * R;
+static const double truth_particle_eta_margin_em = R;
 
 // EM-only truth particles: photons created within this distance (cm) of the
 // primary vertex, i.e. prompt and pi0/eta-decay photons but not GEANT shower
@@ -302,6 +306,34 @@ inline bool pass_fiducial_cut(float jetXE, float jetYE, float buffer,
     const bool in_x = ax >= (rect.x_inner + buffer) && ax <= (rect.x_outer - buffer);
     const bool in_y = jetYE >= (rect.y_min + buffer) && jetYE <= (rect.y_max - buffer);
     return in_x && in_y;
+}
+
+// Eta range of the EM-only reco fiducial region (ECAL rectangle minus
+// reco_fiducial_buffer_ecal), from its nearest and farthest points to the beam
+inline void EmFiducialEtaRange(double &eta_lo, double &eta_hi)
+{
+    const FiducialRect &r = kFiducialRectEcal;
+    const double b = reco_fiducial_buffer_ecal;
+    const double x_lo = r.x_inner + b, x_hi = r.x_outer - b, y_lo = r.y_min + b, y_hi = r.y_max - b;
+    const double y_near = std::min(std::max(0.0, y_lo), y_hi);
+    const double r_min = std::sqrt(x_lo * x_lo + y_near * y_near);
+    const double r_max = std::sqrt(x_hi * x_hi + std::max(y_lo * y_lo, y_hi * y_hi));
+    eta_lo = std::asinh(z_proj / r_max);
+    eta_hi = std::asinh(z_proj / r_min);
+}
+
+inline bool InTruthJetEtaRange(double eta)
+{
+    double lo, hi;
+    EmFiducialEtaRange(lo, hi);
+    return eta >= lo - truth_jet_eta_margin_em && eta <= hi + truth_jet_eta_margin_em;
+}
+
+inline bool InTruthParticleEtaRange(double eta)
+{
+    double lo, hi;
+    EmFiducialEtaRange(lo, hi);
+    return eta >= lo - truth_particle_eta_margin_em && eta <= hi + truth_particle_eta_margin_em;
 }
 
 #endif
