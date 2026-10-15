@@ -60,3 +60,4 @@ log/
 # Editor/OS cruft
 *~
 .DS_Store
+/UnderlyingEventPlayground/truth_acceptance_diagram
