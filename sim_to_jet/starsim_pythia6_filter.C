@@ -144,8 +144,9 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t t
 
   // Particle acceptance cuts passed to geant (ptmin, ptmax / etamin, etamax / phimin, phimax)
   _primary->SetPtRange  (0.0,  -1.0);         // GeV
-  // Contains the EM-only truth particle band, the ECal fiducial eta range
-  // +- R (1.64-4.27, JetParameters.h), with 0.64 to spare below and 0.73 above
+  // Covers the EM-only truth needs (JetParameters.h): the particle band, ECal
+  // fiducial eta range +- R (1.64-4.27), and the full R cones around truth
+  // jets, whose axes reach +- R/2 (1.29-4.62; 0.29 to spare below, 0.38 above)
   _primary->SetEtaRange ( +1.0, +5.0 );
   _primary->SetPhiRange ( 0., TMath::TwoPi() );
 
