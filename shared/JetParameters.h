@@ -73,9 +73,10 @@ static const double truth_jet_pt_min_em = 1.0;
 // EM-only truth acceptance: azimuthally symmetric eta bands around the eta
 // range of the reco fiducial region (EmFiducialEtaRange() below). A truth jet
 // matched to a fiducial reco jet (dR < R/2) has its axis at most R/2 outside
-// that range, so its constituents lie at most R outside it.
+// that range, so its constituents, and its off-axis UE cones, lie at most
+// R/2 + R outside it.
 static const double truth_jet_eta_margin_em = 0.5 * R;
-static const double truth_particle_eta_margin_em = R;
+static const double truth_particle_eta_margin_em = 1.5 * R;
 
 // EM-only truth particles: photons created within this distance (cm) of the
 // primary vertex, i.e. prompt and pi0/eta-decay photons but not GEANT shower

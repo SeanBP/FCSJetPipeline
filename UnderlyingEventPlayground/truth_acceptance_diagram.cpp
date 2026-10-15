@@ -1,7 +1,8 @@
 // Diagram of the EM-only truth acceptance on the FCS face (ECal front plane),
 // each boundary lettered: A the ECal, B the reco fiducial region, C B dilated
 // by R/2 in eta-phi, D/E the innermost/outermost rings touching C (the truth
-// jet eta band), F/G the rings R/2 beyond D/E, and J1/J2 the R cones of truth
+// jet eta band), F/G the rings R beyond D/E (the truth particle band), and
+// J1/J2 the R cones of truth
 // jets with axes on D/E. Constant-eta rings are circles on the face; the
 // cones are circles in eta-phi, so distorted. Left: full view; right: zoom.
 //
@@ -56,7 +57,7 @@ int main(int argc, char **argv)
     EmFiducialEtaRange(eta_lo, eta_hi);
     const double half = 0.5 * R;
     const double eta_jet_in = eta_hi + half, eta_jet_out = eta_lo - half;   // rings touching the dilated boundary
-    const double eta_far_in = eta_hi + R, eta_far_out = eta_lo - R;         // R/2 beyond those
+    const double eta_far_in = eta_jet_in + R, eta_far_out = eta_jet_out - R; // R beyond those: the particle band
 
     const FiducialRect &e = kFiducialRectEcal;
     const double b = reco_fiducial_buffer_ecal;
@@ -184,8 +185,8 @@ int main(int argc, char **argv)
             leg->AddEntry(hd, "C  B dilated by R/2 in #eta-#phi", "l");
             leg->AddEntry(rings[0], Form("D  inner ring touching C (#eta %.2f)", eta_jet_in), "l");
             leg->AddEntry(rings[1], Form("E  outer ring touching C (#eta %.2f)", eta_jet_out), "l");
-            leg->AddEntry(rings[2], Form("F  R/2 inside D (#eta %.2f)", eta_far_in), "l");
-            leg->AddEntry(rings[3], Form("G  R/2 outside E (#eta %.2f)", eta_far_out), "l");
+            leg->AddEntry(rings[2], Form("F  R inside D (#eta %.2f)", eta_far_in), "l");
+            leg->AddEntry(rings[3], Form("G  R outside E (#eta %.2f)", eta_far_out), "l");
             leg->AddEntry(cone_in, Form("J1  R cone of a jet with its axis on D (reaches #eta %.2f)", eta_jet_in + R), "l");
             leg->AddEntry(cone_out, Form("J2  R cone of a jet with its axis on E (reaches #eta %.2f)", eta_jet_out - R), "l");
             leg->Draw();

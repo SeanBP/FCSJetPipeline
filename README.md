@@ -76,8 +76,9 @@ dR < R/2. ECAL+HCAL truth jets may extend R/2 outside the reco rectangle.
 EM-only truth jets are clustered from photons created within 100 um of the
 primary vertex (prompt and pi0/eta decay photons, not GEANT secondaries), in
 azimuthally symmetric eta bands around the eta range of the reco fiducial
-region (2.34-3.57): photons within R of it (1.64-4.27) and jet axes within
-R/2 (1.99-3.92), since a matched jet's constituents reach at most R beyond. EM-only jet pT minimums: reco 2 GeV, truth 1 GeV (as the FMS
+region (2.34-3.57): jet axes within R/2 of it (1.99-3.92), the most a jet
+matched to a fiducial reco jet can lie outside, and photons within 1.5R
+(1.29-4.62), so every stored jet and its UE cones are complete. EM-only jet pT minimums: reco 2 GeV, truth 1 GeV (as the FMS
 analysis), unless `-C 1`. FCS points must have 1 GeV < E <= sqrt(s)/2.
 
 **Cross sections.** Every tree carries `sigma_job` (PYTHIA cross section,
