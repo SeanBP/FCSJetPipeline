@@ -70,12 +70,13 @@ static const double reco_jet_pt_min_em = 2.0;
 // Minimum pT (GeV) of an EM-only truth jet, as the FMS particle-level jets
 static const double truth_jet_pt_min_em = 1.0;
 
-// EM-only truth acceptance: azimuthally symmetric eta bands around the eta
-// range of the reco fiducial region (EmFiducialEtaRange() below). A truth jet
-// matched to a fiducial reco jet (dR < R/2) has its axis at most R/2 outside
-// that range, so its constituents, and its off-axis UE cones, lie at most
-// R/2 + R outside it.
-static const double truth_jet_eta_margin_em = 0.5 * R;
+// EM-only truth acceptance. Truth jets: only those that could be matched to a
+// fiducial reco jet (dR < R/2), i.e. axis within R/2 in eta-phi of the reco
+// fiducial region (pass_jet_scale_cut with -truth_jet_margin_em). Truth
+// particles: a full-azimuth eta band around the eta range of that region
+// (EmFiducialEtaRange() below), 1.5R wide, so every particle of such a jet,
+// and of its off-axis UE cones at the same eta, is kept.
+static const float truth_jet_margin_em = 0.5f * (float)R;
 static const double truth_particle_eta_margin_em = 1.5 * R;
 
 // EM-only truth particles: photons created within this distance (cm) of the
@@ -321,13 +322,6 @@ inline void EmFiducialEtaRange(double &eta_lo, double &eta_hi)
     const double r_max = std::sqrt(x_hi * x_hi + std::max(y_lo * y_lo, y_hi * y_hi));
     eta_lo = std::asinh(z_proj / r_max);
     eta_hi = std::asinh(z_proj / r_min);
-}
-
-inline bool InTruthJetEtaRange(double eta)
-{
-    double lo, hi;
-    EmFiducialEtaRange(lo, hi);
-    return eta >= lo - truth_jet_eta_margin_em && eta <= hi + truth_jet_eta_margin_em;
 }
 
 inline bool InTruthParticleEtaRange(double eta)

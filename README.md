@@ -74,11 +74,11 @@ files.
 minus a margin (10 cm, or 20 cm for EM-only). Matching is one-to-one within
 dR < R/2. ECAL+HCAL truth jets may extend R/2 outside the reco rectangle.
 EM-only truth jets are clustered from photons created within 100 um of the
-primary vertex (prompt and pi0/eta decay photons, not GEANT secondaries), in
-azimuthally symmetric eta bands around the eta range of the reco fiducial
-region (2.34-3.57): jet axes within R/2 of it (1.99-3.92), the most a jet
-matched to a fiducial reco jet can lie outside, and photons within 1.5R
-(1.29-4.62), so every stored jet and its UE cones are complete. EM-only jet pT minimums: reco 2 GeV, truth 1 GeV (as the FMS
+primary vertex (prompt and pi0/eta decay photons, not GEANT secondaries).
+Only truth jets that could be matched are kept: axis within R/2 in eta-phi of
+the reco fiducial region. Photons are kept in a full-azimuth eta band 1.5R
+beyond that region's eta range (2.34-3.57, so 1.29-4.62), which holds every
+particle of a stored jet and of its UE cones. EM-only jet pT minimums: reco 2 GeV, truth 1 GeV (as the FMS
 analysis), unless `-C 1`. FCS points must have 1 GeV < E <= sqrt(s)/2.
 
 **Cross sections.** Every tree carries `sigma_job` (PYTHIA cross section,
@@ -124,8 +124,8 @@ least 2.5R away (`ProxySelection.h`, `ProxySearch.h`). Branches `reco_ue_E`,
 
 **Truth** (simulation). Same event, as the FMS analysis: the mean energy of the
 EM-only truth photons in two R cones at the jet's eta and phi +- 90 deg, kept
-whatever they contain. The truth eta bands have full azimuth, so the cones are
-always inside them. Branches `truth_ue_E`, `truth_ue_pt`, `truth_ue_ncone` (2).
+whatever they contain. The truth photon band has full azimuth, so the cones are
+always inside it. Branches `truth_ue_E`, `truth_ue_pt`, `truth_ue_ncone` (2).
 
 The in-job step only sees one job's events. For a simulation sample, rerun it
 over all files of each ptHat bin, one condor job per bin, inputs copied to

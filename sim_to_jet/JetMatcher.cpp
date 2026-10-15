@@ -396,12 +396,12 @@ int main(int argc, char** argv) {
                 // Backward jets would project onto the forward plane spuriously
                 if (jet.pz() <= 0) continue;
 
-                // EM-only: the truth jet eta band (full azimuth); ECAL+HCAL:
-                // the fiducial rectangle dilated by R/2
+                // Only truth jets that could be matched: axis within R/2 in
+                // eta-phi of the reco fiducial region
                 float jetXE = z_proj * jet.px() / jet.pz();
                 float jetYE = z_proj * jet.py() / jet.pz();
                 bool passesFiducial = em_only
-                    ? InTruthJetEtaRange(jet.eta())
+                    ? pass_jet_scale_cut(jetXE, jetYE, reco_fiducial_buffer_ecal, -truth_jet_margin_em, kFiducialRectEcal)
                     : pass_jet_scale_cut(jetXE, jetYE, reco_fiducial_buffer, -R/2.0f);
                 if (passesFiducial) truth_jets_selected.push_back(jet);
             }

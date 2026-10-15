@@ -1,9 +1,9 @@
 // Diagram of the EM-only truth acceptance on the FCS face (ECal front plane),
 // each boundary lettered: A the ECal, B the reco fiducial region, C B dilated
-// by R/2 in eta-phi, D/E the innermost/outermost rings touching C (the truth
-// jet eta band), F/G the rings R beyond D/E (the truth particle band), and
-// J1/J2 the R cones of truth
-// jets with axes on D/E. Constant-eta rings are circles on the face; the
+// by R/2 in eta-phi (the truth jet cut: jets that could be matched), D/E the
+// innermost/outermost rings touching C (its eta extent), F/G the rings R
+// beyond D/E (the truth particle band), and J1/J2 the R cones of truth jets
+// with axes on C at D/E. Constant-eta rings are circles on the face; the
 // cones are circles in eta-phi, so distorted. Left: full view; right: zoom.
 //
 // Build and run from this folder:
@@ -182,11 +182,11 @@ int main(int argc, char **argv)
             leg->SetBorderSize(1); leg->SetFillColor(kWhite); leg->SetTextSize(0.022);
             leg->AddEntry(ecal_b, "A  ECal", "f");
             leg->AddEntry(fid_b, Form("B  reco fiducial region (#eta %.2f-%.2f)", eta_lo, eta_hi), "f");
-            leg->AddEntry(hd, "C  B dilated by R/2 in #eta-#phi", "l");
+            leg->AddEntry(hd, "C  B dilated by R/2 in #eta-#phi: truth jet cut", "l");
             leg->AddEntry(rings[0], Form("D  inner ring touching C (#eta %.2f)", eta_jet_in), "l");
             leg->AddEntry(rings[1], Form("E  outer ring touching C (#eta %.2f)", eta_jet_out), "l");
-            leg->AddEntry(rings[2], Form("F  R inside D (#eta %.2f)", eta_far_in), "l");
-            leg->AddEntry(rings[3], Form("G  R outside E (#eta %.2f)", eta_far_out), "l");
+            leg->AddEntry(rings[2], Form("F  R inside D (#eta %.2f): truth particle band", eta_far_in), "l");
+            leg->AddEntry(rings[3], Form("G  R outside E (#eta %.2f): truth particle band", eta_far_out), "l");
             leg->AddEntry(cone_in, Form("J1  R cone of a jet with its axis on D (reaches #eta %.2f)", eta_jet_in + R), "l");
             leg->AddEntry(cone_out, Form("J2  R cone of a jet with its axis on E (reaches #eta %.2f)", eta_jet_out - R), "l");
             leg->Draw();

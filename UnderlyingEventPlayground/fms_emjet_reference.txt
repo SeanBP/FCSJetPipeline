@@ -283,8 +283,9 @@ Different from FMS:
     truth_nphotons, although reco points need 1 GeV. How to cut truth photons
     to match the detector photons is left open, as in FMS.
   - Acceptance: reco jet axis inside the ECAL x-y fiducial rectangle with a
-    20 cm buffer (eta 2.34-3.57); truth jet axes and photons in full-azimuth
-    eta bands around that range, R/2 (1.99-3.92) and 1.5R (1.29-4.62) wide.
+    20 cm buffer (eta 2.34-3.57); truth jet axis within R/2 of that region in
+    eta-phi (only jets that could be matched); truth photons in a
+    full-azimuth eta band 1.5R beyond its eta range (1.29-4.62).
     FMS: 2.8 < eta < 3.8 on the jet axis.
   - Matching: one-to-one, closest pairs first, dR < R/2 = 0.35 (the CMS
     choice, arXiv:1607.03663), versus nearest within 0.2, not one-to-one.
