@@ -119,6 +119,8 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0 )
   //                    ptmin  ptmax
   _primary->SetPtRange  (0.0,  -1.0);         // GeV
   //                    etamin etamax
+  // Contains the EM-only truth particle band, the ECal fiducial eta range
+  // +- R (1.64-4.27, JetParameters.h), with 0.64 to spare below and 0.73 above
   _primary->SetEtaRange ( +1.0, +5.0 );
   //                    phimin phimax
   _primary->SetPhiRange ( 0., TMath::TwoPi() );
