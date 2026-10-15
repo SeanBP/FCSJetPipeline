@@ -27,11 +27,18 @@
     <command>
         stardev
         module purge
+        module load fastjet-3.3.4
         module load root-5.34.38
 
         cp underlying_event/* .
         cp shared/* .
-        g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent `root-config --cflags --libs` -std=c++11
+        g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent `root-config --cflags --libs` \
+            `fastjet-config --cxxflags` -std=c++11
+        # Stop before copying any input if the build failed
+        if ( ! -x UnderlyingEvent ) then
+            echo "UnderlyingEvent did not build"
+            exit 1
+        endif
 
         echo "pairs list: {{WORKDIR}}/bin_${JOBINDEX}.list"
         date
