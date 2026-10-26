@@ -41,25 +41,38 @@ plots live outside this repository, in `FCSJetAnalysis/`.
   with every resolved option, the submission time and the git commit.
 - `-1` (or `-9999` for positions) marks a value that does not apply, e.g.
   `sigma_job` in data or `Spin_config` in simulation.
+- FCS clusters and points are remade from the MuDst hits in both
+  `runMudst.C` (data) and `readMudst.C` (simulation), with the same
+  thresholds whatever library made the MuDst: `StFcsMuToEventMaker` puts the
+  hits into an StEvent, `StFcsClusterMaker` clusters Ecal towers above
+  0.4 GeV (6 sigma above the worst-case Run 22 pedestal noise, with margin)
+  with seeds at 1 GeV (P24ia), and `StFcsPointMaker` fits the points.
+  `StSimpleReaderMaker::SetFcsFromStEvent()` writes those, not the MuDst's;
+  `Cal_pt_parentClusterId` is then the cluster's index within its detector
+  (P24ia MuDsts leave it unset). The DEV library the jobs run seeds at
+  0.05 GeV and P24ia keeps towers above ~0.045 GeV, so production clusters
+  differ between data and simulation
+  (`UnderlyingEventPlayground/energy_flow/cal_chain_compare.cpp`).
 
 ## sim_to_jet
 
 ```
-./submit_sim_to_jet.sh -g <pythia8|pythia6> -t <tune> -p <ptHatMin> -n <nevents> -s <0|1> -o <outdir> \
+./submit_sim_to_jet.sh -g <pythia8|pythia6> -t <tune> -p <ptHatMin> -n <nevents> -s <N> -o <outdir> \
     [-P <ptHatMax>] [-j <njobs>] [-w <json>] [-l <label>] [-k <0|1>] [-f <triggers>] [-c <run>] \
     [-e <ethr>] [-E <0|1>] [-F <0|1>] [-T <tune_pp>] [-M <0|1>] [-C <0|1>]
 ```
 
 One job generates `-n` events and writes
-`jet_output_<gen>_<tune>_pt<ptHatMin>_<job>.root` (and the SimpleTree with
-`-s 1`). Main options:
+`jet_output_<gen>_<tune>_pt<ptHatMin>_<job>.root`, and the SimpleTree for every
+`-s`-th job (`-s 1` every job, `-s 0` none; a large sample keeps a fraction for
+checks). Main options:
 
 | Flag | Meaning |
 |---|---|
 | `-w` | JSON of relative ptHat-range shares across the `-j` jobs (`pthat_distribution_optimized.json`: disjoint 5 GeV bins, exact weights); replaces `-p`/`-P` |
 | `-f` | keep only events that fired one of these FCS triggers (`FcsTriggerDefs.h` names, emulated with `fcs_trg_base`) |
 | `-c` | run number fixing the FCS gain calibration era (default: BFC's nominal date) |
-| `-e` | `FcsJetFilter` forward-flux threshold, GeV (default 50, 0 = off) |
+| `-e` | `FcsJetFilter` forward-flux threshold, GeV (default 0 = off: any filter biases low-energy EM-only jets) |
 | `-E 1` | EM-only reco jets (ECAL only) with the ECAL fiducial rectangle |
 | `-F 1` | reco jets from FCS points (`StMuFcsPoint`) instead of tower hits |
 | `-M 1` | the FMS EM-jet generator settings: pythia6, PyTune 370, PARP(90)=0.213, PARP(91)=1, MSEL=1 |
@@ -70,7 +83,9 @@ Folder layout: after a submission finishes,
 `jet_output/pt<N>/` and `SimpleTree/pt<N>/`, so no folder holds thousands of
 files.
 
-**Jets.** Anti-kt, R = 0.7. Reco jets must be inside the fiducial rectangle
+**Jets.** Anti-kt, R = 0.7, with jet areas (`reco_area`, `truth_area`) as the
+FMS analysis: fastjet active area, ghost area 0.04, |ghost rapidity| < 5
+(`JetAreaDefinition()` in `JetParameters.h`). Reco jets must be inside the fiducial rectangle
 minus a margin (10 cm, or 20 cm for EM-only). Matching is one-to-one within
 dR < R/2. ECAL+HCAL truth jets may extend R/2 outside the reco rectangle.
 EM-only truth jets are clustered from photons created within 100 um of the
@@ -115,17 +130,26 @@ together and rebuild StRoot), `Spin_config` (spin DB, covers 2021-12-14 to
 
 ## underlying_event
 
-**Reco.** The UE under a reco jet is the mean ECal point energy in an R cone at
-the jet's position, averaged over other events (proxy events) of the same
-group (run in data, ptHat bin in simulation) and EM trigger level whose own jet
-has a similar pT (within 5%) and lies near 90 deg in azimuth from the cone, at
-least 2.5R away (`ProxySelection.h`, `ProxySearch.h`). Branches `reco_ue_E`,
-`reco_ue_pt`, `reco_ue_nproxy`, `reco_ue_pt_window`.
+At both levels the UE subtracted from a jet is, as in the FMS analysis, a
+density times the jet's own area: density = (mean energy in the R cones) /
+(pi R^2). `*_ue_E` and `*_ue_pt` are the area-scaled values; the cone means
+are kept as `*_ue_cone_E`, `*_ue_cone_pt`. Jet files without areas are
+refused.
 
-**Truth** (simulation). Same event, as the FMS analysis: the mean energy of the
-EM-only truth photons in two R cones at the jet's eta and phi +- 90 deg, kept
-whatever they contain. The truth photon band has full azimuth, so the cones are
-always inside it. Branches `truth_ue_E`, `truth_ue_pt`, `truth_ue_ncone` (2).
+**Reco.** The cone is an R cone at the jet's position, averaged over other
+events (proxy events) of the same group (run in data, ptHat bin in
+simulation) and EM trigger level whose own jet has a similar pT (within 5%)
+and lies near 90 deg in azimuth from the cone, at least 2.5R away
+(`ProxySelection.h`, `ProxySearch.h`). Other jets of a proxy event are not
+vetoed: the cone keeps whatever it contains, as the truth cones do (in
+simulation this matches the truth UE; a jet veto came out ~10% low). Branches `reco_ue_E`, `reco_ue_pt`,
+`reco_ue_cone_E`, `reco_ue_cone_pt`, `reco_ue_nproxy`, `reco_ue_pt_window`.
+
+**Truth** (simulation). Same event, as the FMS analysis: the EM-only truth
+photons in two R cones at the jet's eta and phi +- 90 deg, kept whatever they
+contain. The truth photon band has full azimuth, so the cones are always
+inside it. Branches `truth_ue_E`, `truth_ue_pt`, `truth_ue_cone_E`,
+`truth_ue_cone_pt`, `truth_ue_ncone` (2).
 
 The in-job step only sees one job's events. For a simulation sample, rerun it
 over all files of each ptHat bin, one condor job per bin, inputs copied to
@@ -151,8 +175,10 @@ folder (for an organized sample, a folder of links).
    Medians close exactly under numerical inversion (arXiv:1609.05195).
    `noue` turns the UE subtraction off.
 2. `CalibrationMap_em_only`: per position, fits
-   `A + B/E + C/E^2 + D exp(-(E-E0)^2 / 2 sigma^2)` (sigmaL below E0, sigmaR
-   above), smooths the maps and masks them to the fiducial region. For speed
+   `A + B/E + C/E^2 + D exp(-ln(E/E0)^2 / 2 sigma^2)` (a log-normal peak of
+   height D at E0, width sigma in ln E), smooths the maps and masks them to
+   the fiducial region. The JSON says `"model": "lognormal"`; the evaluators
+   refuse maps without it (the earlier skew-Gaussian form). For speed
    it can run as condor shards (`--shard` / `--merge`, see
    `JetScalePlayground/submit_calibration_map_diag_condor.sh`).
 
