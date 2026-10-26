@@ -41,6 +41,30 @@ energy, per jet, at both levels, before the JES calibration.
 - `ue_position_map.cpp`: mean UE against jet position, in pT ranges.
 - `ue_pthat_dependence.cpp`: effect of drawing simulation proxies from the
   jet's own ptHat bin (below).
+- `sep_test/`: the separation test on FCS data. One condor job
+  (`submit_sep_test.sh -i <SimpleTree list> -o <outdir>`) rebuilds the
+  EM-only point jets of a run and runs the UE step three ways: separation
+  and the jet veto (`-DPROXY_JET_VETO=1`), separation without the veto (the
+  pipeline method since 2026-10-22) and no separation (`-DPROXY_MIN_DR_R=0`; a 2.5R
+  veto on all jets would reimpose the separation);
+  `sep_test_compare.cpp` compares them jet by jet, as ratios to no
+  separation, no veto. Prompted by
+  the FMS test (FMSJetPipeline), where removing the separation lowered the
+  estimate.
+
+- `truth_decomp/`: what the proxy UE cone contains, in simulation. For
+  each variant of the separation test (sep_veto, sep, nosep) and a sample of
+  jets per ptHat bin, the truth photon energy in every proxy event's UE cone
+  is split by the anti-kt truth jet each photon belongs to: the proxy jet's
+  own truth jet, other truth jets of pT >= 2 GeV or 1-2 GeV, and softer
+  activity; the jet's own same-event +-90 deg truth cones (the truth UE
+  jet_scale subtracts) are split the same way for reference.
+  `submit_truth_decomp.sh` runs one job per ptHat bin
+  (`ue_truth_decomposition.cpp`, built with and without the separation);
+  `truth_decomp_compare.cpp` combines the bins with cross-section weights,
+  against jet pT, eta and the band half-width the jet's position gives.
+  Needs ProxySearch.h's `ProxyResult::proxy_event`, `proxy_jet` and
+  `half_width` (bookkeeping only).
 
 ## Results
 

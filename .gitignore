@@ -61,3 +61,25 @@ log/
 *~
 .DS_Store
 /UnderlyingEventPlayground/truth_acceptance_diagram
+/UnderlyingEventPlayground/truth_ue_position_map
+/UnderlyingEventPlayground/ue_position_compare
+/UnderlyingEventPlayground/ue_inner_distribution
+/UnderlyingEventPlayground/energy_flow/cal_chain_compare
+/UnderlyingEventPlayground/energy_flow/cone_filter_check
+/UnderlyingEventPlayground/energy_flow/energy_flow
+/UnderlyingEventPlayground/energy_flow/filter_bias
+/UnderlyingEventPlayground/energy_flow/filter_yield
+/UnderlyingEventPlayground/sep_test/band_geometry
+/UnderlyingEventPlayground/sep_test/data_width_check
+/UnderlyingEventPlayground/sep_test/proxy_dr_profile
+/UnderlyingEventPlayground/sep_test/sep_test_compare
+/UnderlyingEventPlayground/truth_decomp/truth_decomp_compare
+/UnderlyingEventPlayground/truth_decomp/ue_method_summary
+
+# Per-submission XMLs and input lists of the playground studies (templates stay)
+/UnderlyingEventPlayground/truth_decomp/truth_decomp_*.xml
+/UnderlyingEventPlayground/sep_test/sep_test_*.xml
+/UnderlyingEventPlayground/sep_test/*.list
+/ANPlayground/an_job_*.xml
+/ANPlayground/benchmark_*.list
+/ANPlayground/jes/
