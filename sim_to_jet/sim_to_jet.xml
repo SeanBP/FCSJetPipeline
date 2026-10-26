@@ -23,7 +23,8 @@
                              sets both ${ptcut} (ptHatMin) and ${ptcutmax}
                              (ptHatMax, -1 = no upper cut)
       {{NEVENTS}}           events per job
-      {{SAVE_SIMPLETREE}}   1 = keep intermediate SimpleTree_*.root, 0 = discard
+      {{SAVE_SIMPLETREE}}   N > 0 = keep intermediate SimpleTree_*.root of every
+                             Nth job (JOBINDEX % N == 0; 1 = every job), 0 = discard
       {{TRIGGER_FILTER}}    comma-separated FCS trigger names (FcsTriggerDefs.h);
                              an event is written (SimpleTree and jetTree)
                              only if one fired, empty = keep all.
@@ -33,6 +34,9 @@
                              era (runSimBfc.C); 0 = BFC's nominal date
       {{FILTER_ETHR}}       FcsJetFilter forward-flux threshold, GeV (-e;
                              0 disables the filter)
+      {{FILTER_CONEPT}}     FcsJetFilter cone mode (-q): > 0 accepts events with an
+                             R = 0.7 cone of summed pT >= this (GeV) in one FCS
+                             half, instead of the -e half energy; 0 = off
       {{EM_ONLY}}           1 = ECAL-only reco jets and fiducial boundary (-E)
       {{USE_POINTS}}        1 = reco jets from FCS points instead of tower
                              hits (-F)
@@ -86,6 +90,7 @@
         echo "ptHatMin       = ${ptcut} GeV"
         echo "ptHatMax       = ${ptcutmax} GeV"
         echo "FcsJetFilter Ethr = {{FILTER_ETHR}} GeV"
+        echo "FcsJetFilter cone pT = {{FILTER_CONEPT}} GeV (0 = off)"
         echo "EM-only        = {{EM_ONLY}}"
         echo "Use points     = {{USE_POINTS}}"
         echo "Calib sample   = {{CALIB_SAMPLE}}"
@@ -99,6 +104,7 @@
 
         echo "Starting detector simulation..."
 
+        setenv FCS_FILTER_CONEPT {{FILTER_CONEPT}}
         root4star -q -b starsim.C\({{NEVENTS}},${myseed},${ptcut},{{TUNE_PARAM}},{{FILTER_ETHR}},${ptcutmax}${tune_arg}\)
 
         echo "Finished detector simulation."
@@ -149,7 +155,11 @@
         echo "jet_output_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root SimpleTree_mudst.root" > ue_pairs.list
         ./UnderlyingEvent ue_pairs.list ${ue_args}
 
-        if ( {{SAVE_SIMPLETREE}} == 1 ) then
+        set keep_simpletree = 0
+        if ( {{SAVE_SIMPLETREE}} > 0 ) then
+            @ keep_simpletree = ( ${JOBINDEX} % {{SAVE_SIMPLETREE}} == 0 )
+        endif
+        if ( ${keep_simpletree} == 1 ) then
             mv SimpleTree_mudst.root SimpleTree_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
         else
             rm -f SimpleTree_mudst.root

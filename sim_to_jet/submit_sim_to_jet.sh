@@ -2,9 +2,9 @@
 # Generates and submits a concrete sim_to_jet.xml job.
 # Usage:
 #   ./submit_sim_to_jet.sh -g <pythia8|pythia6> -t <tune_param> -p <ptcut> \
-#       -n <nevents> -s <0|1> -o <outdir> [-P <ptcutmax>] [-j <nprocesses>] \
+#       -n <nevents> -s <N> -o <outdir> [-P <ptcutmax>] [-j <nprocesses>] \
 #       [-l <label>] [-k <0|1>] [-f <triggers>] [-c <run_number>] \
-#       [-e <filter_ethr>] [-E <0|1>] [-T <tune_pp>] [-F <0|1>] [-M <0|1>]
+#       [-e <filter_ethr>] [-q <filter_cone_pt>] [-E <0|1>] [-T <tune_pp>] [-F <0|1>] [-M <0|1>]
 #       [-C <0|1>]
 #
 #   -g  generator: pythia8 or pythia6
@@ -15,7 +15,9 @@
 #       Ignored if -w given -- put a "ptcutmax" key in each bin of the JSON
 #       instead (defaults to -1 per bin if omitted there).
 #   -n  events per job
-#   -s  1 = keep intermediate SimpleTree, 0 = discard
+#   -s  keep the intermediate SimpleTree of every Nth job (JOBINDEX % N == 0):
+#       1 = every job, 0 = none. With a -w JSON, jobs of a ptHat bin are
+#       consecutive, so N <= a bin's job count keeps at least one per bin.
 #   -o  output directory (created if missing)
 #   -j  number of parallel jobs (nProcesses), default 1
 #   -w  absolute path to a JSON of relative ptHatMin (and optionally
@@ -30,8 +32,12 @@
 #       era to (see RunNumberToDate() in runSimBfc.C). 0/omit = BFC's own
 #       nominal date.
 #   -e  FcsJetFilter's generator-level forward-flux accept threshold, GeV
-#       (StRoot/StarGenerator/FILT/FcsJetFilter.cxx). Default 50.0; 0 disables
-#       the filter.
+#       (StRoot/StarGenerator/FILT/FcsJetFilter.cxx). Default 0 (filter off):
+#       any filter biases low-energy jets and the matching near the edges.
+#   -q  FcsJetFilter cone mode: > 0 accepts an event if an R = 0.7 cone of
+#       final-state particles in one FCS half has summed pT >= this (GeV),
+#       replacing the -e half-energy test, which biases ECAL-only jets below
+#       its threshold, but still biases low-E jets (pT ~0.3 GeV). Default 0 (off).
 #   -E  1 = reco jets from ECAL only, with the ECAL-only fiducial boundary
 #       for reco and truth jets (kFiducialRectEcal). 0/omit = ECAL+HCAL.
 #   -T  pythia8 only: Tune:pp preset number (14=Monash, 33=Detroit, 5=4C,
@@ -77,13 +83,14 @@ PP_TUNE=-1
 KEEPLOGS=0
 TRIGGER_FILTER=""
 CALIB_RUN=0
-FILTER_ETHR=50.0
+FILTER_ETHR=0
+FILTER_CONEPT=0
 EM_ONLY=0
 USE_POINTS=0
 FMS_TUNE=0
 CALIB_SAMPLE=0
 
-while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:T:F:M:C:h" opt; do
+while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:q:E:T:F:M:C:h" opt; do
   case $opt in
     g) GENERATOR="$OPTARG" ;;
     t) TUNE_PARAM="$OPTARG" ;;
@@ -99,6 +106,7 @@ while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:E:T:F:M:C:h" opt; do
     f) TRIGGER_FILTER="$OPTARG" ;;
     c) CALIB_RUN="$OPTARG" ;;
     e) FILTER_ETHR="$OPTARG" ;;
+    q) FILTER_CONEPT="$OPTARG" ;;
     E) EM_ONLY="$OPTARG" ;;
     T) PP_TUNE="$OPTARG" ;;
     F) USE_POINTS="$OPTARG" ;;
@@ -128,6 +136,11 @@ fi
 
 if [ -z "$GENERATOR" ] || [ -z "$TUNE_PARAM" ] || [ -z "$NEVENTS" ] || [ -z "$SAVE_SIMPLETREE" ] || [ -z "$OUTDIR" ]; then
     echo "Missing required argument. Run with -h for usage."
+    exit 1
+fi
+
+if ! [[ "$SAVE_SIMPLETREE" =~ ^[0-9]+$ ]]; then
+    echo "Error: -s takes a non-negative integer N (got '$SAVE_SIMPLETREE')"
     exit 1
 fi
 
@@ -211,7 +224,7 @@ fi
 
 export XML_IN="${SCRIPT_DIR}/sim_to_jet.xml"
 export XML_OUT="${OUTXML}"
-export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR EM_ONLY PP_TUNE USE_POINTS FMS_TUNE CALIB_SAMPLE
+export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR FILTER_CONEPT EM_ONLY PP_TUNE USE_POINTS FMS_TUNE CALIB_SAMPLE
 
 python3 << 'PYEOF'
 import json
@@ -263,7 +276,8 @@ xml = xml.replace("{{STDOUT_URL}}", os.environ["STDOUT_URL"])
 xml = xml.replace("{{STDERR_URL}}", os.environ["STDERR_URL"])
 xml = xml.replace("{{TRIGGER_FILTER}}", os.environ.get("TRIGGER_FILTER", ""))
 xml = xml.replace("{{CALIB_RUN}}", os.environ.get("CALIB_RUN", "0"))
-xml = xml.replace("{{FILTER_ETHR}}", os.environ.get("FILTER_ETHR", "50.0"))
+xml = xml.replace("{{FILTER_ETHR}}", os.environ.get("FILTER_ETHR", "0"))
+xml = xml.replace("{{FILTER_CONEPT}}", os.environ.get("FILTER_CONEPT", "0"))
 xml = xml.replace("{{EM_ONLY}}", os.environ.get("EM_ONLY", "0"))
 xml = xml.replace("{{PP_TUNE}}", os.environ.get("PP_TUNE", "-1"))
 xml = xml.replace("{{USE_POINTS}}", os.environ.get("USE_POINTS", "0"))
@@ -276,9 +290,9 @@ PYEOF
 
 echo "Generated ${OUTXML}"
 if [ -n "$PTCUT_JSON" ]; then
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE} calib_sample=${CALIB_SAMPLE}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} filter_conept=${FILTER_CONEPT} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE} calib_sample=${CALIB_SAMPLE}"
 else
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE} calib_sample=${CALIB_SAMPLE}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} filter_conept=${FILTER_CONEPT} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE} calib_sample=${CALIB_SAMPLE}"
 fi
 
 mkdir -p "${OUTDIR}"
@@ -317,6 +331,7 @@ keep_logs=${KEEPLOGS}
 trigger_filter=${TRIGGER_FILTER:-<none>}
 calib_run=${CALIB_RUN}
 filter_ethr=${FILTER_ETHR}
+filter_conept=${FILTER_CONEPT}
 em_only=${EM_ONLY}
 use_points=${USE_POINTS}
 fms_tune=${FMS_TUNE}

@@ -143,6 +143,9 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t p
 #if 1
   filter = new FcsJetFilter();
   ((FcsJetFilter*)filter) -> SetEnergyThreshold( fcsFilterEthr );
+  // Cone mode (submit_sim_to_jet.sh -q): FCS_FILTER_CONEPT > 0 replaces the half-energy threshold
+  if ( gSystem->Getenv("FCS_FILTER_CONEPT") && atof(gSystem->Getenv("FCS_FILTER_CONEPT")) > 0.0 )
+    ((FcsJetFilter*)filter) -> SetConePtThreshold( atof(gSystem->Getenv("FCS_FILTER_CONEPT")) );
   _primary -> AddFilter( filter );
 
 #endif

@@ -140,6 +140,9 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t t
   // FCS forward energy flux filter (generator-agnostic, same as pythia8)
   filter = new FcsJetFilter();
   ((FcsJetFilter*)filter) -> SetEnergyThreshold( fcsFilterEthr );
+  // Cone mode (submit_sim_to_jet.sh -q): FCS_FILTER_CONEPT > 0 replaces the half-energy threshold
+  if ( gSystem->Getenv("FCS_FILTER_CONEPT") && atof(gSystem->Getenv("FCS_FILTER_CONEPT")) > 0.0 )
+    ((FcsJetFilter*)filter) -> SetConePtThreshold( atof(gSystem->Getenv("FCS_FILTER_CONEPT")) );
   _primary -> AddFilter( filter );
 
   // Particle acceptance cuts passed to geant (ptmin, ptmax / etamin, etamax / phimin, phimax)
