@@ -10,22 +10,30 @@
 //               every fiducial reco jet is estimated, untriggered events
 //               match untriggered ones
 //
+// The UE subtracted from a jet is, as in the FMS analysis, a density times
+// the jet's own area: density = (mean energy in the R cones) / (pi R^2), area
+// = reco_area / truth_area (JetAreaDefinition in JetParameters.h). Jet files
+// without the area branches are refused and left as they are.
+//
 // Each jet_output file is rewritten in place with, per reco jet:
-//   reco_ue_E          mean ECal point energy (GeV) in an R cone at the jet
+//   reco_ue_cone_E     mean ECal point energy (GeV) in an R cone at the jet
 //                      position, over the proxy events
-//   reco_ue_pt         the same for the points' summed pT
+//   reco_ue_cone_pt    the same for the points' summed pT
+//   reco_ue_E          reco_ue_cone_E / (pi R^2) x reco_area: the UE to subtract
+//   reco_ue_pt         the same for pT
 //   reco_ue_nproxy     proxy events used; 0 = none found, -1 = not estimated
 //                      (no EM trigger, or jet outside the fiducial region)
 //   reco_ue_pt_window  pT window half-width used, as a fraction of jet pT
-// reco_ue_E and reco_ue_pt are -1 where reco_ue_nproxy <= 0.
+// The energies are -1 where reco_ue_nproxy <= 0.
 //
 // In simulation every truth jet also gets a same-event estimate, as the FMS
 // analysis: the mean energy (and pT) of the EM-only truth photons in two R
 // cones at the jet's eta and phi +- 90 deg, whatever the cones contain. The
 // photons are those the truth jets are built from (IsEmTruthParticle, truth
 // particle eta band), in momentum eta-phi, with full azimuth:
-//   truth_ue_E, truth_ue_pt   per truth jet, GeV
-//   truth_ue_ncone            2 (cones used); 0 = not estimated
+//   truth_ue_cone_E, truth_ue_cone_pt   mean over the two cones, GeV
+//   truth_ue_E, truth_ue_pt             the same / (pi R^2) x truth_area
+//   truth_ue_ncone                      2 (cones used); 0 = not estimated
 //
 // Reco groups: data files jet_output_<run>_<file>.root are grouped by run and
 // ordered by the last five digits of <file> (time); simulation files
@@ -85,28 +93,39 @@ struct UeSummary
 };
 
 // The four output branches of one level (reco or truth), one value per jet
+// Area of an R cone, in which the UE densities are measured
+static const double kConeArea = M_PI * R * R;
+
 struct UeBranches
 {
-    std::vector<float> E, pt, window;
+    std::vector<float> E, pt, cone_E, cone_pt, window;
     std::vector<int> nproxy;
     void Attach(TTree *t, const std::string &level)
     {
         t->Branch((level + "_ue_E").c_str(), &E);
         t->Branch((level + "_ue_pt").c_str(), &pt);
+        t->Branch((level + "_ue_cone_E").c_str(), &cone_E);
+        t->Branch((level + "_ue_cone_pt").c_str(), &cone_pt);
         t->Branch((level + "_ue_nproxy").c_str(), &nproxy);
         t->Branch((level + "_ue_pt_window").c_str(), &window);
     }
-    // pool_event: the entry's event in the pool, or -1 (no estimate for any jet)
-    void Fill(const ProxyPool &pool, int pool_event, size_t nj, int n_max, int n_min, UeSummary &sum)
+    // pool_event: the entry's event in the pool, or -1 (no estimate for any jet);
+    // area: the jets' areas, which scale the cone densities
+    void Fill(const ProxyPool &pool, int pool_event, const std::vector<float> &area, int n_max, int n_min, UeSummary &sum)
     {
-        E.assign(nj, -1.f); pt.assign(nj, -1.f);
+        const size_t nj = area.size();
+        E.assign(nj, -1.f); pt.assign(nj, -1.f); cone_E.assign(nj, -1.f); cone_pt.assign(nj, -1.f);
         nproxy.assign(nj, -1); window.assign(nj, (float)proxy_pt_window_fraction);
         for (size_t j = 0; j < nj && pool_event >= 0; j++)
         {
             const ProxyResult res = pool.Estimate(pool_event, (int)j, n_max);
             nproxy[j] = res.n;
             window[j] = (float)res.window;
-            if (res.n > 0) { E[j] = (float)res.ue_E; pt[j] = (float)res.ue_pt; }
+            if (res.n > 0)
+            {
+                cone_E[j] = (float)res.ue_E; cone_pt[j] = (float)res.ue_pt;
+                E[j] = (float)(res.ue_E / kConeArea * area[j]); pt[j] = (float)(res.ue_pt / kConeArea * area[j]);
+            }
 
             if (res.n < 0) continue;
             sum.n_tried++;
@@ -368,21 +387,31 @@ int main(int argc, char **argv)
             if (name.compare(0, 8, "reco_ue_") == 0 || name.compare(0, 9, "truth_ue_") == 0) jt->SetBranchStatus(name.c_str(), 0);
         }
 
-        std::vector<float> *reco_pt = 0, *truth_pt = 0;
-        jt->SetBranchAddress("reco_pt", &reco_pt);
-        if (fp.has_truth) jt->SetBranchAddress("truth_pt", &truth_pt);
+        // The UE is scaled to each jet's area
+        if (!jt->GetBranch("reco_area") || (fp.has_truth && !jt->GetBranch("truth_area")))
+        {
+            std::cerr << "ERROR: " << fp.jet_file << " has no jet areas (reco_area/truth_area): rebuild it with the current"
+                      << " jet finder; left as it is" << std::endl;
+            fin->Close(); delete fin;
+            continue;
+        }
+        std::vector<float> *reco_area = 0, *truth_area = 0;
+        jt->SetBranchAddress("reco_area", &reco_area);
+        if (fp.has_truth) jt->SetBranchAddress("truth_area", &truth_area);
 
         const std::string tmp_name = fp.jet_file + ".ue_tmp";
         TFile *fout = TFile::Open(tmp_name.c_str(), "RECREATE");
         TTree *out = jt->CloneTree(0);
         UeBranches reco_br;
         reco_br.Attach(out, "reco");
-        std::vector<float> truth_ue_E, truth_ue_pt;
+        std::vector<float> truth_ue_E, truth_ue_pt, truth_ue_cone_E, truth_ue_cone_pt;
         std::vector<int> truth_ue_ncone;
         if (fp.has_truth)
         {
             out->Branch("truth_ue_E", &truth_ue_E);
             out->Branch("truth_ue_pt", &truth_ue_pt);
+            out->Branch("truth_ue_cone_E", &truth_ue_cone_E);
+            out->Branch("truth_ue_cone_pt", &truth_ue_cone_pt);
             out->Branch("truth_ue_ncone", &truth_ue_ncone);
         }
 
@@ -391,15 +420,18 @@ int main(int argc, char **argv)
         {
             jt->GetEntry(ev);
             const int pe = ev < (Long64_t)fp.pool_event.size() ? fp.pool_event[ev] : -1;
-            reco_br.Fill(pool, pe, reco_pt->size(), n_max, n_min, reco_sum);
+            reco_br.Fill(pool, pe, *reco_area, n_max, n_min, reco_sum);
             if (fp.has_truth)
             {
-                const size_t nj = truth_pt->size();
+                const size_t nj = truth_area->size();
                 const bool done = ev < (Long64_t)fp.truth_E.size() && fp.truth_E[ev].size() == nj;
                 truth_ue_E.assign(nj, -1.f); truth_ue_pt.assign(nj, -1.f); truth_ue_ncone.assign(nj, 0);
+                truth_ue_cone_E.assign(nj, -1.f); truth_ue_cone_pt.assign(nj, -1.f);
                 for (size_t j = 0; j < nj && done; j++)
                 {
-                    truth_ue_E[j] = fp.truth_E[ev][j]; truth_ue_pt[j] = fp.truth_pt[ev][j]; truth_ue_ncone[j] = 2;
+                    truth_ue_cone_E[j] = fp.truth_E[ev][j]; truth_ue_cone_pt[j] = fp.truth_pt[ev][j]; truth_ue_ncone[j] = 2;
+                    truth_ue_E[j] = (float)(fp.truth_E[ev][j] / kConeArea * truth_area->at(j));
+                    truth_ue_pt[j] = (float)(fp.truth_pt[ev][j] / kConeArea * truth_area->at(j));
                     n_truth_jets++; truth_ue_sum += truth_ue_E[j];
                 }
             }
@@ -416,7 +448,7 @@ int main(int argc, char **argv)
 
     reco_sum.Print("reco", minimum_bias ? "fiducial; minimum-bias mode" : "EM-triggered and fiducial", n_min);
     if (n_truth_files > 0)
-        std::cout << "UnderlyingEvent: " << n_truth_jets << " truth jets estimated from same-event off-axis cones, mean UE "
+        std::cout << "UnderlyingEvent: " << n_truth_jets << " truth jets estimated from same-event off-axis cones, mean UE (area-scaled) "
                   << truth_ue_sum / std::max(1L, n_truth_jets) << " GeV" << std::endl;
     return 0;
 }

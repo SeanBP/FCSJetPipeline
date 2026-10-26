@@ -15,7 +15,7 @@
 #include "TTree.h"
 #include "TString.h"
 #include "TDatabasePDG.h"
-#include "fastjet/ClusterSequence.hh"
+#include "fastjet/ClusterSequenceArea.hh"
 
 using namespace std;
 using namespace fastjet;
@@ -105,6 +105,7 @@ int main(int argc, char** argv) {
 
     vector<float> truth_const_px, truth_const_py, truth_const_pz, truth_const_E;
     vector<int> truth_const_jetIndex, truth_const_pid, truth_nconst;
+    vector<float> reco_area, truth_area; // jet areas (JetAreaDefinition)
 
     vector<float> truth_x, truth_y;
     vector<float> reco_x, reco_y;
@@ -150,6 +151,7 @@ int main(int argc, char** argv) {
     outTree->Branch("reco_const_jetIndex", &reco_const_jetIndex);
     outTree->Branch("reco_const_detid", &reco_const_detid);
     outTree->Branch("reco_nconst", &reco_nconst);
+    outTree->Branch("reco_area", &reco_area);
 
     // FCS points with energy > point_energy_min within deltaR < R of the jet
     // axis (as data_to_jet/RecoJets.cpp)
@@ -167,6 +169,7 @@ int main(int argc, char** argv) {
     outTree->Branch("truth_const_jetIndex", &truth_const_jetIndex);
     outTree->Branch("truth_const_pid", &truth_const_pid);
     outTree->Branch("truth_nconst", &truth_nconst);
+    outTree->Branch("truth_area", &truth_area);
 
     // Per-event FCS trigger flags, passed through from the SimpleTree (FcsTriggerDefs.h)
     Int_t Trig_flag[kNTrigFlags];
@@ -328,6 +331,7 @@ int main(int argc, char** argv) {
             reco_tau1.clear(); reco_tau2.clear();
 
             truth_nconst.clear(); reco_nconst.clear();
+            truth_area.clear(); reco_area.clear();
             reco_nphotons.clear(); truth_nphotons.clear();
 
             reco_const_px.clear(); reco_const_py.clear(); reco_const_pz.clear(); reco_const_E.clear();
@@ -387,7 +391,7 @@ int main(int argc, char** argv) {
             }
 
             // truth_pt_min is 0 for ECAL+HCAL jets or when jet_pt_cuts = 0
-            ClusterSequence cs_truth(truth_particles, JetDefinition(antikt_algorithm, R));
+            ClusterSequenceArea cs_truth(truth_particles, JetDefinition(antikt_algorithm, R), JetAreaDefinition());
             auto truth_all = cs_truth.inclusive_jets(truth_pt_min);
 
             vector<PseudoJet> truth_jets_selected;
@@ -441,7 +445,7 @@ int main(int argc, char** argv) {
                 reco_particles.back().set_user_index(reco_detid.size() - 1);
             }
 
-            ClusterSequence cs_reco(reco_particles, JetDefinition(antikt_algorithm, R));
+            ClusterSequenceArea cs_reco(reco_particles, JetDefinition(antikt_algorithm, R), JetAreaDefinition());
             vector<PseudoJet> reco_jets_selected;
 
             // reco_pt_min is 0 for ECAL+HCAL jets or when jet_pt_cuts = 0
@@ -504,6 +508,7 @@ int main(int argc, char** argv) {
                 truth_phi.push_back(jet.phi());
                 truth_E.push_back(jet.E());
                 truth_nconst.push_back(consts.size());
+                truth_area.push_back(jet.area());
 
                 truth_x.push_back(z_proj*jet.px()/jet.pz());
                 truth_y.push_back(z_proj*jet.py()/jet.pz());
@@ -551,6 +556,7 @@ int main(int argc, char** argv) {
                 reco_phi.push_back(jet.phi());
                 reco_E.push_back(jet.E());
                 reco_nconst.push_back(consts.size());
+                reco_area.push_back(jet.area());
 
                 float rx = z_proj*jet.px()/jet.pz();
                 reco_x.push_back(rx);

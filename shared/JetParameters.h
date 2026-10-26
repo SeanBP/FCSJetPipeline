@@ -7,9 +7,20 @@
 #include "fastjet/PseudoJet.hh"
 #include "fastjet/ClusterSequence.hh"
 #include "fastjet/JetDefinition.hh"
+#include "fastjet/ClusterSequenceArea.hh"
 
 // ------------------ Jet clustering ------------------
 static const double R = 0.7;
+
+// Jet areas, as the FMS EM-jet analysis (STAR StJetFinder defaults with ghost
+// rapidity 5): active area, ghost area 0.04, |ghost rapidity| < 5, one
+// repetition, grid scatter 1, pT scatter 0.1, mean ghost pT 1e-100. The UE
+// subtracted from a jet is the UE density (mean cone energy / pi R^2) times
+// the jet's area (underlying_event/UnderlyingEvent.cpp).
+inline fastjet::AreaDefinition JetAreaDefinition()
+{
+    return fastjet::AreaDefinition(fastjet::active_area, fastjet::GhostedAreaSpec(5.0, 1, 0.04, 1.0, 0.1, 1e-100));
+}
 
 // ------------------ Projection ------------------
 static const double z_proj = 721.5402;

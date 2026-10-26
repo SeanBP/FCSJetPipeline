@@ -14,7 +14,7 @@
 #include "TFile.h"
 #include "TTree.h"
 #include "TString.h"
-#include "fastjet/ClusterSequence.hh"
+#include "fastjet/ClusterSequenceArea.hh"
 
 using namespace std;
 using namespace fastjet;
@@ -97,6 +97,7 @@ int main(int argc, char** argv) {
     // Flat constituent storage
     vector<float> reco_const_px, reco_const_py, reco_const_pz, reco_const_E;
     vector<int>   reco_const_jetIndex, reco_const_detid, reco_nconst;
+    vector<float> reco_area; // jet areas (JetAreaDefinition)
 
     TTree* outTree = new TTree("jetTree", "Reco jets");
     outTree->SetDirectory(fout);
@@ -118,6 +119,7 @@ int main(int argc, char** argv) {
     outTree->Branch("reco_const_jetIndex", &reco_const_jetIndex);
     outTree->Branch("reco_const_detid", &reco_const_detid); 
     outTree->Branch("reco_nconst", &reco_nconst);
+    outTree->Branch("reco_area", &reco_area);
 
     outTree->Branch("reco_tau1", &reco_tau1);
     outTree->Branch("reco_tau2", &reco_tau2);
@@ -269,6 +271,7 @@ int main(int argc, char** argv) {
             reco_tau1.clear();
             reco_tau2.clear();
             reco_nconst.clear();
+            reco_area.clear();
             reco_nphotons.clear();
 
             vector<PseudoJet> reco_particles;
@@ -307,7 +310,7 @@ int main(int argc, char** argv) {
                 reco_particles.back().set_user_index(reco_detid.size() - 1);
             }
 
-            ClusterSequence cs_reco(reco_particles, JetDefinition(antikt_algorithm, R));
+            ClusterSequenceArea cs_reco(reco_particles, JetDefinition(antikt_algorithm, R), JetAreaDefinition());
             vector<PseudoJet> reco_jets_selected;
 
             // reco_jet_pt_min_em for EM-only reco jets; ECAL+HCAL jets have none
@@ -333,6 +336,7 @@ int main(int argc, char** argv) {
                 reco_phi.push_back(jet.phi());
                 reco_E.push_back(jet.E());
                 reco_nconst.push_back(consts.size());
+                reco_area.push_back(jet.area());
 
                 float rx = z_proj*jet.px()/jet.pz();
                 reco_x.push_back(rx);
