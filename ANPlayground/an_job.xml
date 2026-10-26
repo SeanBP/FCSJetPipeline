@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+    A_N job: MuDst -> SimpleTree (runMudst.C, EM-triggered events only) ->
+    EM-only point jets (RecoJets) -> in-job underlying event (UnderlyingEvent)
+    -> JES calibration (ApplyCorrections_em_only) -> A_N yield histograms
+    (AnHistograms). Only the histograms and a per-stage timing table leave the
+    job; SimpleTrees and jet files are deleted.
+
+    Each stage runs under /usr/bin/time; timing_<run>_<job>.txt has one row
+    per stage call:
+      stage file catalog_events input_kB wall_s user_s sys_s maxrss_kB scratch_kB
+    (scratch_kB: the job's scratch use after the stage).
+
+    Configurable per submission (filled in by submit_an_job.sh, see its -h):
+      {{LISTFILE}}        MakeRunList.pl-format list, sorted by run and time
+      {{RANGEFILE}}       one "first-line number-of-lines" row per job
+      {{NPROCESSES}}      number of jobs (rows of RANGEFILE)
+      {{TRIGGER_FILTER}}  FCS trigger names an event must have fired
+      {{CALIB_NAME}}      EM-only point-jet JES lookup JSON, a file in
+                          ANPlayground/jes/ (submit_an_job.sh -c copies it there)
+      {{OUTDIR}}          absolute output directory
+      {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
+
+    star-submit must run from the pipeline root (SandBox paths).
+-->
+
+<job nProcesses="{{NPROCESSES}}">
+
+    <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
+
+    <command>
+
+        stardev
+
+        cp data_to_jet/* .
+        cp shared/* .
+        cp underlying_event/* .
+        cp jet_calibration/ApplyCorrections_em_only.cpp .
+        cp ANPlayground/AnConfig.h ANPlayground/AnHistograms.cpp .
+        cp ANPlayground/jes/{{CALIB_NAME}} calib.json
+        cp -r data_to_jet/hcal_gain_corrections .
+
+        @ rline = ${JOBINDEX} + 1
+        set RANGE = `sed -n "${rline}p" {{RANGEFILE}}`
+        @ line_start = $RANGE[1]
+        @ mycount = $RANGE[2]
+        @ line_end = ${line_start} + ${mycount} - 1
+        sed -n "${line_start},${line_end}p" {{LISTFILE}} > my_lines.list
+        set RUN = `head -1 my_lines.list | grep -oE '_[0-9]{8}_(raw_)?[0-9]{7}\.MuDst' | cut -c2-9`
+        set TAG = ${RUN}_${JOBINDEX}
+        set TIMING = timing_${TAG}.txt
+
+        echo "========================================"
+        echo "JOBINDEX = ${JOBINDEX}, run ${RUN}, lines ${line_start}-${line_end} (${mycount} files)"
+        echo "========================================"
+
+        echo "# stage file catalog_events input_kB wall_s user_s sys_s maxrss_kB scratch_kB" > ${TIMING}
+        echo "# node `hostname` cpu `grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' '_'`" >> ${TIMING}
+
+        set xrdname = "root://xrdstar.rcf.bnl.gov:1095"
+        set xrdnchar = `echo $xrdname | awk '{print length($0)}'`
+        rm -f simpletree_files.list
+        touch simpletree_files.list
+        set nonomatch
+
+        set i = 1
+        while ( ${i} &lt;= ${mycount} )
+            set RAWLINE = `sed -n "${i}p" my_lines.list`
+            set FILEURL = `echo ${RAWLINE} | rev | cut -d'/' -f2- | rev`
+            set NEVCAT = `echo ${RAWLINE} | rev | cut -d'/' -f1 | rev`
+            set LOCALFILE = `basename ${FILEURL}`
+            set urlprefix = `echo ${FILEURL} | awk -v l="$xrdnchar" '{print substr($0,0,l)}'`
+
+            if ( "$xrdname" == "$urlprefix" ) then
+                /usr/bin/time -f "%e %U %S %M" -o stage.time xrdcp --retry 3 -s ${FILEURL} ${LOCALFILE}
+            else
+                /usr/bin/time -f "%e %U %S %M" -o stage.time cp ${FILEURL} ${LOCALFILE}
+            endif
+            if ( ! -f ${LOCALFILE} || -z ${LOCALFILE} ) then
+                echo "ERROR: could not obtain ${FILEURL}, skipping"
+                rm -f ${LOCALFILE}
+                @ i++
+                continue
+            endif
+            set INKB = `du -k ${LOCALFILE} | cut -f1`
+            echo "fetch ${LOCALFILE} ${NEVCAT} ${INKB} `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+
+            set NBEFORE = `ls SimpleTree_mudst_*.root | grep -c '\.root$'`
+            /usr/bin/time -f "%e %U %S %M" -o stage.time root4star -b -q runMudst.C\(\"${LOCALFILE}\",-1,-2,\".\",1,0,\"{{TRIGGER_FILTER}}\"\) &gt;&amp;! mudst.log
+            echo "mudst ${LOCALFILE} ${NEVCAT} ${INKB} `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+            rm -f ${LOCALFILE}
+            set NAFTER = `ls SimpleTree_mudst_*.root | grep -c '\.root$'`
+            if ( ${NAFTER} &lt;= ${NBEFORE} ) then
+                echo "ERROR: runMudst.C produced no new SimpleTree for ${FILEURL}, skipping"
+                tail -20 mudst.log
+                @ i++
+                continue
+            endif
+            ls -t SimpleTree_mudst_*.root | head -1 >> simpletree_files.list
+            @ i++
+        end
+
+        set NPRODUCED = `wc -l &lt; simpletree_files.list`
+        echo "Produced ${NPRODUCED}/${mycount} SimpleTree files"
+        if ( ${NPRODUCED} == 0 ) then
+            echo "ERROR: no SimpleTree files produced"
+            exit 1
+        endif
+
+        module purge
+        module load fastjet-3.3.4
+        module load root-5.34.38
+
+        /usr/bin/time -f "%e %U %S %M" -o stage.time g++ -m64 -O2 RecoJets.cpp VectorDict.cxx -o RecoJets `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11
+        echo "compile RecoJets 0 0 `tail -1 stage.time` 0" >> ${TIMING}
+        /usr/bin/time -f "%e %U %S %M" -o stage.time g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent `root-config --cflags --libs` -std=c++11
+        echo "compile UnderlyingEvent 0 0 `tail -1 stage.time` 0" >> ${TIMING}
+        /usr/bin/time -f "%e %U %S %M" -o stage.time g++ -m64 -O2 ApplyCorrections_em_only.cpp VectorDict.cxx -o ApplyCorrections_em_only `root-config --cflags --libs` -std=c++11
+        echo "compile ApplyCorrections 0 0 `tail -1 stage.time` 0" >> ${TIMING}
+        /usr/bin/time -f "%e %U %S %M" -o stage.time g++ -m64 -O2 AnHistograms.cpp VectorDict.cxx -o AnHistograms `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11
+        echo "compile AnHistograms 0 0 `tail -1 stage.time` 0" >> ${TIMING}
+
+        # 1. Jet finding: EM-only jets from FCS points, one call per SimpleTree
+        rm -f ue_pairs.list jet_files.list
+        touch ue_pairs.list jet_files.list
+        foreach STFILE ( `cat simpletree_files.list` )
+            set SUFFIX = `echo ${STFILE} | sed -e 's/^SimpleTree_mudst_//' -e 's/\.root$//'`
+            echo "${STFILE}" &gt;! single_file.list
+            set INKB = `du -k ${STFILE} | cut -f1`
+            /usr/bin/time -f "%e %U %S %M" -o stage.time ./RecoJets single_file.list "{{TRIGGER_FILTER}}" 1 1 &gt;&amp;! recojets.log
+            echo "jets ${STFILE} 0 ${INKB} `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+            mv jet_output.root jet_output_${SUFFIX}.root
+            echo "jet_output_${SUFFIX}.root ${STFILE}" >> ue_pairs.list
+            echo "jet_output_${SUFFIX}.root" >> jet_files.list
+        end
+
+        # 2. Underlying event, proxies from this job's files (one run)
+        /usr/bin/time -f "%e %U %S %M" -o stage.time ./UnderlyingEvent ue_pairs.list
+        echo "ue all ${NPRODUCED} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+        foreach f ( `cat simpletree_files.list` )
+            rm -f ${f}
+        end
+
+        # 3. JES calibration of the UE-subtracted energy, in place
+        /usr/bin/time -f "%e %U %S %M" -o stage.time ./ApplyCorrections_em_only jet_files.list calib.json
+        echo "calib all ${NPRODUCED} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+
+        # 4. A_N yield histograms
+        /usr/bin/time -f "%e %U %S %M" -o stage.time ./AnHistograms jet_files.list an_hists_${TAG}.root
+        echo "hists all ${NPRODUCED} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+        echo "output an_hists_${TAG}.root 0 `du -k an_hists_${TAG}.root | cut -f1` 0 0 0 0 0" >> ${TIMING}
+        echo "jetfiles all 0 `cat jet_files.list | xargs du -ck | tail -1 | cut -f1` 0 0 0 0 0" >> ${TIMING}
+
+        foreach f ( `cat jet_files.list` )
+            rm -f ${f}
+        end
+        rm -f my_lines.list simpletree_files.list single_file.list ue_pairs.list jet_files.list stage.time
+        cat ${TIMING}
+
+    </command>
+
+    <SandBox installer="ZIP">
+        <Package>
+            <File>file:./data_to_jet/runMudst.C</File>
+            <File>file:./data_to_jet/RecoJets.cpp</File>
+            <File>file:./data_to_jet/FcsTriggerDefs.h</File>
+            <File>file:./data_to_jet/hcal_gain_corrections</File>
+            <File>file:./shared/VectorDict.cxx</File>
+            <File>file:./shared/VectorDict.h</File>
+            <File>file:./shared/VectorDictClass.h</File>
+            <File>file:./shared/VectorDictLinkDef.h</File>
+            <File>file:./shared/JetParameters.h</File>
+            <File>file:./.sl73_x8664_gcc485</File>
+            <File>file:./StRoot</File>
+            <File>file:./underlying_event</File>
+            <File>file:./jet_calibration/ApplyCorrections_em_only.cpp</File>
+            <File>file:./ANPlayground/AnConfig.h</File>
+            <File>file:./ANPlayground/AnHistograms.cpp</File>
+            <File>file:./ANPlayground/jes/{{CALIB_NAME}}</File>
+        </Package>
+    </SandBox>
+
+    <stdout URL="{{STDOUT_URL}}"/>
+    <stderr URL="{{STDERR_URL}}"/>
+
+    <output fromScratch="an_hists_*.root" toURL="file:{{OUTDIR}}/hists/" />
+    <output fromScratch="timing_*.txt" toURL="file:{{OUTDIR}}/timing/" />
+
+</job>
