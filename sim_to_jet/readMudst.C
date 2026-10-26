@@ -49,6 +49,10 @@ void readMudst(Int_t nEvents, Int_t nFiles, TString InputFileList, TString Outpu
   gROOT   -> Macro("loadMuDst.C");
   gROOT   -> Macro("Load.C");
   gSystem -> Load("StFcsDbMaker");
+  gSystem -> Load("StEventMaker");
+  gSystem -> Load("StFcsClusterMaker");
+  gSystem -> Load("libMinuit");
+  gSystem -> Load("StFcsPointMaker");
   gSystem -> Load("RTS");
   gSystem -> Load("StFcsTriggerSimMaker");
   gSystem -> Load("StSimpleReaderMaker.so");
@@ -80,6 +84,16 @@ void readMudst(Int_t nEvents, Int_t nFiles, TString InputFileList, TString Outpu
     
   StFcsDbMaker *fcsDbMkr = new StFcsDbMaker();
 
+  // Recluster the FCS hits with the pipeline's tower thresholds, the same
+  // as runMudst.C does for data: Ecal towers below 0.4 GeV (6 sigma above
+  // the worst-case Run 22 pedestal noise, with margin) are not clustered;
+  // seeds at 1 GeV (P24ia; the DEV defaults are 0.05 / 0.1 GeV).
+  StFcsMuToEventMaker* fcsMuToEvent = new StFcsMuToEventMaker();
+  StFcsClusterMaker* fcsClu = new StFcsClusterMaker();
+  fcsClu->setTowerEThreSeed(1.0, 1.0);
+  fcsClu->setTowerEThreshold(0.4, 0.01);
+  StFcsPointMaker* fcsPoi = new StFcsPointMaker();
+
   // Simulated events have no real trigger decision; StSimpleReaderMaker
   // computes Trig_flag[] itself via fcs_trg_base (see SetTriggerSim()).
   StFcsTriggerSimMaker* trgSim = new StFcsTriggerSimMaker();
@@ -94,6 +108,7 @@ void readMudst(Int_t nEvents, Int_t nFiles, TString InputFileList, TString Outpu
   AnalysisCode -> SetTriggerSim(trgSim) ;
   // Comma-separated FCS trigger flag names: only events that fired one are written (empty = all)
   AnalysisCode -> SetTriggerFilter(trigFilter.Data()) ;
+  AnalysisCode -> SetFcsFromStEvent() ; // the reclustered clusters and points
 
   Double_t sigmaGen; Int_t nTried;
   if ( ReadMCJobStats(sigmaGen, nTried) )

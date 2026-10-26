@@ -123,6 +123,8 @@ class StSimpleReaderMaker : public StMaker
   // no spin DB is attached (simulation), the run is not covered, or the
   // bunch crossing is unresolved.
   StSpinDbMaker* mSpinDb = 0 ;
+
+  bool mFcsFromStEvent = false ; // see SetFcsFromStEvent()
   Int_t mSpinLastRunNumber = -1 ;
   int Spin_config ;
 
@@ -197,6 +199,12 @@ class StSimpleReaderMaker : public StMaker
   // Simulation: the job's generator ptHat range
   void SetMCPtHatMin(double pthatmin_gev) { mc_pthatmin_gev = pthatmin_gev; }
   void SetMCPtHatMax(double pthatmax_gev) { mc_pthatmax_gev = pthatmax_gev; }
+
+  // Write FCS clusters and points from the StEvent FCS collection (reclustered
+  // in the chain: StFcsMuToEventMaker, StFcsClusterMaker, StFcsPointMaker)
+  // instead of the MuDst's. Hits always come from the MuDst. Points'
+  // Cal_pt_parentClusterId is then the cluster's index within its detector.
+  void SetFcsFromStEvent(bool on = true) { mFcsFromStEvent = on; }
 
   // Data: enable the HCAL gain correction; manifestDir holds manifest.txt and
   // the correction files

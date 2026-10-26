@@ -136,6 +136,16 @@ if(proc.Contains("dy") || proc.Contains("mb") || proc.Contains("jet") || proc.Co
   wff->setDebug(0);
   wff->setEnergySelect(0,0,0);
 
+  // Cluster seed thresholds of the data production (P24ia, SL24a: 1 GeV for
+  // Ecal and Hcal). DEV's defaults are 0.05 / 0.1 GeV, which seed a cluster
+  // for every soft shower and give ~3x the data's 1-1.5 GeV points
+  // (UnderlyingEventPlayground/energy_flow/cal_chain_compare.cpp). The
+  // SimpleTrees do not use these clusters: readMudst.C reclusters with the
+  // pipeline's thresholds, as runMudst.C does for data; this only keeps the
+  // MuDst's own clusters P24ia-like.
+  StFcsClusterMaker *seedClu=(StFcsClusterMaker *)chain->GetMaker("StFcsClusterMaker");
+  seedClu->setTowerEThreSeed(1.0, 1.0);
+
   gSystem->Load("StEpdUtil");
 
 /*

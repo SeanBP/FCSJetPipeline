@@ -54,6 +54,17 @@ void runMudst(char* file="st_fwd_23080044_raw_1000019.MuDst.root",
     StFcsDbMaker *fcsDbMkr= new StFcsDbMaker();
     StFcsDb* fcsDb = (StFcsDb*) chain->GetDataSet("fcsDb");
 
+    // Recluster the FCS hits with the pipeline's tower thresholds, the same
+    // as readMudst.C does for simulation, so data and simulation share them
+    // whatever library made the MuDst: Ecal towers below 0.4 GeV (6 sigma
+    // above the worst-case Run 22 pedestal noise, with margin) are not
+    // clustered; seeds at 1 GeV (P24ia).
+    StFcsMuToEventMaker* fcsMuToEvent = new StFcsMuToEventMaker();
+    StFcsClusterMaker* fcsClu = new StFcsClusterMaker();
+    fcsClu->setTowerEThreSeed(1.0, 1.0);
+    fcsClu->setTowerEThreshold(0.4, 0.01);
+    StFcsPointMaker* fcsPoi = new StFcsPointMaker();
+
     // Per-event spin config; -1 outside the spin-DB coverage window
     StSpinDbMaker* spinDbMkr = new StSpinDbMaker();
 
@@ -61,6 +72,7 @@ void runMudst(char* file="st_fwd_23080044_raw_1000019.MuDst.root",
     StSimpleReaderMaker* AnalysisCode  =  new StSimpleReaderMaker(muDstMaker) ;
     AnalysisCode -> SetSpinDb(spinDbMkr) ;
     AnalysisCode -> SetTriggerFilter(trigFilter) ;
+    AnalysisCode -> SetFcsFromStEvent() ; // the reclustered clusters and points
 
     // HCAL gain correction; a placeholder of 1.0 until per-tower corrections exist
     AnalysisCode -> SetHcalRetroactiveGainCorr("hcal_gain_corrections") ;

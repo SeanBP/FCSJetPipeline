@@ -13,6 +13,10 @@
 #include "StMuDSTMaker/COMMON/StMuEvent.h"
 #include "StMuDSTMaker/COMMON/StMuFwdTrack.h"
 #include "StMuDSTMaker/COMMON/StMuFcsPoint.h"
+#include "StEvent/StEvent.h"
+#include "StEvent/StFcsCollection.h"
+#include "StEvent/StFcsCluster.h"
+#include "StEvent/StFcsPoint.h"
 #include "StMuDSTMaker/COMMON/StMuPrimaryVertex.h"
 
 #include "StFcsDbMaker/StFcsDbMaker.h"
@@ -439,8 +443,53 @@ Int_t StSimpleReaderMaker::Make( )
 	}
   } // Loop over FCS hits
 
+  // Reclustered FCS clusters and points from StEvent (SetFcsFromStEvent())
+  StFcsCollection* ev_fcs = 0;
+  if ( mFcsFromStEvent ){
+    StEvent* event = (StEvent*)GetInputDS("StEvent");
+    ev_fcs = event ? event->fcsCollection() : 0;
+    if ( !ev_fcs ){
+      LOG_ERROR << "StSimpleReaderMaker: SetFcsFromStEvent but no StEvent FCS collection; event skipped" << endm;
+      return kStOK;
+    }
+    for ( int det = 0; det <= kFcsHcalSouthDetId; det++ ){
+      StSPtrVecFcsCluster& clusters = ev_fcs->clusters(det);
+      for ( UInt_t i = 0; i < clusters.size() && Cal_nclus < 100; i++ ){
+        StFcsCluster* clus = clusters[i];
+        Cal_clus_detid[Cal_nclus] = det;
+        Cal_clus_ntowers[Cal_nclus] = clus->nTowers();
+        Cal_clus_energy[Cal_nclus] = clus->energy();
+        Cal_clus_loc_x[Cal_nclus] = clus->x();
+        Cal_clus_loc_y[Cal_nclus] = clus->y();
+        StThreeVectorD xyz = mFcsDb->getStarXYZfromColumnRow(det,clus->x(),clus->y());
+        Cal_clus_x[Cal_nclus] = xyz.x();
+        Cal_clus_y[Cal_nclus] = xyz.y();
+        Cal_clus_z[Cal_nclus] = xyz.z();
+        Cal_nclus++;
+      }
+    }
+    for ( int det = 0; det <= kFcsEcalSouthDetId; det++ ){
+      StSPtrVecFcsCluster& clusters = ev_fcs->clusters(det);
+      StSPtrVecFcsPoint& points = ev_fcs->points(det);
+      for ( UInt_t i = 0; i < points.size() && Cal_npts < 200; i++ ){
+        StFcsPoint* pt = points[i];
+        Cal_pt_detid[Cal_npts] = det;
+        Cal_pt_energy[Cal_npts] = pt->energy();
+        Cal_pt_loc_x[Cal_npts] = pt->x();
+        Cal_pt_loc_y[Cal_npts] = pt->y();
+        Cal_pt_x[Cal_npts] = pt->xyz().x();
+        Cal_pt_y[Cal_npts] = pt->xyz().y();
+        Cal_pt_z[Cal_npts] = pt->xyz().z();
+        int parent = -1;
+        for ( UInt_t c = 0; c < clusters.size(); c++ ) if ( clusters[c] == pt->cluster() ) { parent = c; break; }
+        Cal_pt_parentClusterId[Cal_npts] = parent;
+        Cal_npts++;
+      }
+    }
+  }
+
   // Loop over FCS clusters
-  for(UInt_t iclus = 0 ; iclus < fcs_coll->numberOfClusters() ; iclus++){
+  for(UInt_t iclus = 0 ; iclus < fcs_coll->numberOfClusters() && !ev_fcs ; iclus++){
 
         StMuFcsCluster* clus = fcs_coll->getCluster(iclus); // Pointer to a cluster
 
@@ -468,7 +517,7 @@ Int_t StSimpleReaderMaker::Make( )
   } // Loop over FCS clusters
 
   // Loop over FCS points; xyz() is already in global STAR coordinates
-  for(UInt_t ipt = 0 ; ipt < fcs_coll->numberOfPoints() && Cal_npts < 200 ; ipt++){
+  for(UInt_t ipt = 0 ; ipt < fcs_coll->numberOfPoints() && Cal_npts < 200 && !ev_fcs ; ipt++){
 
         StMuFcsPoint* pt = fcs_coll->getPoint(ipt); // Pointer to a point
 
