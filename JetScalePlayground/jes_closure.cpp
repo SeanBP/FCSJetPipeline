@@ -52,7 +52,7 @@
 struct Map
 {
     std::vector<double> x, y;
-    std::vector<std::vector<double> > par[7];   // A B C D E0 sigmaL sigmaR
+    std::vector<std::vector<double> > par[6];   // A B C D E0 sigma
     double xmin, xmax, ymin, ymax;
 };
 
@@ -76,11 +76,21 @@ static bool ReadMap(const std::string &file, Map &m)
     std::stringstream buf;
     buf << in.rdbuf();
     const std::string json = buf.str();
+    // Log-normal maps only, as ApplyCorrections_em_only
+    {
+        const size_t mk = json.find("\"model\"");
+        const size_t v = mk == std::string::npos ? mk : json.find('"', json.find(':', mk));
+        if (v == std::string::npos || json.compare(v, 11, "\"lognormal\"") != 0)
+        {
+            std::cerr << "ERROR: " << file << " is not a log-normal map (no \"model\": \"lognormal\")" << std::endl;
+            return false;
+        }
+    }
     m.x = JsonArray(json, "x_grid");
     m.y = JsonArray(json, "y_grid");
-    for (int k = 0; k < 7; k++)
+    for (int k = 0; k < 6; k++)
         m.par[k].assign(m.x.size(), std::vector<double>(m.y.size(), std::numeric_limits<double>::quiet_NaN()));
-    const char *names[7] = {"A", "B", "C", "D", "E0", "sigmaL", "sigmaR"};
+    const char *names[6] = {"A", "B", "C", "D", "E0", "sigma"};
     int imin = 1 << 30, imax = -1, jmin = 1 << 30, jmax = -1;
     size_t pos = json.find('[', json.find("\"bins\"")) + 1;
     while (true)
@@ -96,7 +106,7 @@ static bool ReadMap(const std::string &file, Map &m)
             return std::strtod(obj.c_str() + p, nullptr);
         };
         const int i = (int)field("i"), j = (int)field("j");
-        for (int k = 0; k < 7; k++) m.par[k][i][j] = field(names[k]);
+        for (int k = 0; k < 6; k++) m.par[k][i][j] = field(names[k]);
         imin = std::min(imin, i); imax = std::max(imax, i); jmin = std::min(jmin, j); jmax = std::max(jmax, j);
     }
     if (imax < 0) return false;
@@ -118,8 +128,8 @@ static double Scale(const Map &m, double x, double y, double E)
     y = std::min(std::max(y, m.ymin), m.ymax);
     const int i = FindIndex(m.x, x), j = FindIndex(m.y, y);
     const double tx = (x - m.x[i]) / (m.x[i + 1] - m.x[i]), ty = (y - m.y[j]) / (m.y[j + 1] - m.y[j]);
-    double p[7];
-    for (int k = 0; k < 7; k++)
+    double p[6];
+    for (int k = 0; k < 6; k++)
     {
         const std::vector<std::vector<double> > &Z = m.par[k];
         const double a = Z[i][j] * (1 - tx) + Z[i + 1][j] * tx, b = Z[i][j + 1] * (1 - tx) + Z[i + 1][j + 1] * tx;
@@ -127,10 +137,10 @@ static double Scale(const Map &m, double x, double y, double E)
     }
     const double e = std::max(E, 1.0);
     double g = 0.0;
-    if (p[3] != 0.0 && std::isfinite(p[3]))
+    if (p[3] != 0.0 && std::isfinite(p[3]) && p[4] > 0.0 && p[5] > 0.0 && std::isfinite(p[5]))
     {
-        const double s = e < p[4] ? p[5] : p[6];
-        if (s != 0.0 && std::isfinite(s)) g = p[3] * std::exp(-0.5 * (e - p[4]) * (e - p[4]) / (s * s));
+        const double z = std::log(e / p[4]) / p[5];
+        g = p[3] * std::exp(-0.5 * z * z);
     }
     return p[0] + p[1] / e + p[2] / (e * e) + g;
 }
@@ -231,14 +241,13 @@ int main(int argc, char **argv)
         }
         std::cout << "  largest deviation after correction: " << worst << " at " << worst_E << " GeV" << std::endl;
         c.cd(g + 1);
-        gPad->SetLogx(); gPad->SetLeftMargin(0.12); gPad->SetRightMargin(0.03); gPad->SetTopMargin(0.08); gPad->SetBottomMargin(0.11);
-        TH1F *fr = gPad->DrawFrame(3, 0.5, 100, 1.5);
+        gPad->SetLeftMargin(0.12); gPad->SetRightMargin(0.03); gPad->SetTopMargin(0.08); gPad->SetBottomMargin(0.11);
+        TH1F *fr = gPad->DrawFrame(0, 0.5, 100, 1.5);
         fr->GetXaxis()->SetTitle(ue ? "truth jet energy - UE (GeV)" : "truth jet energy (GeV)");
         fr->GetYaxis()->SetTitle("weighted median reco / truth energy");
-        fr->GetXaxis()->SetMoreLogLabels(); fr->GetXaxis()->SetNoExponent();
-        TLine *l1 = new TLine(3, 1, 100, 1); l1->SetLineStyle(2); l1->Draw();
-        TLine *l2 = new TLine(3, 1.02, 100, 1.02); l2->SetLineStyle(3); l2->SetLineColor(kGray + 1); l2->Draw();
-        TLine *l3 = new TLine(3, 0.98, 100, 0.98); l3->SetLineStyle(3); l3->SetLineColor(kGray + 1); l3->Draw();
+        TLine *l1 = new TLine(0, 1, 100, 1); l1->SetLineStyle(2); l1->Draw();
+        TLine *l2 = new TLine(0, 1.02, 100, 1.02); l2->SetLineStyle(3); l2->SetLineColor(kGray + 1); l2->Draw();
+        TLine *l3 = new TLine(0, 0.98, 100, 0.98); l3->SetLineStyle(3); l3->SetLineColor(kGray + 1); l3->Draw();
         gb->SetMarkerStyle(24); gb->SetMarkerColor(kGray + 2); gb->SetLineColor(kGray + 2); gb->Draw("PL same");
         ga->SetMarkerStyle(20); ga->SetMarkerColor(kRed + 1); ga->SetLineColor(kRed + 1); ga->Draw("PL same");
         TLegend *leg = new TLegend(0.55, 0.75, 0.96, 0.9);

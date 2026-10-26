@@ -1,10 +1,11 @@
 // Step 2 of the EM-only JES calibration: builds the JES lookup JSON from the
 // "bins" tree of JetEnergyScaleFineGrid_em_only (per-bin weighted medians).
 // Per (x,y) position bin, fits scale vs response with
-//   A + B/E + C/E^2 + D exp(-(E-E0)^2 / 2 sigma^2),  sigma = sigmaL below E0, sigmaR above,
-// then smooths the parameter maps over the grid and masks cells outside the
-// buffered ECAL fiducial region. JSON bins carry {i, j, A, B, C, D, E0, sigmaL,
-// sigmaR} (read by jet_calibration/ApplyCorrections_em_only.cpp).
+//   A + B/E + C/E^2 + D exp(-ln(E/E0)^2 / 2 sigma^2)
+// (a log-normal peak: height D at E0, width sigma in ln E), then smooths the
+// parameter maps over the grid and masks cells outside the buffered ECAL
+// fiducial region. The JSON carries "model": "lognormal" and bins {i, j, A, B,
+// C, D, E0, sigma} (read by jet_calibration/ApplyCorrections_em_only.cpp).
 //
 // Usage: ./CalibrationMap_em_only <bins.root> <out.json>
 //        ./CalibrationMap_em_only <bins.root> <out.json> x x --shard <i> <n> <shard.csv>
@@ -44,27 +45,25 @@ std::string ROOT_FILE = "jet_calibration_grid_test.root";
 std::string OUTPUT_JSON = "JetEnergyScale_lookup_GridTest.json";
 
 // Below this many energy points only the 3-parameter background is fit
-const int MIN_POINTS_FOR_SKEW_GAUSSIAN = 8;
+const int MIN_POINTS_FOR_PEAK = 8;
 
 // Sanity cuts dropping the noise tail of low-statistics bins
 const double RESPONSE_SANITY_FACTOR = 1.5;
 const double SCALE_SANITY_MAX = 1.5;
 
-// Skew-Gaussian bounds. E0_MAX/SIGMA_MAX are set in main() for the EM-only
-// response domain (Emax = 100). The bounds sit well above the optima found in
-// the hottest bins, so a fit at a bound signals a problem, not a clipped peak.
+// Log-normal peak bounds. E0_MAX is set in main() for the EM-only response
+// domain (Emax = 100). The bounds sit well above the optima found in the
+// hottest bins, so a fit at a bound signals a problem, not a clipped peak.
 const double D_MIN = 0.0, D_MAX = 0.5;
 const double E0_MIN = 1.0;
 double E0_MAX = 35.0;
 const double E0_MAX_ecal_hcal = 35.0, E0_MAX_em_only = 40.0;
-// About the finest E-bin spacing: narrower widths fit single-point steps
-const double SIGMA_MIN = 1.0;
-double SIGMA_MAX = 25.0;
-const double SIGMA_MAX_ecal_hcal = 25.0, SIGMA_MAX_em_only = 35.0;
+// Width in ln E; the fitted widths lie between about 0.2 and 0.8
+const double SIGMA_MIN = 0.03, SIGMA_MAX = 2.5;
 
-// The skew Gaussian is kept only if its chi2 improvement beats this quantile
-// of a chi-square with 4 dof (D, E0, sigmaL, sigmaR)
-const double SKEW_GAUSSIAN_SIGNIFICANCE_CL = 0.5;
+// The peak is kept only if its chi2 improvement beats this quantile of a
+// chi-square with 3 dof (D, E0, sigma)
+const double PEAK_SIGNIFICANCE_CL = 0.5;
 
 // Copied from shared/JetParameters.h (keep in sync; that header needs
 // fastjet). Upstream, JetEnergyScaleFineGrid only fills grid points inside
@@ -101,8 +100,8 @@ inline bool pass_fiducial_cut(float jetXE, float jetYE, float buffer, const Fidu
 // A fit within this fraction of a parameter range from a bound counts as at the bound
 const double BOUND_HIT_RTOL = 0.03;
 
-// Below this, D counts as "no skew Gaussian" for reporting purposes.
-const double SKEW_GAUSSIAN_PRESENT_THRESHOLD = 1e-4;
+// Below this, D counts as "no peak" for reporting purposes.
+const double PEAK_PRESENT_THRESHOLD = 1e-4;
 
 // Map smoothing parameters
 const int SMOOTH_N_ITER = 6;
@@ -127,7 +126,7 @@ struct BinRow
 struct FitRow
 {
     double x_center, y_center;
-    double A, B, C, D, E0, sigmaL, sigmaR;
+    double A, B, C, D, E0, sigma;
     double chi2;
     int n_params;
     int ndof;
@@ -184,12 +183,12 @@ double bg_model(double E, double A, double B, double C)
     return A + B / E + C / (E * E);
 }
 
-// Asymmetric Gaussian: independent rise (E < E0) and fall widths, since many
-// bins show a fast rise and slow decline
-double bg_gauss_model(double E, double A, double B, double C, double D, double E0, double sigmaL, double sigmaR)
+// Log-normal peak (a Gaussian in ln E): rises quickly and falls slowly in E,
+// as the scale does, with one width
+double peak_model(double E, double A, double B, double C, double D, double E0, double sigma)
 {
-    double sigma = (E < E0) ? sigmaL : sigmaR;
-    return bg_model(E, A, B, C) + D * std::exp(-((E - E0) * (E - E0)) / (2 * sigma * sigma));
+    const double l = std::log(E / E0) / sigma;
+    return bg_model(E, A, B, C) + D * std::exp(-0.5 * l * l);
 }
 
 struct BackgroundChi2
@@ -209,7 +208,7 @@ struct BackgroundChi2
     }
 };
 
-struct GaussChi2
+struct PeakChi2
 {
     const std::vector<double> &response, &scale, &scale_err;
 
@@ -218,7 +217,7 @@ struct GaussChi2
         double sum = 0.0;
         for (size_t i = 0; i < response.size(); i++)
         {
-            double model = bg_gauss_model(response[i], p[0], p[1], p[2], p[3], p[4], p[5], p[6]);
+            double model = peak_model(response[i], p[0], p[1], p[2], p[3], p[4], p[5]);
             double r = (scale[i] - model) / scale_err[i];
             sum += r * r;
         }
@@ -299,7 +298,7 @@ void fit_with_restarts(
 }
 
 // True if value sits at (within rtol of) lo or hi. check_lower=false skips the
-// lower check -- for D, lower bound 0 is a legitimate "no skew Gaussian" outcome, not degenerate.
+// lower check -- for D, lower bound 0 is a legitimate "no peak" outcome, not degenerate.
 bool at_bound(double value, double lo, double hi, bool check_lower, double rtol = BOUND_HIT_RTOL)
 {
     double span = hi - lo;
@@ -324,9 +323,9 @@ std::vector<double> linspace(double lo, double hi, int n)
     return v;
 }
 
-// Fits background, then background+skew-Gaussian if enough points (keeping the
-// skew Gaussian only if significant and not bound-pinned). False if too few points to fit at all.
-bool fit_log_gauss_function_constrained(
+// Fits background, then background + log-normal peak if enough points (keeping
+// the peak only if significant and not bound-pinned). False if too few points to fit at all.
+bool fit_peak_function_constrained(
     const std::vector<double> &response_in,
     const std::vector<double> &scale_in,
     const std::vector<double> &scale_err_in,
@@ -368,14 +367,13 @@ bool fit_log_gauss_function_constrained(
         out.C = bgX[2];
         out.D = 0.0;
         out.E0 = std::numeric_limits<double>::quiet_NaN();
-        out.sigmaL = std::numeric_limits<double>::quiet_NaN();
-        out.sigmaR = std::numeric_limits<double>::quiet_NaN();
+        out.sigma = std::numeric_limits<double>::quiet_NaN();
         out.chi2 = bgF;
         out.n_params = 3;
         out.ndof = (int)response.size() - 3;
     };
 
-    if ((int)response.size() < MIN_POINTS_FOR_SKEW_GAUSSIAN)
+    if ((int)response.size() < MIN_POINTS_FOR_PEAK)
     {
         background_only("few_points");
         return true;
@@ -394,25 +392,21 @@ bool fit_log_gauss_function_constrained(
         std::sort(e0_candidates.begin(), e0_candidates.end());
         e0_candidates.erase(std::unique(e0_candidates.begin(), e0_candidates.end()), e0_candidates.end());
     }
-    // Every (sigmaL, sigmaR) combination, including asymmetric ones, so
-    // Migrad can start near a fast-rise/slow-fall shape
-    std::vector<double> sigma_candidates = {SIGMA_MAX * 0.1, SIGMA_MAX * 0.15, SIGMA_MAX * 0.2, SIGMA_MAX * 0.3,
-                                             SIGMA_MAX * 0.35, SIGMA_MAX * 0.55, SIGMA_MAX * 0.6};
+    std::vector<double> sigma_candidates = {0.1, 0.2, 0.3, 0.45, 0.7, 1.0, 1.5};
 
-    GaussChi2 gaussChi2{response, scale, scale_err};
-    ROOT::Math::Functor gaussFunc(gaussChi2, 7);
+    PeakChi2 peakChi2{response, scale, scale_err};
+    ROOT::Math::Functor peakFunc(peakChi2, 6);
 
-    std::vector<double> lower_g = {0.0, NAN, NAN, D_MIN, E0_MIN, SIGMA_MIN, SIGMA_MIN};
-    std::vector<double> upper_g = {NAN, NAN, NAN, D_MAX, E0_MAX, SIGMA_MAX, SIGMA_MAX};
+    std::vector<double> lower_g = {0.0, NAN, NAN, D_MIN, E0_MIN, SIGMA_MIN};
+    std::vector<double> upper_g = {NAN, NAN, NAN, D_MAX, E0_MAX, SIGMA_MAX};
 
     std::vector<std::vector<double>> x0_list;
     for (double e0 : e0_candidates)
-        for (double sigmaL : sigma_candidates)
-            for (double sigmaR : sigma_candidates)
-                x0_list.push_back({A0, B0, C0, 0.5 * D_MAX, e0, sigmaL, sigmaR});
+        for (double sigma : sigma_candidates)
+            x0_list.push_back({A0, B0, C0, 0.5 * D_MAX, e0, sigma});
 
     // Data-driven seed: the largest positive residual above the background
-    // fit, with widths from its half-maximum crossings on either side
+    // fit, with the width from its half-maximum crossings on either side
     {
         int peak_idx = -1;
         double peak_resid = 0.0;
@@ -435,18 +429,17 @@ bool fit_log_gauss_function_constrained(
             for (size_t i = peak_idx; i < response.size(); i++)
                 if (resid[i] < half) { e_hi = response[i]; break; }
             double e0_est = std::min(E0_MAX, std::max(E0_MIN, response[peak_idx]));
-            double sigmaL_est = std::max(SIGMA_MIN * 2, (e0_est - e_lo) / 1.1775);
-            double sigmaR_est = std::max(SIGMA_MIN * 2, (e_hi - e0_est) / 1.1775);
-            sigmaL_est = std::min(sigmaL_est, SIGMA_MAX * 0.9);
-            sigmaR_est = std::min(sigmaR_est, SIGMA_MAX * 0.9);
+            // FWHM in ln E = 2.355 sigma
+            double sigma_est = std::log(e_hi / std::max(e_lo, 0.5)) / 2.355;
+            sigma_est = std::min(SIGMA_MAX * 0.9, std::max(SIGMA_MIN * 2, sigma_est));
             double D_est = std::min(D_MAX * 0.9, std::max(D_MIN + 1e-3, peak_resid));
-            x0_list.push_back({A0, B0, C0, D_est, e0_est, sigmaL_est, sigmaR_est});
+            x0_list.push_back({A0, B0, C0, D_est, e0_est, sigma_est});
         }
     }
 
     // Keep the best fit overall and the best fit not at a bound: the global
-    // best is sometimes a very broad, bound-pinned Gaussian mimicking
-    // background curvature, while a well-localized interior fit exists.
+    // best is sometimes a very broad, bound-pinned peak mimicking background
+    // curvature, while a well-localized interior fit exists.
     std::vector<double> gX, bestValidX;
     double gF = std::numeric_limits<double>::infinity();
     double bestValidF = std::numeric_limits<double>::infinity();
@@ -456,9 +449,9 @@ bool fit_log_gauss_function_constrained(
     {
         std::vector<double> x;
         double val;
-        bool ok = minimize_once(gaussFunc, "Migrad", x0, lower_g, upper_g, x, val);
+        bool ok = minimize_once(peakFunc, "Migrad", x0, lower_g, upper_g, x, val);
         if (!ok)
-            minimize_once(gaussFunc, "Simplex", x0, lower_g, upper_g, x, val);
+            minimize_once(peakFunc, "Simplex", x0, lower_g, upper_g, x, val);
 
         if (val < gF)
         {
@@ -467,12 +460,11 @@ bool fit_log_gauss_function_constrained(
         }
 
         // Only the upper width bound is degenerate; a width at the lower
-        // bound is a sharp rise or fall
+        // bound is a sharp peak
         bool pinned =
             at_bound(x[3], D_MIN, D_MAX, false) ||
             at_bound(x[4], E0_MIN, E0_MAX, true) ||
-            at_bound(x[5], SIGMA_MIN, SIGMA_MAX, false) ||
-            at_bound(x[6], SIGMA_MIN, SIGMA_MAX, false);
+            at_bound(x[5], SIGMA_MIN, SIGMA_MAX, false);
 
         if (!pinned && val < bestValidF)
         {
@@ -482,29 +474,23 @@ bool fit_log_gauss_function_constrained(
         }
     }
 
-    double D = gX[3], E0v = gX[4], sigmaL = gX[5], sigmaR = gX[6];
     double delta_chi2 = bgF - gF;
 
-    bool skew_gaussian_at_bound =
-        at_bound(D, D_MIN, D_MAX, false) ||
-        at_bound(E0v, E0_MIN, E0_MAX, true) ||
-        at_bound(sigmaL, SIGMA_MIN, SIGMA_MAX, false) ||
-        at_bound(sigmaR, SIGMA_MIN, SIGMA_MAX, false);
+    bool peak_at_bound =
+        at_bound(gX[3], D_MIN, D_MAX, false) ||
+        at_bound(gX[4], E0_MIN, E0_MAX, true) ||
+        at_bound(gX[5], SIGMA_MIN, SIGMA_MAX, false);
 
     // Fall back to the best fit not at a bound
-    if (skew_gaussian_at_bound && haveValid)
+    if (peak_at_bound && haveValid)
     {
         gX = bestValidX;
         gF = bestValidF;
-        D = gX[3];
-        E0v = gX[4];
-        sigmaL = gX[5];
-        sigmaR = gX[6];
         delta_chi2 = bgF - gF;
-        skew_gaussian_at_bound = false;
+        peak_at_bound = false;
     }
 
-    if (skew_gaussian_at_bound)
+    if (peak_at_bound)
     {
         background_only("bound_hit");
         return true;
@@ -521,11 +507,10 @@ bool fit_log_gauss_function_constrained(
     out.C = gX[2];
     out.D = gX[3];
     out.E0 = gX[4];
-    out.sigmaL = gX[5];
-    out.sigmaR = gX[6];
+    out.sigma = gX[5];
     out.chi2 = gF;
-    out.n_params = 7;
-    out.ndof = (int)response.size() - 7;
+    out.n_params = 6;
+    out.ndof = (int)response.size() - 6;
 
     return true;
 }
@@ -609,7 +594,7 @@ std::vector<FitRow> compute_shard(const std::vector<BinRow> &rows, double chi2_i
         }
 
         FitRow fit;
-        bool ok = fit_log_gauss_function_constrained(
+        bool ok = fit_peak_function_constrained(
             response_sorted, scale_sorted, scale_err_sorted, chi2_improvement_min, fit);
 
         if (!ok)
@@ -672,10 +657,8 @@ std::map<std::string, Grid2D> build_coarse_maps(
                     val = r.D;
                 else if (param == "E0")
                     val = r.E0;
-                else if (param == "sigmaL")
-                    val = r.sigmaL;
-                else if (param == "sigmaR")
-                    val = r.sigmaR;
+                else if (param == "sigma")
+                    val = r.sigma;
                 else // reduced_chi2
                     val = r.chi2 / r.ndof;
 
@@ -739,7 +722,7 @@ std::vector<std::vector<bool>> dilate(const std::vector<std::vector<bool>> &mask
 
 // Chebyshev (8-connected) grid distance from each cell to the nearest cell
 // where Z is finite -- 0 at a finite cell itself, growing by 1 per ring of
-// dilate() outward. Used to pull the skew-Gaussian amplitude D back toward 0
+// dilate() outward. Used to pull the peak height D back toward 0
 // away from real data (see D_DECAY_LENGTH_BINS).
 Grid2D chebyshev_distance_to_finite(const Grid2D &Z)
 {
@@ -936,27 +919,27 @@ void write_calibration_json(
 {
     std::vector<FitRow> fit_rows = fit_rows_in;
 
-    std::vector<std::string> all_params = {"A", "B", "C", "D", "E0", "sigmaL", "sigmaR", "reduced_chi2"};
+    std::vector<std::string> all_params = {"A", "B", "C", "D", "E0", "sigma", "reduced_chi2"};
 
     std::map<std::string, Grid2D> coarse_maps = build_coarse_maps(fit_rows, xs, ys, all_params);
 
-    long n_skew_gaussian_cells = 0, n_fit_cells = 0;
+    long n_peak_cells = 0, n_fit_cells = 0;
     for (const auto &row : coarse_maps["D"])
         for (double v : row)
             if (std::isfinite(v))
             {
                 n_fit_cells++;
-                if (v > SKEW_GAUSSIAN_PRESENT_THRESHOLD)
-                    n_skew_gaussian_cells++;
+                if (v > PEAK_PRESENT_THRESHOLD)
+                    n_peak_cells++;
             }
 
-    std::cout << "A real skew Gaussian was fit for " << n_skew_gaussian_cells << "/" << n_fit_cells
+    std::cout << "A log-normal peak was fit for " << n_peak_cells << "/" << n_fit_cells
               << " calibrated grid cells (rest are background-only)" << std::endl;
 
     // Unfit cells inherit the neighborhood average via smooth_map. A/B/C/D
     // share one NaN footprint (a FitRow sets all four or none); E0/sigma
     // have a larger one (also NaN for background-only fits), so may not
-    // always find a skew-Gaussian-bearing neighbor to average from.
+    // always find a peak-bearing neighbor to average from.
     std::map<std::string, Grid2D> smoothed_maps;
     for (const auto &param : all_params)
         smoothed_maps[param] = smooth_map(coarse_maps[param]);
@@ -988,9 +971,9 @@ void write_calibration_json(
     std::cout << "Filled " << n_abcd_filled << "/" << n_abcd_nan_before
               << " previously-empty position bins with the neighborhood average of nearby fits" << std::endl;
 
-    // Where A/B/C/D are finite but E0/sigma aren't (no skew-Gaussian-bearing neighbor
-    // reachable), fall back to the global mean skew-Gaussian E0/sigma rather than
-    // leaving NaN (which would zero out a real, filled D skew-Gaussian term at save time).
+    // Where A/B/C/D are finite but E0/sigma aren't (no peak-bearing neighbor
+    // reachable), fall back to the global mean E0/sigma of fitted peaks rather
+    // than leaving NaN (which would zero out a real, filled D at save time).
     std::vector<std::vector<bool>> has_abcd(xs.size(), std::vector<bool>(ys.size()));
     long n_e0_nan_before = 0;
     for (size_t i = 0; i < xs.size(); i++)
@@ -1005,16 +988,15 @@ void write_calibration_json(
         }
 
     smoothed_maps["E0"] = fill_nan_global_mean(smoothed_maps["E0"], has_abcd);
-    smoothed_maps["sigmaL"] = fill_nan_global_mean(smoothed_maps["sigmaL"], has_abcd);
-    smoothed_maps["sigmaR"] = fill_nan_global_mean(smoothed_maps["sigmaR"], has_abcd);
+    smoothed_maps["sigma"] = fill_nan_global_mean(smoothed_maps["sigma"], has_abcd);
 
-    std::cout << "Filled E0/sigmaL/sigmaR for " << n_e0_nan_before
-              << " remaining cells with the global mean of real skew-Gaussian-active values" << std::endl;
+    std::cout << "Filled E0/sigma for " << n_e0_nan_before
+              << " remaining cells with the global mean of fitted peaks" << std::endl;
 
     const std::map<std::string, Grid2D> &maps_to_save = smoothed_maps;
 
-    std::vector<std::tuple<int, int, double, double, double, double, double, double, double>> bins_out;
-    long n_skew_gaussian_saved = 0, n_unexpected_nonfinite = 0, n_outside_fiducial = 0;
+    std::vector<std::tuple<int, int, double, double, double, double, double, double>> bins_out;
+    long n_peak_saved = 0, n_unexpected_nonfinite = 0, n_outside_fiducial = 0;
 
     for (size_t i = 0; i < xs.size(); i++)
     {
@@ -1036,28 +1018,26 @@ void write_calibration_json(
 
             double D_val = maps_to_save.at("D")[i][j];
             double E0_val = maps_to_save.at("E0")[i][j];
-            double sigmaL_val = maps_to_save.at("sigmaL")[i][j];
-            double sigmaR_val = maps_to_save.at("sigmaR")[i][j];
+            double sigma_val = maps_to_save.at("sigma")[i][j];
 
-            if (!(std::isfinite(D_val) && std::isfinite(E0_val) && std::isfinite(sigmaL_val) && std::isfinite(sigmaR_val)))
+            if (!(std::isfinite(D_val) && std::isfinite(E0_val) && std::isfinite(sigma_val)))
             {
                 n_unexpected_nonfinite++;
                 D_val = 0.0;
                 E0_val = 0.0;
-                sigmaL_val = 0.0;
-                sigmaR_val = 0.0;
+                sigma_val = 0.0;
             }
 
-            if (D_val > SKEW_GAUSSIAN_PRESENT_THRESHOLD)
-                n_skew_gaussian_saved++;
+            if (D_val > PEAK_PRESENT_THRESHOLD)
+                n_peak_saved++;
 
-            bins_out.emplace_back((int)i, (int)j, A_val, B_val, C_val, D_val, E0_val, sigmaL_val, sigmaR_val);
+            bins_out.emplace_back((int)i, (int)j, A_val, B_val, C_val, D_val, E0_val, sigma_val);
         }
     }
 
     if (n_unexpected_nonfinite > 0)
         std::cout << "WARNING: " << n_unexpected_nonfinite
-                  << " bins had non-finite D/E0/sigmaL/sigmaR despite finite A/B/C -- forced to 0" << std::endl;
+                  << " bins had non-finite D/E0/sigma despite finite A/B/C -- forced to 0" << std::endl;
 
     std::cout << "Excluded " << n_outside_fiducial
               << " grid cells outside the buffer-restricted fiducial acceptance (never defined, regardless of smoothing)" << std::endl;
@@ -1066,8 +1046,8 @@ void write_calibration_json(
     std::cout << "Saving " << bins_out.size() << "/" << n_total
               << " bins with finite A,B,C (dropping " << (n_total - (long)bins_out.size())
               << " with no calibration)" << std::endl;
-    std::cout << n_skew_gaussian_saved << "/" << bins_out.size()
-              << " saved bins include an actual skew Gaussian term" << std::endl;
+    std::cout << n_peak_saved << "/" << bins_out.size()
+              << " saved bins include a log-normal peak" << std::endl;
 
     std::ofstream out(save_file.c_str());
     if (!out.is_open())
@@ -1077,6 +1057,9 @@ void write_calibration_json(
     }
 
     out << "{\n";
+    // Evaluators refuse a map without this tag, so a map of the old
+    // skew-Gaussian form cannot be applied with this formula
+    out << "  \"model\": \"lognormal\",\n";
     out << "  \"nx\": " << xs.size() << ",\n";
     out << "  \"ny\": " << ys.size() << ",\n";
 
@@ -1113,10 +1096,8 @@ void write_calibration_json(
         write_double(out, std::get<5>(b));
         out << ", \"E0\": ";
         write_double(out, std::get<6>(b));
-        out << ", \"sigmaL\": ";
+        out << ", \"sigma\": ";
         write_double(out, std::get<7>(b));
-        out << ", \"sigmaR\": ";
-        write_double(out, std::get<8>(b));
         out << "}" << (k + 1 < bins_out.size() ? "," : "") << "\n";
     }
     out << "  ]\n";
@@ -1136,7 +1117,7 @@ void write_fitrow_csv(const std::vector<FitRow> &fit_rows, const std::string &sa
         std::cerr << "ERROR: cannot open " << save_file << " for writing" << std::endl;
         exit(1);
     }
-    out << "x_center,y_center,A,B,C,D,E0,sigmaL,sigmaR,chi2,n_params,ndof\n";
+    out << "x_center,y_center,A,B,C,D,E0,sigma,chi2,n_params,ndof\n";
     for (const auto &r : fit_rows)
     {
         write_double(out, r.x_center);
@@ -1153,9 +1134,7 @@ void write_fitrow_csv(const std::vector<FitRow> &fit_rows, const std::string &sa
         out << ",";
         write_double(out, r.E0);
         out << ",";
-        write_double(out, r.sigmaL);
-        out << ",";
-        write_double(out, r.sigmaR);
+        write_double(out, r.sigma);
         out << ",";
         write_double(out, r.chi2);
         out << "," << r.n_params << "," << r.ndof << "\n";
@@ -1183,9 +1162,9 @@ std::vector<FitRow> read_fitrow_csv(const std::string &path)
         std::vector<double> v;
         while (std::getline(ss, tok, ','))
             v.push_back(std::stod(tok));
-        if (v.size() != 12)
+        if (v.size() != 11)
         {
-            std::cerr << "ERROR: malformed row in " << path << " (expected 12 fields, got " << v.size() << ")" << std::endl;
+            std::cerr << "ERROR: malformed row in " << path << " (expected 11 fields, got " << v.size() << ")" << std::endl;
             exit(1);
         }
         FitRow r;
@@ -1196,11 +1175,10 @@ std::vector<FitRow> read_fitrow_csv(const std::string &path)
         r.C = v[4];
         r.D = v[5];
         r.E0 = v[6];
-        r.sigmaL = v[7];
-        r.sigmaR = v[8];
-        r.chi2 = v[9];
-        r.n_params = (int)v[10];
-        r.ndof = (int)v[11];
+        r.sigma = v[7];
+        r.chi2 = v[8];
+        r.n_params = (int)v[9];
+        r.ndof = (int)v[10];
         rows.push_back(r);
     }
     return rows;
@@ -1227,11 +1205,11 @@ void write_chi2_csv(const std::vector<FitRow> &fit_rows, const std::string &save
 void write_direct_fits_csv(const std::vector<FitRow> &fit_rows, const std::string &save_file)
 {
     std::ofstream out(save_file.c_str());
-    out << "x,y,A,B,C,D,E0,sigmaL,sigmaR\n";
+    out << "x,y,A,B,C,D,E0,sigma\n";
     for (const auto &r : fit_rows)
     {
         out << r.x_center << "," << r.y_center << "," << r.A << "," << r.B << "," << r.C << ","
-            << r.D << "," << r.E0 << "," << r.sigmaL << "," << r.sigmaR << "\n";
+            << r.D << "," << r.E0 << "," << r.sigma << "\n";
     }
     out.close();
     std::cout << "Direct (unsmoothed) fit CSV saved to " << save_file << std::endl;
@@ -1253,7 +1231,6 @@ int main(int argc, char **argv)
     // argv[3] and argv[4] are ignored
     const bool em_only = true;
     E0_MAX = em_only ? E0_MAX_em_only : E0_MAX_ecal_hcal;
-    SIGMA_MAX = em_only ? SIGMA_MAX_em_only : SIGMA_MAX_ecal_hcal;
     ACTIVE_FIDUCIAL_RECT = em_only ? &kFiducialRectEcal : &kFiducialRect;
     ACTIVE_FIDUCIAL_BUFFER = em_only ? reco_fiducial_buffer_ecal : reco_fiducial_buffer;
 
@@ -1282,7 +1259,7 @@ int main(int argc, char **argv)
         std::vector<BinRow> rows = load_bins(input_file);
         std::cout << "Loaded " << rows.size() << " (E,x,y) bin entries" << std::endl;
 
-        double chi2_improvement_min = TMath::ChisquareQuantile(SKEW_GAUSSIAN_SIGNIFICANCE_CL, 4);
+        double chi2_improvement_min = TMath::ChisquareQuantile(PEAK_SIGNIFICANCE_CL, 3);
 
         std::cout << "Fitting shard " << shard_index << "/" << n_shards << " ..." << std::endl;
         std::vector<FitRow> shard_fit_rows = compute_shard(rows, chi2_improvement_min, shard_index, n_shards);
@@ -1346,8 +1323,8 @@ int main(int argc, char **argv)
     std::vector<BinRow> rows = load_bins(input_file);
     std::cout << "Loaded " << rows.size() << " (E,x,y) bin entries" << std::endl;
 
-    // 4 dof: D, E0, sigmaL, sigmaR over the background
-    double chi2_improvement_min = TMath::ChisquareQuantile(SKEW_GAUSSIAN_SIGNIFICANCE_CL, 4);
+    // 3 dof: D, E0, sigma over the background
+    double chi2_improvement_min = TMath::ChisquareQuantile(PEAK_SIGNIFICANCE_CL, 3);
 
     std::cout << "Fitting position bins ..." << std::endl;
     std::vector<FitRow> fit_rows = compute_all_regions(rows, chi2_improvement_min);

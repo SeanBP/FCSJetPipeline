@@ -1,8 +1,8 @@
 // Applies an EM-only JES lookup JSON (CalibrationMap_em_only) to JetTrees in
 // place (TFile "UPDATE", no undo), adding reco_E_corr and reco_x_F_corr.
 //
-// scale(x,y,E) = A + B/E + C/E^2 + D exp(-(E-E0)^2 / 2 sigma^2), sigma = sigmaL
-// below E0, sigmaR above, evaluated at the jet's own UE-subtracted energy
+// scale(x,y,E) = A + B/E + C/E^2 + D exp(-ln(E/E0)^2 / 2 sigma^2) (a log-normal
+// peak; the JSON must say "model": "lognormal"), evaluated at the jet's own UE-subtracted energy
 // E = reco_E - reco_ue_E (numerical inversion): reco_E_corr = E / scale.
 // Jets that cannot be put on the calibrated scale get reco_E_corr =
 // reco_x_F_corr = -1 and must be dropped by the analysis: no UE estimate
@@ -35,8 +35,7 @@ struct LookupGrid
     std::vector<std::vector<double>> C;
     std::vector<std::vector<double>> D;
     std::vector<std::vector<double>> E0;
-    std::vector<std::vector<double>> sigmaL;
-    std::vector<std::vector<double>> sigmaR;
+    std::vector<std::vector<double>> sigma;
 };
 
 double clamp(double v,double lo,double hi)
@@ -199,6 +198,18 @@ int main(int argc, char** argv)
     buffer << in.rdbuf();
     std::string json = buffer.str();
 
+    // Only the log-normal form is evaluated here; maps of the earlier
+    // skew-Gaussian form carry no tag and are refused
+    {
+        size_t m = json.find("\"model\"");
+        size_t v = m == std::string::npos ? m : json.find('"', json.find(':', m));
+        if (v == std::string::npos || json.compare(v, 11, "\"lognormal\"") != 0)
+        {
+            std::cerr << "ERROR: " << calib_json << " is not a log-normal map (no \"model\": \"lognormal\")" << std::endl;
+            exit(1);
+        }
+    }
+
     auto extract_int =
     [&](const std::string& key)
     {
@@ -254,7 +265,7 @@ int main(int argc, char** argv)
     extract_array_1d("x_grid", grid.x);
     extract_array_1d("y_grid", grid.y);
 
-    // Sparse per-bin fit params ("bins":[{"i","j","A","B","C","D","E0","sigmaL","sigmaR"},...]);
+    // Sparse per-bin fit params ("bins":[{"i","j","A","B","C","D","E0","sigma"},...]);
     // only present over a rectangular (i,j) sub-range, rest left as NaN.
     int imin = grid.nx, imax = -1;
     int jmin = grid.ny, jmax = -1;
@@ -273,8 +284,7 @@ int main(int argc, char** argv)
     init_grid_2d(grid.C);
     init_grid_2d(grid.D);
     init_grid_2d(grid.E0);
-    init_grid_2d(grid.sigmaL);
-    init_grid_2d(grid.sigmaR);
+    init_grid_2d(grid.sigma);
 
     {
         size_t pos = json.find("\"bins\"");
@@ -347,8 +357,7 @@ int main(int argc, char** argv)
             grid.C[bi][bj]     = get_field("C");
             grid.D[bi][bj]     = get_field("D");
             grid.E0[bi][bj]    = get_field("E0");
-            grid.sigmaL[bi][bj] = get_field("sigmaL");
-            grid.sigmaR[bi][bj] = get_field("sigmaR");
+            grid.sigma[bi][bj]  = get_field("sigma");
 
             imin = std::min(imin, bi);
             imax = std::max(imax, bi);
@@ -526,25 +535,21 @@ int main(int argc, char** argv)
                 double C_grid = bilinear(grid.x,grid.y,grid.C,x,y);
                 double D_grid = bilinear(grid.x,grid.y,grid.D,x,y);
                 double E0_grid = bilinear(grid.x,grid.y,grid.E0,x,y);
-                double sigmaL_grid = bilinear(grid.x,grid.y,grid.sigmaL,x,y);
-                double sigmaR_grid = bilinear(grid.x,grid.y,grid.sigmaR,x,y);
+                double sigma_grid = bilinear(grid.x,grid.y,grid.sigma,x,y);
 
                 double E_eval = std::max(E,E_FLOOR);
 
-                double gauss_term = 0.0;
+                double peak_term = 0.0;
 
-                if(D_grid != 0.0 && std::isfinite(D_grid))
+                if(D_grid != 0.0 && std::isfinite(D_grid) && E0_grid > 0.0 &&
+                   sigma_grid > 0.0 && std::isfinite(sigma_grid))
                 {
-                    double sigma_grid = (E_eval < E0_grid) ? sigmaL_grid : sigmaR_grid;
-                    if(sigma_grid != 0.0 && std::isfinite(sigma_grid))
-                    {
-                        double z = (E_eval - E0_grid)/sigma_grid;
-                        gauss_term = D_grid*std::exp(-0.5*z*z);
-                    }
+                    double z = std::log(E_eval/E0_grid)/sigma_grid;
+                    peak_term = D_grid*std::exp(-0.5*z*z);
                 }
 
                 double F_grid =
-                    A_grid + B_grid/E_eval + C_grid/(E_eval*E_eval) + gauss_term;
+                    A_grid + B_grid/E_eval + C_grid/(E_eval*E_eval) + peak_term;
 
                 if(invalid(F_grid) || std::fabs(F_grid)<=1e-8)
                 {
