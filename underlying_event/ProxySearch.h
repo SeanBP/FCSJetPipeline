@@ -13,7 +13,8 @@
 // bins overlapping the pT window are visited nearest in event number first. A
 // candidate event is accepted if it is a different, not yet used event; its
 // jet passes the pT window, fiducial region, azimuthal band and separation;
-// and none of its reco jets lies within the separation of the UE cone.
+// and none of its reco jets lies within the separation of the UE cone (unless
+// built with PROXY_JET_VETO=0, ProxySelection.h).
 
 #include <vector>
 #include <map>
@@ -63,7 +64,11 @@ struct ProxyResult
     long n_scanned;                 // candidates examined
     int reach;                      // distance in pool events to the farthest proxy event
     std::vector<double> E_list;     // cone energy of each proxy event, in the order found
-    ProxyResult() : n(-1), n_nominal(0), window(proxy_pt_window_fraction), ue_E(-1.0), ue_pt(-1.0), n_scanned(0), reach(0) {}
+    double jet_eta, jet_dr, jet_dphi; // proxy jets' mean eta, distance to the cone and |dphi| to it (deg); -1 if n <= 0
+    std::vector<int> proxy_event, proxy_jet; // pool indices of each proxy event and its proxy jet (GetEvent, GetJet), as E_list
+    double half_width;              // band half-width used (deg), from the jet's position; -1 if not estimated
+    ProxyResult() : n(-1), n_nominal(0), window(proxy_pt_window_fraction), ue_E(-1.0), ue_pt(-1.0), n_scanned(0), reach(0),
+                    jet_eta(-1.0), jet_dr(-1.0), jet_dphi(-1.0), half_width(-1.0) {}
 };
 
 class ProxyPool
@@ -76,12 +81,16 @@ public:
         int pt_first, pt_n;         // range in the point arrays
     };
 
-    explicit ProxyPool(double table_grid_cm = 2.0) : require_em_trigger_(true), pt_min_(reco_jet_pt_min_em) { table_.Build(table_grid_cm); }
+    explicit ProxyPool(double table_grid_cm = 2.0) : require_em_trigger_(true), jet_veto_(proxy_jet_veto), pt_min_(reco_jet_pt_min_em) { table_.Build(table_grid_cm); }
 
     // Minimum-bias mode (samples without trigger or jet pT cuts, e.g. the JES
     // calibration sample): every fiducial jet is estimated and can be a proxy
     // jet, and untriggered events match untriggered ones. Call before AddEvent.
     void SetMinimumBias() { require_em_trigger_ = false; pt_min_ = 0.0; }
+
+    // The jet veto for this pool; proxy_jet_veto (PROXY_JET_VETO) unless set
+    // (FMSJetPipeline's FMS test runs pools with and without it)
+    void SetJetVeto(bool on) { jet_veto_ = on; }
 
     // Adds one event and returns its index. Events must be added in time
     // order. Points are ECal points that already passed the energy cut.
@@ -134,18 +143,20 @@ public:
         res.n = 0;
 
         const double half_width = table_.Get(jet.x, jet.y);
+        res.half_width = half_width;
         std::vector<int> used_events;
         std::vector<double> pt_list;
+        double sum_eta = 0.0, sum_dr = 0.0, sum_dphi = 0.0;
 
         // The nominal window, up to the limit if any; then, only for a jet left
         // below the minimum, wider windows until the minimum is reached
         const int n_min = std::min(proxy_n_min, n_target);
-        Search(event, jet, half_width, res.window, n_target, res, used_events, pt_list);
+        Search(event, jet, half_width, res.window, n_target, res, used_events, pt_list, sum_eta, sum_dr, sum_dphi);
         res.n_nominal = (int)res.E_list.size();
         while ((int)res.E_list.size() < n_min && res.window + proxy_pt_window_step <= proxy_pt_window_max + 1e-9)
         {
             res.window += proxy_pt_window_step;
-            Search(event, jet, half_width, res.window, n_min, res, used_events, pt_list);
+            Search(event, jet, half_width, res.window, n_min, res, used_events, pt_list, sum_eta, sum_dr, sum_dphi);
         }
 
         res.n = (int)res.E_list.size();
@@ -154,6 +165,7 @@ public:
             res.ue_E = 0.0; res.ue_pt = 0.0;
             for (int i = 0; i < res.n; i++) { res.ue_E += res.E_list[i]; res.ue_pt += pt_list[i]; }
             res.ue_E /= res.n; res.ue_pt /= res.n;
+            res.jet_eta = sum_eta / res.n; res.jet_dr = sum_dr / res.n; res.jet_dphi = sum_dphi / res.n;
         }
         return res;
     }
@@ -165,13 +177,14 @@ private:
     static KeyType Key(int group, int em_level, int pt_bin) { return KeyType((long long)group * 4 + em_level, pt_bin); }
     // 5% wide; bin 0 starts at reco_jet_pt_min_em, lower pT gives negative bins
     static int PtBin(double pt) { return (int)std::floor(std::log(pt / reco_jet_pt_min_em) / std::log(1.05)); }
-    bool require_em_trigger_;
+    bool require_em_trigger_, jet_veto_;
     double pt_min_;
 
     // Adds proxy events whose proxy jet is inside the given pT window, nearest
     // in event number first, until there are `want` in all or the group is exhausted
     void Search(int event, const ProxyJet &jet, double half_width, double window, int want,
-                ProxyResult &res, std::vector<int> &used_events, std::vector<double> &pt_list) const
+                ProxyResult &res, std::vector<int> &used_events, std::vector<double> &pt_list,
+                double &sum_eta, double &sum_dr, double &sum_dphi) const
     {
         const Event &ev = events_[event];
 
@@ -218,7 +231,7 @@ private:
             // softer jets do not exist); in minimum-bias mode they are UE.
             const Event &pe = events_[cand.event];
             bool clear = true;
-            for (int o = pe.jet_first; o < pe.jet_first + pe.jet_n && clear; o++)
+            for (int o = pe.jet_first; o < pe.jet_first + pe.jet_n && clear && jet_veto_; o++)
                 if (jets_[o].pt >= reco_jet_pt_min_em &&
                     ProxyDeltaR(jets_[o].eta, jets_[o].phi, jet.eta, jet.phi) < proxy_min_dr) clear = false;
             if (!clear) continue;
@@ -231,8 +244,13 @@ private:
                     pt_ue += p_E_[i] / std::cosh(p_eta_[i]);
                 }
             res.E_list.push_back(e_ue);
+            res.proxy_event.push_back(cand.event);
+            res.proxy_jet.push_back(cand.jet);
             pt_list.push_back(pt_ue);
             used_events.push_back(cand.event);
+            sum_eta += pj.eta;
+            sum_dr += ProxyDeltaR(pj.eta, pj.phi, jet.eta, jet.phi);
+            sum_dphi += std::fabs(std::remainder(pj.phi - jet.phi, 2.0 * M_PI)) * 180.0 / M_PI;
             res.reach = std::max(res.reach, best_dist);
         }
     }

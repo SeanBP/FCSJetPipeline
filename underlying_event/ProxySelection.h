@@ -29,8 +29,27 @@
 
 #include "JetParameters.h"
 
-// Minimum eta-phi distance between the proxy jet axis and the UE cone axis
-static const double proxy_min_dr = 2.0 * R + 0.5 * R;
+// Minimum eta-phi distance between the proxy jet axis and the UE cone axis,
+// 2.5R; building with -DPROXY_MIN_DR_R=<x> sets it to x R instead (0 = no
+// separation: the band is then sized without the exclusion and the jet veto,
+// which uses the same distance, does nothing; UnderlyingEventPlayground's
+// separation test)
+#ifndef PROXY_MIN_DR_R
+#define PROXY_MIN_DR_R 2.5
+#endif
+static const double proxy_min_dr = PROXY_MIN_DR_R * R;
+
+// Veto: reject a proxy event if any of its reco jets (pT >= reco_jet_pt_min_em)
+// lies within proxy_min_dr of the UE cone. Off by default: the cone keeps
+// whatever it contains, as the truth UE's same-event cones do. In simulation
+// (UnderlyingEventPlayground/truth_decomp, unfiltered sample) separation
+// without the veto matches the truth UE within a few percent, while the veto
+// removes real UE and comes out ~10% low. Building with -DPROXY_JET_VETO=1
+// turns it on (the separation test's sep_veto variant).
+#ifndef PROXY_JET_VETO
+#define PROXY_JET_VETO 0
+#endif
+static const bool proxy_jet_veto = PROXY_JET_VETO;
 
 // Target allowed area, as a fraction of one detector half's reco fiducial
 // area in eta-phi (1.70), i.e. 0.17
