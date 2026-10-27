@@ -11,7 +11,8 @@
 // without the UE branches is an error unless "noue" is given.
 //
 // Usage: JetEnergyScaleFineGrid_em_only <jettrees_dir/> [match_radius_cm]
-//        [E0_GeV] [Emax_GeV] [noue]   (an empty string "" keeps that slot's default)
+//        [E0_GeV] [Emax_GeV] [noue] [match_radius_high_cm] [E_high_pool_GeV]
+//        (an empty string "" keeps that slot's default)
 
 #include <TFile.h>
 #include <TTree.h>
@@ -61,6 +62,16 @@ double grid_spacing = 2.5;
 // jets within this x-y (detector surface) distance of a grid point are
 // included in its histogram
 double match_radius = 5.0;
+
+// Truth-energy bins starting at or above E_high_pool pool jets within
+// match_radius_high instead: high-energy forward jets come from the
+// lowest-ptHat (heaviest-weight) events, so their points are short of
+// effective statistics, while the scale varies smoothly across the face.
+// On the unfiltered 10M sample, 10 cm from 37 GeV adds about 4800 points
+// with n_eff >= 3 (28800 -> 33600) and narrows the outer band's closure
+// above 37 GeV (mean -0.59% -> -0.45%, rms 0.91% -> 0.80%)
+double match_radius_high = 10.0;
+double E_high_pool = 37.0;
 
 struct FitResult
 {
@@ -229,6 +240,15 @@ int main(int argc, char** argv)
         Emax = std::atof(argv[4]);
     //   argv[5]: "noue" -- no underlying-event subtraction (see header)
     const bool subtract_ue = !(argc > 5 && std::string(argv[5]) == "noue");
+    //   argv[6]: match_radius_high (cm), argv[7]: E_high_pool (GeV)
+    if (argc > 6 && argv[6][0] != '\0')
+        match_radius_high = std::atof(argv[6]);
+    if (argc > 7 && argv[7][0] != '\0')
+        E_high_pool = std::atof(argv[7]);
+    std::cout << "Pooling radius " << match_radius << " cm";
+    if (E_high_pool < 1e9)
+        std::cout << ", " << match_radius_high << " cm for truth-energy bins from " << E_high_pool << " GeV";
+    std::cout << std::endl;
     std::cout << (subtract_ue ? "Underlying event subtracted from reco and truth jet energies"
                               : "No underlying-event subtraction (noue)") << std::endl;
     long n_pairs = 0, n_no_ue = 0;
@@ -383,13 +403,14 @@ int main(int argc, char** argv)
                 int q = (!reflect_to_positive_half && reco_x->at(ri) < 0) ? 1 : 0;
 
                 double scale = reco / truth;
+                const double radius = e_bins[eb] >= E_high_pool - 1e-9 ? match_radius_high : match_radius;
 
-                // Include this jet at every grid point within match_radius (index
+                // Include this jet at every grid point within radius (index
                 // range computed directly since the grid is evenly spaced).
-                int ix_lo = std::max(0, (int)std::floor((x - match_radius - x_min) / grid_spacing));
-                int ix_hi = std::min(n_grid_x - 1, (int)std::ceil((x + match_radius - x_min) / grid_spacing));
-                int iy_lo = std::max(0, (int)std::floor((y - match_radius - y_min) / grid_spacing));
-                int iy_hi = std::min(n_grid_y - 1, (int)std::ceil((y + match_radius - y_min) / grid_spacing));
+                int ix_lo = std::max(0, (int)std::floor((x - radius - x_min) / grid_spacing));
+                int ix_hi = std::min(n_grid_x - 1, (int)std::ceil((x + radius - x_min) / grid_spacing));
+                int iy_lo = std::max(0, (int)std::floor((y - radius - y_min) / grid_spacing));
+                int iy_hi = std::min(n_grid_y - 1, (int)std::ceil((y + radius - y_min) / grid_spacing));
 
                 for (int ix = ix_lo; ix <= ix_hi; ix++)
                 for (int iy = iy_lo; iy <= iy_hi; iy++)
@@ -401,7 +422,7 @@ int main(int argc, char** argv)
                     double dy = y - y_grid[iy];
                     double dr2 = dx * dx + dy * dy;
 
-                    if (dr2 > match_radius * match_radius)
+                    if (dr2 > radius * radius)
                         continue;
 
                     BinKey key = {q, ix, iy, eb};

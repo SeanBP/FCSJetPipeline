@@ -169,8 +169,9 @@ EM-only JES from simulated JetTrees (`sim_to_jet -E 1`; for the calibration
 use a `-C 1` sample with its UE rerun in minimum-bias mode). Reads a flat
 folder (for an organized sample, a folder of links).
 
-1. `JetEnergyScaleFineGrid_em_only`: on a 2.5 cm grid (5 cm match radius) and
-   20 truth-energy bins (3-100 GeV), the cross-section-weighted median of
+1. `JetEnergyScaleFineGrid_em_only`: on a 2.5 cm grid (5 cm match radius,
+   10 cm from 37 GeV, where forward jets come from the heaviest-weight low-ptHat
+   events and points are short of statistics) and 20 truth-energy bins (3-100 GeV), the cross-section-weighted median of
    scale = (reco_E - reco_ue_E) / (truth_E - truth_ue_E) and of the response.
    Medians close exactly under numerical inversion (arXiv:1609.05195).
    `noue` turns the UE subtraction off.
