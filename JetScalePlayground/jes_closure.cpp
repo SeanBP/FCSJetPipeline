@@ -55,6 +55,7 @@ struct Map
     std::vector<std::vector<double> > par[2];   // A B
     double C, K, Emin, Emax;                    // the same everywhere
     double xmin, xmax, ymin, ymax;
+    int imin, imax, jmin, jmax;                 // the bins' index range
 };
 
 static std::vector<double> JsonArray(const std::string &json, const std::string &key)
@@ -122,6 +123,7 @@ static bool ReadMap(const std::string &file, Map &m)
     }
     if (imax < 0) return false;
     m.xmin = m.x[imin]; m.xmax = m.x[imax]; m.ymin = m.y[jmin]; m.ymax = m.y[jmax];
+    m.imin = imin; m.imax = imax; m.jmin = jmin; m.jmax = jmax;
     return true;
 }
 
@@ -137,7 +139,10 @@ static double Scale(const Map &m, double x, double y, double E)
 {
     x = std::min(std::max(std::fabs(x), m.xmin), m.xmax);
     y = std::min(std::max(y, m.ymin), m.ymax);
-    const int i = FindIndex(m.x, x), j = FindIndex(m.y, y);
+    // cell kept inside the map, so a jet on the upper edge does not reach the
+    // NaN cells beyond it (0 x NaN is NaN), as in ApplyCorrections_em_only
+    const int i = std::min(std::max(FindIndex(m.x, x), m.imin), m.imax - 1);
+    const int j = std::min(std::max(FindIndex(m.y, y), m.jmin), m.jmax - 1);
     const double tx = (x - m.x[i]) / (m.x[i + 1] - m.x[i]), ty = (y - m.y[j]) / (m.y[j + 1] - m.y[j]);
     double p[2];
     for (int k = 0; k < 2; k++)

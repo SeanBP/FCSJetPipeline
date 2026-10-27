@@ -73,11 +73,16 @@ double bilinear(
     const std::vector<double>& yg,
     const std::vector<std::vector<double>>& Z,
     double x,
-    double y
+    double y,
+    int i_lo, int i_hi, int j_lo, int j_hi
 )
 {
-    int i = find_index(xg,x);
-    int j = find_index(yg,y);
+    // The map's bins span [i_lo, i_hi] x [j_lo, j_hi] of the grid; the cells
+    // beyond are NaN. Keep the interpolation cell inside, so a point on the
+    // upper edge (where x, y are clamped to) does not reach a NaN neighbour:
+    // its weight there is 0, but 0 x NaN is NaN
+    int i = std::min(std::max(find_index(xg,x), i_lo), i_hi - 1);
+    int j = std::min(std::max(find_index(yg,y), j_lo), j_hi - 1);
 
     double x1 = xg[i];
     double x2 = xg[i+1];
@@ -522,8 +527,8 @@ int main(int argc, char** argv)
                 x = clamp(x,xmin,xmax);
                 y = clamp(y,ymin,ymax);
 
-                double A_grid = bilinear(grid.x,grid.y,grid.A,x,y);
-                double B_grid = bilinear(grid.x,grid.y,grid.B,x,y);
+                double A_grid = bilinear(grid.x,grid.y,grid.A,x,y,imin,imax,jmin,jmax);
+                double B_grid = bilinear(grid.x,grid.y,grid.B,x,y,imin,imax,jmin,jmax);
 
                 double E_eval = clamp(E,grid.Emin,grid.Emax);
 
