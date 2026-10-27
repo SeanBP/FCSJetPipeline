@@ -174,13 +174,26 @@ folder (for an organized sample, a folder of links).
    scale = (reco_E - reco_ue_E) / (truth_E - truth_ue_E) and of the response.
    Medians close exactly under numerical inversion (arXiv:1609.05195).
    `noue` turns the UE subtraction off.
-2. `CalibrationMap_em_only`: per position, fits
-   `A + B/E + C/E^2 + D exp(-ln(E/E0)^2 / 2 sigma^2)` (a log-normal peak of
-   height D at E0, width sigma in ln E), smooths the maps and masks them to
-   the fiducial region. The JSON says `"model": "lognormal"`; the evaluators
-   refuse maps without it (the earlier skew-Gaussian form). For speed
-   it can run as condor shards (`--shard` / `--merge`, see
-   `JetScalePlayground/submit_calibration_map_diag_condor.sh`).
+2. `CalibrationMap_em_only`: describes the scale vs response as
+   `A + B lnE + C ln^2E + K ln^3E`, with one shared shape (C, K from a single
+   least-squares fit over every position, A and B free per position) and A, B
+   per position (the level and slope); energy bins with n_eff < 3 are left
+   out (a median of one or two effective jets is biased). The fits are linear and exact, so the
+   step takes about a second. The A, B maps are smoothed (as the scale at
+   3 and 30 GeV) and masked to the fiducial region. The evaluators clamp E to
+   the range of all fitted responses [Emin, Emax] (the polynomial has no
+   plateau). The JSON says `"model": "logcubic"`, with the global `C`, `K`,
+   `Emin`, `Emax` and bins `{i, j, A, B}`; the evaluators
+   refuse maps of earlier forms. `JetScalePlayground/jes_closure` tests a map's
+   closure on weighted simulation.
+
+   Known limitation: below about 9 GeV the response varies within an ECal
+   tower (about 8% higher at tower boundaries than at centres, 3-8.6 GeV;
+   within 0.5% above 8.6 GeV). The map's 2.5 cm grid with 5 cm pooling only
+   calibrates the tower average, so single low-energy jets are off by up to
+   +-5% and closure near the acceptance edge is off by about 0.6% there. Not
+   corrected: A_N jets are above about 20 GeV (the FMS EM-jet analysis,
+   PRD 103, 092009, used x_F 0.14-0.37 at 500 GeV, i.e. about 35-90 GeV).
 
 `submit_jet_scale.sh` (`JetEnergyScaleFineGrid`, `CalibrationMap`) is the
 ECAL+HCAL version, with a log-quadratic model and Gaussian-fit modes;

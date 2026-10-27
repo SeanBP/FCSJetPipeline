@@ -39,6 +39,11 @@ const double RESPONSE_SANITY_FACTOR = 1.5;
 const double SCALE_SANITY_MAX = 1.5;
 
 // Gaussian bump bounds; sigma's lower bound is pinned above zero (it's a denominator).
+// NOTE: the bump was fit to samples made with the 50 GeV FcsJetFilter. In the
+// EM-only map it came from that filter and went away without it
+// (jes_points/jesmap_nofilt_raw; CalibrationMap_em_only.cpp now fits a log
+// cubic with a face-wide shape instead). It will likely need to be removed
+// here as well once ECAL+HCAL samples are remade unfiltered.
 const double D_MIN = 0.0, D_MAX = 0.2;
 const double E0_MIN = 10.0, E0_MAX = 35.0;
 const double SIGMA_MIN = 1e-3, SIGMA_MAX = 25.0;

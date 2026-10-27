@@ -1,8 +1,8 @@
 // Closure test of an EM-only JES map (CalibrationMap_em_only JSON) on
 // cross-section-weighted simulation: applies the map in memory exactly as
 // jet_calibration/ApplyCorrections_em_only.cpp does (bilinear interpolation
-// of the parameters at the jet's |x|, y; one evaluation at the jet's own
-// energy; E_corr = E / scale) and reports the weighted median of
+// of A, B at the jet's |x|, y; one evaluation at the jet's own energy
+// clamped to the map's [Emin, Emax]; E_corr = E / scale) and reports the weighted median of
 // E_corr / E_truth in bins of truth energy, for all positions and three
 // radial bands. The map is built from weighted medians, so the closure has
 // to be weighted too (FCSJetAnalysis/CalibrationAnalysis_em.cpp is not).
@@ -52,7 +52,8 @@
 struct Map
 {
     std::vector<double> x, y;
-    std::vector<std::vector<double> > par[6];   // A B C D E0 sigma
+    std::vector<std::vector<double> > par[2];   // A B
+    double C, K, Emin, Emax;                    // the same everywhere
     double xmin, xmax, ymin, ymax;
 };
 
@@ -69,6 +70,12 @@ static std::vector<double> JsonArray(const std::string &json, const std::string 
     return out;
 }
 
+static double JsonNumber(const std::string &json, const std::string &key)
+{
+    const size_t pos = json.find(':', json.find("\"" + key + "\""));
+    return std::strtod(json.c_str() + pos + 1, nullptr);
+}
+
 static bool ReadMap(const std::string &file, Map &m)
 {
     std::ifstream in(file.c_str());
@@ -76,21 +83,25 @@ static bool ReadMap(const std::string &file, Map &m)
     std::stringstream buf;
     buf << in.rdbuf();
     const std::string json = buf.str();
-    // Log-normal maps only, as ApplyCorrections_em_only
+    // Log-cubic maps only, as ApplyCorrections_em_only
     {
         const size_t mk = json.find("\"model\"");
         const size_t v = mk == std::string::npos ? mk : json.find('"', json.find(':', mk));
-        if (v == std::string::npos || json.compare(v, 11, "\"lognormal\"") != 0)
+        if (v == std::string::npos || json.compare(v, 10, "\"logcubic\"") != 0)
         {
-            std::cerr << "ERROR: " << file << " is not a log-normal map (no \"model\": \"lognormal\")" << std::endl;
+            std::cerr << "ERROR: " << file << " is not a log-cubic map (no \"model\": \"logcubic\")" << std::endl;
             return false;
         }
     }
+    m.C = JsonNumber(json, "C");
+    m.K = JsonNumber(json, "K");
+    m.Emin = JsonNumber(json, "Emin");
+    m.Emax = JsonNumber(json, "Emax");
     m.x = JsonArray(json, "x_grid");
     m.y = JsonArray(json, "y_grid");
-    for (int k = 0; k < 6; k++)
+    for (int k = 0; k < 2; k++)
         m.par[k].assign(m.x.size(), std::vector<double>(m.y.size(), std::numeric_limits<double>::quiet_NaN()));
-    const char *names[6] = {"A", "B", "C", "D", "E0", "sigma"};
+    const char *names[2] = {"A", "B"};
     int imin = 1 << 30, imax = -1, jmin = 1 << 30, jmax = -1;
     size_t pos = json.find('[', json.find("\"bins\"")) + 1;
     while (true)
@@ -106,7 +117,7 @@ static bool ReadMap(const std::string &file, Map &m)
             return std::strtod(obj.c_str() + p, nullptr);
         };
         const int i = (int)field("i"), j = (int)field("j");
-        for (int k = 0; k < 6; k++) m.par[k][i][j] = field(names[k]);
+        for (int k = 0; k < 2; k++) m.par[k][i][j] = field(names[k]);
         imin = std::min(imin, i); imax = std::max(imax, i); jmin = std::min(jmin, j); jmax = std::max(jmax, j);
     }
     if (imax < 0) return false;
@@ -128,21 +139,15 @@ static double Scale(const Map &m, double x, double y, double E)
     y = std::min(std::max(y, m.ymin), m.ymax);
     const int i = FindIndex(m.x, x), j = FindIndex(m.y, y);
     const double tx = (x - m.x[i]) / (m.x[i + 1] - m.x[i]), ty = (y - m.y[j]) / (m.y[j + 1] - m.y[j]);
-    double p[6];
-    for (int k = 0; k < 6; k++)
+    double p[2];
+    for (int k = 0; k < 2; k++)
     {
         const std::vector<std::vector<double> > &Z = m.par[k];
         const double a = Z[i][j] * (1 - tx) + Z[i + 1][j] * tx, b = Z[i][j + 1] * (1 - tx) + Z[i + 1][j + 1] * tx;
         p[k] = a * (1 - ty) + b * ty;
     }
-    const double e = std::max(E, 1.0);
-    double g = 0.0;
-    if (p[3] != 0.0 && std::isfinite(p[3]) && p[4] > 0.0 && p[5] > 0.0 && std::isfinite(p[5]))
-    {
-        const double z = std::log(e / p[4]) / p[5];
-        g = p[3] * std::exp(-0.5 * z * z);
-    }
-    return p[0] + p[1] / e + p[2] / (e * e) + g;
+    const double l = std::log(std::min(std::max(E, m.Emin), m.Emax));
+    return p[0] + l * (p[1] + l * (m.C + l * m.K));
 }
 
 static double WeightedMedian(std::vector<std::pair<double, double> > &v)

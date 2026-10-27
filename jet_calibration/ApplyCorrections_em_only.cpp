@@ -1,9 +1,11 @@
 // Applies an EM-only JES lookup JSON (CalibrationMap_em_only) to JetTrees in
 // place (TFile "UPDATE", no undo), adding reco_E_corr and reco_x_F_corr.
 //
-// scale(x,y,E) = A + B/E + C/E^2 + D exp(-ln(E/E0)^2 / 2 sigma^2) (a log-normal
-// peak; the JSON must say "model": "lognormal"), evaluated at the jet's own UE-subtracted energy
-// E = reco_E - reco_ue_E (numerical inversion): reco_E_corr = E / scale.
+// scale(x,y,E) = A + B lnE + C ln^2E + K ln^3E, with A, B interpolated from
+// the map's bins and C, K global (the JSON must say "model": "logcubic"),
+// evaluated at the jet's own UE-subtracted energy E = reco_E - reco_ue_E
+// clamped to the map's fitted range [Emin, Emax]:
+// reco_E_corr = E / scale.
 // Jets that cannot be put on the calibrated scale get reco_E_corr =
 // reco_x_F_corr = -1 and must be dropped by the analysis: no UE estimate
 // ("No UE estimate") or outside the map ("Invalid entries": NaN beyond the
@@ -32,10 +34,8 @@ struct LookupGrid
 
     std::vector<std::vector<double>> A;
     std::vector<std::vector<double>> B;
-    std::vector<std::vector<double>> C;
-    std::vector<std::vector<double>> D;
-    std::vector<std::vector<double>> E0;
-    std::vector<std::vector<double>> sigma;
+    double C, K; // the same everywhere
+    double Emin, Emax; // fitted response range
 };
 
 double clamp(double v,double lo,double hi)
@@ -170,10 +170,6 @@ int main(int argc, char** argv)
 
     gROOT->SetBatch(kTRUE);
 
-    // Floor on the evaluation energy (the model has 1/E terms), well below
-    // the 3 GeV bottom of the fit range
-    const double E_FLOOR = 1.0;
-
     std::string list_fname = argv[1];
     std::string calib_json = argv[2];
     const bool subtract_ue = !(argc > 3 && std::string(argv[3]) == "noue");
@@ -198,19 +194,19 @@ int main(int argc, char** argv)
     buffer << in.rdbuf();
     std::string json = buffer.str();
 
-    // Only the log-normal form is evaluated here; maps of the earlier
-    // skew-Gaussian form carry no tag and are refused
+    // Only the log-cubic form is evaluated here; maps of earlier forms
+    // (log-normal peak, skew Gaussian) are refused
     {
         size_t m = json.find("\"model\"");
         size_t v = m == std::string::npos ? m : json.find('"', json.find(':', m));
-        if (v == std::string::npos || json.compare(v, 11, "\"lognormal\"") != 0)
+        if (v == std::string::npos || json.compare(v, 10, "\"logcubic\"") != 0)
         {
-            std::cerr << "ERROR: " << calib_json << " is not a log-normal map (no \"model\": \"lognormal\")" << std::endl;
+            std::cerr << "ERROR: " << calib_json << " is not a log-cubic map (no \"model\": \"logcubic\")" << std::endl;
             exit(1);
         }
     }
 
-    auto extract_int =
+    auto extract_number =
     [&](const std::string& key)
     {
         size_t pos = json.find("\"" + key + "\"");
@@ -226,12 +222,16 @@ int main(int argc, char** argv)
         while(pos < json.size() && std::isspace(json[pos]))
             pos++;
 
-        return std::stoi(json.substr(pos));
+        return std::strtod(json.c_str() + pos, nullptr);
     };
 
     // Read nx and ny first
-    grid.nx = extract_int("nx");
-    grid.ny = extract_int("ny");
+    grid.nx = (int)extract_number("nx");
+    grid.ny = (int)extract_number("ny");
+    grid.C = extract_number("C");
+    grid.K = extract_number("K");
+    grid.Emin = extract_number("Emin");
+    grid.Emax = extract_number("Emax");
 
     auto extract_array_1d =
     [&](const std::string& key,
@@ -265,7 +265,7 @@ int main(int argc, char** argv)
     extract_array_1d("x_grid", grid.x);
     extract_array_1d("y_grid", grid.y);
 
-    // Sparse per-bin fit params ("bins":[{"i","j","A","B","C","D","E0","sigma"},...]);
+    // Sparse per-bin params ("bins":[{"i","j","A","B"},...]);
     // only present over a rectangular (i,j) sub-range, rest left as NaN.
     int imin = grid.nx, imax = -1;
     int jmin = grid.ny, jmax = -1;
@@ -281,10 +281,6 @@ int main(int argc, char** argv)
 
     init_grid_2d(grid.A);
     init_grid_2d(grid.B);
-    init_grid_2d(grid.C);
-    init_grid_2d(grid.D);
-    init_grid_2d(grid.E0);
-    init_grid_2d(grid.sigma);
 
     {
         size_t pos = json.find("\"bins\"");
@@ -352,12 +348,8 @@ int main(int argc, char** argv)
             int bi = (int)get_field("i");
             int bj = (int)get_field("j");
 
-            grid.A[bi][bj]     = get_field("A");
-            grid.B[bi][bj]     = get_field("B");
-            grid.C[bi][bj]     = get_field("C");
-            grid.D[bi][bj]     = get_field("D");
-            grid.E0[bi][bj]    = get_field("E0");
-            grid.sigma[bi][bj]  = get_field("sigma");
+            grid.A[bi][bj] = get_field("A");
+            grid.B[bi][bj] = get_field("B");
 
             imin = std::min(imin, bi);
             imax = std::max(imax, bi);
@@ -532,24 +524,11 @@ int main(int argc, char** argv)
 
                 double A_grid = bilinear(grid.x,grid.y,grid.A,x,y);
                 double B_grid = bilinear(grid.x,grid.y,grid.B,x,y);
-                double C_grid = bilinear(grid.x,grid.y,grid.C,x,y);
-                double D_grid = bilinear(grid.x,grid.y,grid.D,x,y);
-                double E0_grid = bilinear(grid.x,grid.y,grid.E0,x,y);
-                double sigma_grid = bilinear(grid.x,grid.y,grid.sigma,x,y);
 
-                double E_eval = std::max(E,E_FLOOR);
+                double E_eval = clamp(E,grid.Emin,grid.Emax);
 
-                double peak_term = 0.0;
-
-                if(D_grid != 0.0 && std::isfinite(D_grid) && E0_grid > 0.0 &&
-                   sigma_grid > 0.0 && std::isfinite(sigma_grid))
-                {
-                    double z = std::log(E_eval/E0_grid)/sigma_grid;
-                    peak_term = D_grid*std::exp(-0.5*z*z);
-                }
-
-                double F_grid =
-                    A_grid + B_grid/E_eval + C_grid/(E_eval*E_eval) + peak_term;
+                double l = std::log(E_eval);
+                double F_grid = A_grid + l*(B_grid + l*(grid.C + l*grid.K));
 
                 if(invalid(F_grid) || std::fabs(F_grid)<=1e-8)
                 {

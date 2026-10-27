@@ -5,9 +5,9 @@
     JetTrees (-E 1, UE branches at both levels) -> JSON lookup table.
       1. JetEnergyScaleFineGrid_em_only: weighted median scale/response of
          matched jets on a fine (E,x,y) grid -> jet_calibration.root
-      2. CalibrationMap_em_only: smooth model (inverse-power background +
-         asymmetric Gaussian) per (x,y) bin -> JSON (EM-only schema, applied
-         by jet_calibration_em_only.xml)
+      2. CalibrationMap_em_only: scale = A + B lnE + C ln^2E + K ln^3E with
+         C, K from one fit over the face and A, B per (x,y) bin, smoothed ->
+         JSON ("model": "logcubic", applied by jet_calibration_em_only.xml)
 
     Configurable per submission (filled in by submit_jet_scale_em_only.sh,
     see its -h):
@@ -68,7 +68,7 @@
 
         echo "Compiling CalibrationMap_em_only..."
         g++ -m64 CalibrationMap_em_only.cpp -o CalibrationMap_em_only \
-            `root-config --cflags --libs` -lMinuit2 -std=c++11
+            `root-config --cflags --libs` -std=c++11
 
         echo "Running CalibrationMap_em_only..."
         ./CalibrationMap_em_only jet_calibration.root {{JSON_NAME}}

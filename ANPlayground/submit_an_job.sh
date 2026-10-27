@@ -14,7 +14,9 @@
 #       ~0.1 GB per file of SimpleTree plus one MuDst (~1.2 GB).
 #   -c  EM-only point-jet JES lookup JSON, default
 #       /star/data01/pwg/seanp/jes_points/jesmap_v3/JetEnergyScale_lookup_points_ue_v3_lognormal.json
-#       (copied into ANPlayground/jes/ for the SandBox)
+#       (copied into ANPlayground/jes/ for the SandBox). It must be a
+#       "logcubic" map; the default is of the earlier log-normal form and is
+#       refused until a UE-subtracted log-cubic map replaces it
 #   -t  FCS trigger names an event must have fired, default
 #       fcsEM0,fcsEM1,fcsEM2 (the EM levels the UE step and the histograms use)
 #   -l  label for the generated XML, default "an"
@@ -51,7 +53,7 @@ if [ -z "$LISTFILE" ] || [ -z "$OUTDIR" ]; then
 fi
 [ -f "$LISTFILE" ] || { echo "Error: listfile '$LISTFILE' does not exist"; exit 1; }
 [ -f "$CALIB" ] || { echo "Error: calibration JSON '$CALIB' does not exist"; exit 1; }
-grep -q '"model": *"lognormal"' "$CALIB" || { echo "Error: $CALIB is not a lognormal EM-only map"; exit 1; }
+grep -q '"model": *"logcubic"' "$CALIB" || { echo "Error: $CALIB is not a log-cubic EM-only map (CalibrationMap_em_only); pass one with -c"; exit 1; }
 [[ "$FILES_PER_JOB" =~ ^[1-9][0-9]*$ ]] || { echo "Error: -n must be a positive integer"; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

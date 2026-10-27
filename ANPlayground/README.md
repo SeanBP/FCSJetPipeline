@@ -45,7 +45,9 @@ SimpleTrees are deleted after step 3, and jet files after step 5.
   ./submit_an_job.sh -f <list> -o <outdir> [-n 40] [-c <JES json>] [-k 1] [-N]
   ```
   The default JES map is
-  `jes_points/jesmap_v3/JetEnergyScale_lookup_points_ue_v3_lognormal.json`.
+  `jes_points/jesmap_v3/JetEnergyScale_lookup_points_ue_v3_lognormal.json`,
+  of the earlier log-normal form, which `ApplyCorrections_em_only` no longer
+  reads: pass a log-cubic map with `-c` until a UE-subtracted one replaces it.
 - **`catalog_query.sh`**:
   - `counts <out>` writes per-run events, files and bytes. The P24ia st_fwd
     copy of 2026-10-20 is `catalog_runs_local.txt`.

@@ -182,12 +182,19 @@ FitResult median_fit(const std::vector<double> &v, const std::vector<double> &w)
     double med = median_of(v, w);
 
     // MAD-based sigma, only for an approximate standard error of the median
-    // (1.2533 sigma / sqrt(n)), used downstream as a relative fit weight. A
-    // bin where one entry holds over half the weight gets 0 and is rejected.
+    // (1.2533 sigma / sqrt(n)), used downstream as a fit weight. A bin where
+    // one entry holds over half the weight gets 0 and is rejected. The
+    // weighted MAD also collapses when one entry holds nearly half the weight
+    // and a neighbour is close to it (errors of 0.01-0.2% for a spread of a
+    // few percent, at n_eff of 3-7), so it is floored by the unweighted MAD:
+    // the resolution at a point does not depend on which ptHat range a jet
+    // came from, and no single jet can hold the unweighted one.
     std::vector<double> absdev(v.size());
     for (size_t i = 0; i < v.size(); i++)
         absdev[i] = std::fabs(v[i] - med);
     double mad_sigma = 1.4826 * median_of(absdev, w);
+    if (mad_sigma > 0.0)
+        mad_sigma = std::max(mad_sigma, 1.4826 * median_of(absdev, std::vector<double>(v.size(), 1.0)));
 
     if (!std::isfinite(mad_sigma) || mad_sigma <= 0.0)
         return r;
