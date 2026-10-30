@@ -66,7 +66,7 @@ void runSimBfc( Int_t nEvents=1000, Int_t run=1, const char* pid="jet", int TrgV
 		int eventDisplay=0,
 		TString myDir=input_dir, TString myOutDir=output_dir,
 		TString myChain=input_chain, Int_t mnEvents=0,
-		Int_t calibRun=0){
+		Int_t calibRun=0, Double_t ecalScale=1.0){
     
   gROOT->LoadMacro("bfc.C");
 
@@ -131,6 +131,10 @@ if(proc.Contains("dy") || proc.Contains("mb") || proc.Contains("jet") || proc.Co
   StFcsFastSimulatorMaker *fcssim = (StFcsFastSimulatorMaker*) chain->GetMaker("fcsSim");
   fcssim->setDebug(0);
   fcssim->setLeakyHcal(leakyHcal);
+  // ECal photon energy scale k (data/sim): scales deposited ECal energy before
+  // digitization (local StFcsFastSimulatorMaker); 1 = unscaled
+  fcssim->setEcalScale(ecalScale);
+  cout << "ECal energy scale (FcsEcalScale) = " << ecalScale << endl;
  
   StFcsWaveformFitMaker *wff=(StFcsWaveformFitMaker *)chain->GetMaker("StFcsWaveformFitMaker");
   wff->setDebug(0);

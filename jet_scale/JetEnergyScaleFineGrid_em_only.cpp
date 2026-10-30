@@ -7,11 +7,22 @@
 // The underlying event is subtracted at both levels by default:
 // scale = (reco_E - reco_ue_E) / (truth_E - truth_ue_E), binned in subtracted
 // truth energy, using pairs where both jets have an estimate. Input should be
-// a calibration sample (sim_to_jet -C 1, UE rerun in minbias mode). A file
+// a calibration sample (sim_to_jet -C 1, with its in-job pixel-ring UE). A file
 // without the UE branches is an error unless "noue" is given.
+//
+// Estimator: the weighted median (default). With "gauss" in argv[8], points
+// whose n_eff is at least gauss_min_neff (argv[9], default 50) use the
+// Gaussian-core mean instead (jet_scale/GaussCore.h, default window) where the
+// fit converges with chi2/ndf < gauss_max_chi2 and sigma < gauss_max_sigma
+// and sigma / mean < gauss_max_rel_sigma (a Gaussian does not describe the
+// broad, flat-topped response at the edges);
+// elsewhere (low statistics or a poor fit) the weighted numerical mean. The
+// bins tree records which (branch "estimator": 0 median, 1 Gaussian core,
+// 2 weighted mean).
 //
 // Usage: JetEnergyScaleFineGrid_em_only <jettrees_dir/> [match_radius_cm]
 //        [E0_GeV] [Emax_GeV] [noue] [match_radius_high_cm] [E_high_pool_GeV]
+//        [median|gauss] [gauss_min_neff]
 //        (an empty string "" keeps that slot's default)
 
 #include <TFile.h>
@@ -31,6 +42,7 @@
 
 #include "JetParameters.h"
 #include "JetXSecWeights.h"
+#include "GaussCore.h"
 
 // CONFIGURATION
 
@@ -142,6 +154,8 @@ struct BinData
           scale_mu_err(NAN),
           resp_mu_err(NAN) {}
 
+    int estimator = 0; // 0 median, 1 Gaussian core, 2 weighted mean
+
     BinData(double s, double r, double se, double re)
         : scale_mu(s),
           resp_mu(r),
@@ -181,6 +195,45 @@ double median_of(const std::vector<double> &v, const std::vector<double> &w)
             return 0.5 * (v[order[i]] + v[order[i + 1]]);
     }
     return v[order.back()];
+}
+
+// Gaussian-core mean (GaussCore.h) where it converges, else the median. The
+// error is the fit's, floored at the median's error / 1.2533 (the error of a
+// Gaussian mean for the same width and n_eff), so it cannot collapse.
+// Quality cuts on the Gaussian core: chi2/ndf and the relative width
+// (sigma / mean, so the same cut serves the scale and the response in GeV)
+const double gauss_max_chi2 = 3.0, gauss_max_rel_sigma = 0.35; // the outer-ring raw response is ~15% wide; the fit width is bounded by GaussCore anyway
+long n_rej_conv = 0, n_rej_chi2 = 0, n_rej_sigma = 0;
+FitResult core_or_median(const std::vector<double> &v, const std::vector<double> &w, const FitResult &med, bool &used_core)
+{
+    used_core = false;
+    GaussCoreResult c = GaussCoreFit(v, w);
+    if (!c.converged || c.degenerate || !std::isfinite(c.mu) || !std::isfinite(c.mu_err)) { n_rej_conv++; return med; }
+    if (!(c.chi2_ndf < gauss_max_chi2)) { n_rej_chi2++; return med; }
+    if (!(c.sigma < gauss_max_rel_sigma * std::fabs(c.mu))) { n_rej_sigma++; return med; }
+    FitResult r = med;
+    r.mu = c.mu;
+    r.mu_err = std::max(c.mu_err, med.mu_err / 1.2533);
+    r.sigma = c.sigma;
+    used_core = true;
+    return r;
+}
+
+// Weighted numerical mean, with error sqrt(weighted variance / n_eff)
+FitResult mean_fit(const std::vector<double> &v, const std::vector<double> &w)
+{
+    FitResult r;
+    double sw = 0, s = 0;
+    for (size_t i = 0; i < v.size(); i++) { sw += w[i]; s += w[i] * v[i]; }
+    if (!(sw > 0)) return r;
+    const double m = s / sw;
+    double var = 0;
+    for (size_t i = 0; i < v.size(); i++) var += w[i] * (v[i] - m) * (v[i] - m);
+    var /= sw;
+    r.mu = m;
+    r.sigma = std::sqrt(var);
+    r.mu_err = std::sqrt(var / std::max(1.0, EffectiveEntries(w)));
+    return r;
 }
 
 FitResult median_fit(const std::vector<double> &v, const std::vector<double> &w)
@@ -245,6 +298,11 @@ int main(int argc, char** argv)
         match_radius_high = std::atof(argv[6]);
     if (argc > 7 && argv[7][0] != '\0')
         E_high_pool = std::atof(argv[7]);
+    //   argv[8]: "gauss" -- Gaussian-core mean where n_eff >= argv[9] (default 30)
+    const bool use_gauss = argc > 8 && std::string(argv[8]) == "gauss";
+    const double gauss_min_neff = (argc > 9 && argv[9][0] != '\0') ? std::atof(argv[9]) : 50.0;
+    std::cout << "Estimator: " << (use_gauss ? "Gaussian core where n_eff >= " + std::to_string(gauss_min_neff) + " and the fit is good, else weighted mean" : std::string("median")) << std::endl;
+    long n_core = 0, n_core_tried = 0, n_mean = 0;
     std::cout << "Pooling radius " << match_radius << " cm";
     if (E_high_pool < 1e9)
         std::cout << ", " << match_radius_high << " cm for truth-energy bins from " << E_high_pool << " GeV";
@@ -353,7 +411,6 @@ int main(int argc, char** argv)
         tree->SetBranchAddress("match_reco_idx", &match_reco_idx);
 
         std::vector<float> *reco_ue_E = nullptr, *truth_ue_E = nullptr;
-        std::vector<int> *reco_ue_nproxy = nullptr, *truth_ue_ncone = nullptr;
         if (subtract_ue)
         {
             if (!tree->GetBranch("reco_ue_E") || !tree->GetBranch("truth_ue_E"))
@@ -364,8 +421,6 @@ int main(int argc, char** argv)
             }
             tree->SetBranchAddress("reco_ue_E", &reco_ue_E);
             tree->SetBranchAddress("truth_ue_E", &truth_ue_E);
-            tree->SetBranchAddress("reco_ue_nproxy", &reco_ue_nproxy);
-            tree->SetBranchAddress("truth_ue_ncone", &truth_ue_ncone);
         }
 
         Long64_t n_events = tree->GetEntries();
@@ -384,7 +439,7 @@ int main(int argc, char** argv)
                 n_pairs++;
                 if (subtract_ue)
                 {
-                    if (reco_ue_nproxy->at(ri) <= 0 || truth_ue_ncone->at(ti) <= 0)
+                    if (reco_ue_E->at(ri) < 0 || truth_ue_E->at(ti) < 0)  // no UE estimate
                     {
                         n_no_ue++;
                         continue;
@@ -466,7 +521,28 @@ int main(int argc, char** argv)
         if (!std::isfinite(sc.mu) || !std::isfinite(resp.mu))
             continue;
 
+        int est = 0;
+        if (use_gauss)
+        {
+            bool ok_s = false, ok_r = false;
+            FitResult sc_c, resp_c;
+            if (EffectiveEntries(w_vals) >= gauss_min_neff)
+            {
+                n_core_tried++;
+                sc_c = core_or_median(scale_vals, w_vals, sc, ok_s);
+                resp_c = core_or_median(resp_vals, w_vals, resp, ok_r);
+            }
+            if (ok_s && ok_r) { sc = sc_c; resp = resp_c; est = 1; n_core++; }
+            else
+            {
+                // low statistics or a poor fit: the weighted numerical mean
+                FitResult sm = mean_fit(scale_vals, w_vals), rm = mean_fit(resp_vals, w_vals);
+                if (std::isfinite(sm.mu) && std::isfinite(rm.mu)) { sc = sm; resp = rm; est = 2; n_mean++; }
+            }
+        }
+
         bin_mu_map[it->first] = BinData(sc.mu, resp.mu, sc.mu_err, resp.mu_err);
+        bin_mu_map[it->first].estimator = est;
     }
 
     // Output
@@ -499,6 +575,8 @@ int main(int argc, char** argv)
     // effective count under the cross-section weights, (sum w)^2 / sum w^2
     t.Branch("n_entries", &n_entries);
     t.Branch("n_eff", &n_eff);
+    int estimator;
+    t.Branch("estimator", &estimator);
 
     for (int ie = 0; ie < n_bins_E; ie++)
     for (int ix = 0; ix < n_grid_x; ix++)
@@ -527,6 +605,7 @@ int main(int argc, char** argv)
 
         scale_mu = d.scale_mu;
         resp_mu = d.resp_mu;
+        estimator = d.estimator;
         scale_mu_err = d.scale_mu_err;
         resp_mu_err = d.resp_mu_err;
 
@@ -536,5 +615,9 @@ int main(int argc, char** argv)
     t.Write();
     fout.Close();
 
+    if (use_gauss)
+        std::cout << "Gaussian core used for " << n_core << " points (of " << n_core_tried << " with n_eff >= " << gauss_min_neff << "); weighted mean for " << n_mean
+                  << "\n  rejected core fits (scale and response counted separately): not converged " << n_rej_conv << ", chi2/ndf >= " << gauss_max_chi2
+                  << " " << n_rej_chi2 << ", sigma/mean >= " << gauss_max_rel_sigma << " " << n_rej_sigma << std::endl;
     std::cout << "Output written to jet_calibration.root" << std::endl;
 }

@@ -189,8 +189,8 @@
             @ j++
         end
 
-        # In-job underlying event (reco_ue_* branches), with this job's
-        # SimpleTrees as proxies; must run before they are discarded
+        # In-job underlying event (reco_ue_* branches: the in-event pixel
+        # ring, each file on its own); must run before the SimpleTrees are discarded
         echo "Compiling UnderlyingEvent..."
         g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent \
             `root-config --cflags --libs` -std=c++11

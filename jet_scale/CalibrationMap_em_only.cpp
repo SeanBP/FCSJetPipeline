@@ -1,12 +1,12 @@
 // Step 2 of the EM-only JES calibration: builds the JES lookup JSON from the
 // "bins" tree of JetEnergyScaleFineGrid_em_only (per-bin weighted medians).
 // The scale vs response at each (x,y) position bin is described by
-//   scale(E) = A + B lnE + C ln^2 E + K ln^3 E
-// with A and B per position and C and K shared by the whole face: the shape
+//   scale(E) = A + B lnE + C ln^2 E + D ln^3 E
+// with A and B per position and C and D shared by the whole face: the shape
 // in ln E is universal and only the level and slope vary across the ECal.
-// C and K come from one least-squares fit over every position's points (A and
-// B free per position, see fit_global_CK); A and B are then the per-position
-// fits with C and K held there, which is the joint optimum since the model is
+// C and D come from one least-squares fit over every position's points (A and
+// B free per position, see fit_global_CD); A and B are then the per-position
+// fits with C and D held there, which is the joint optimum since the model is
 // linear. The A and B maps are smoothed over the grid (as the scale at two
 // anchor energies, see ANCHOR_E) and masked to the buffered ECal fiducial
 // region. The polynomial has no plateau, so evaluators clamp E to the range
@@ -18,9 +18,9 @@
 // positions, with no reliable points above about 40 GeV, flat from there,
 // overcorrecting their high-E jets by up to 5%).
 //
-// The JSON carries "model": "logcubic", the global "C", "K", "Emin" and
+// The JSON carries "model": "logcubic", the global "C", "D", "Emin" and
 // "Emax", and bins {i, j, A, B} (read by jet_calibration/ApplyCorrections_em_only.cpp
-// and JetScalePlayground/jes_closure.cpp). It also writes <out>.chi2.csv and
+// and jet_scale/jes_closure.cpp). It also writes <out>.chi2.csv and
 // <out>.direct_fits.csv (the unsmoothed per-position fits).
 //
 // Usage: ./CalibrationMap_em_only <bins.root> <out.json>
@@ -222,13 +222,13 @@ void cell_sums(const Cell &c, double G[5][5])
     }
 }
 
-// The face-wide C and K: minimizes the sum over positions of
-// chi2 = sum ((scale - A - B l - C l^2 - K l^3) / scale_err)^2 with A and B
+// The face-wide C and D: minimizes the sum over positions of
+// chi2 = sum ((scale - A - B l - C l^2 - D l^3) / scale_err)^2 with A and B
 // free per position. A and B are profiled out exactly: with W the weights and
 // X = [1, l] in a position, the residual projector
 // M = W - W X (X^T W X)^-1 X^T W gives
-//   (C, K) = (sum Z^T M Z)^-1 sum Z^T M y,  Z = [l^2, l^3].
-void fit_global_CK(const std::vector<Cell> &cells, double &C, double &K)
+//   (C, D) = (sum Z^T M Z)^-1 sum Z^T M y,  Z = [l^2, l^3].
+void fit_global_CD(const std::vector<Cell> &cells, double &C, double &D)
 {
     double S[2][2] = {{0, 0}, {0, 0}}, t[2] = {0, 0}, yMy = 0.0;
     long n_points = 0;
@@ -257,26 +257,26 @@ void fit_global_CK(const std::vector<Cell> &cells, double &C, double &K)
     const double det = S[0][0] * S[1][1] - S[0][1] * S[1][0];
     if (cells.empty() || !(det > 0))
     {
-        std::cerr << "ERROR: global C, K fit is singular" << std::endl;
+        std::cerr << "ERROR: global C, D fit is singular" << std::endl;
         exit(1);
     }
     const double cov[2][2] = {{S[1][1] / det, -S[0][1] / det}, {-S[1][0] / det, S[0][0] / det}};
     C = cov[0][0] * t[0] + cov[0][1] * t[1];
-    K = cov[1][0] * t[0] + cov[1][1] * t[1];
-    const double chi2 = yMy - (C * t[0] + K * t[1]);
+    D = cov[1][0] * t[0] + cov[1][1] * t[1];
+    const double chi2 = yMy - (C * t[0] + D * t[1]);
     const long ndof = n_points - 2L * (long)cells.size() - 2;
     // errors scaled by sqrt(chi2/ndof): the points scatter beyond their errors
     const double inflate = ndof > 0 ? std::sqrt(std::max(1.0, chi2 / ndof)) : 1.0;
-    std::printf("Global C, K fit over %zu positions, %ld points: chi2/ndof = %.1f/%ld\n"
-                "  C = %.6f +- %.6f, K = %.6f +- %.6f (errors x %.2f), corr = %.3f\n",
+    std::printf("Global C, D fit over %zu positions, %ld points: chi2/ndof = %.1f/%ld\n"
+                "  C = %.6f +- %.6f, D = %.6f +- %.6f (errors x %.2f), corr = %.3f\n",
                 cells.size(), n_points, chi2, ndof,
-                C, inflate * std::sqrt(cov[0][0]), K, inflate * std::sqrt(cov[1][1]),
+                C, inflate * std::sqrt(cov[0][0]), D, inflate * std::sqrt(cov[1][1]),
                 inflate, cov[0][1] / std::sqrt(cov[0][0] * cov[1][1]));
 }
 
-// A and B per position with C and K fixed: a weighted linear fit of
-// scale - C l^2 - K l^3 on [1, l]
-std::vector<FitRow> fit_cells(const std::vector<Cell> &cells, double C, double K)
+// A and B per position with C and D fixed: a weighted linear fit of
+// scale - C l^2 - D l^3 on [1, l]
+std::vector<FitRow> fit_cells(const std::vector<Cell> &cells, double C, double D)
 {
     std::vector<FitRow> fits;
     for (const Cell &c : cells)
@@ -284,7 +284,7 @@ std::vector<FitRow> fit_cells(const std::vector<Cell> &cells, double C, double K
         double s0 = 0, s1 = 0, s2 = 0, r0 = 0, r1 = 0;
         for (size_t i = 0; i < c.l.size(); i++)
         {
-            const double l = c.l[i], r = c.y[i] - l * l * (C + l * K);
+            const double l = c.l[i], r = c.y[i] - l * l * (C + l * D);
             s0 += c.w[i];
             s1 += c.w[i] * l;
             s2 += c.w[i] * l * l;
@@ -303,7 +303,7 @@ std::vector<FitRow> fit_cells(const std::vector<Cell> &cells, double C, double K
         for (size_t i = 0; i < c.l.size(); i++)
         {
             const double l = c.l[i];
-            const double d = c.y[i] - (f.A + l * (f.B + l * (C + l * K)));
+            const double d = c.y[i] - (f.A + l * (f.B + l * (C + l * D)));
             f.chi2 += c.w[i] * d * d;
         }
         f.ndof = (int)c.l.size() - 2;
@@ -509,7 +509,7 @@ void write_double(std::ostream &os, double v)
 
 void write_calibration_json(
     const std::vector<FitRow> &fits,
-    double C, double K,
+    double C, double D,
     double Emin, double Emax,
     const std::vector<double> &xs,
     const std::vector<double> &ys,
@@ -518,7 +518,7 @@ void write_calibration_json(
     const size_t nx = xs.size(), ny = ys.size();
     const double l0 = std::log(ANCHOR_E[0]), l1 = std::log(ANCHOR_E[1]);
 
-    // A + B l at the anchor energies (the C, K part is the same everywhere)
+    // A + B l at the anchor energies (the C, D part is the same everywhere)
     Grid2D A = coarse_map(fits, xs, ys, [](const FitRow &f) { return f.A; });
     Grid2D B = coarse_map(fits, xs, ys, [](const FitRow &f) { return f.B; });
     Grid2D a0 = make_nan_grid((int)nx, (int)ny), a1 = make_nan_grid((int)nx, (int)ny);
@@ -575,8 +575,8 @@ void write_calibration_json(
     out << "  \"model\": \"logcubic\",\n";
     out << "  \"C\": ";
     write_double(out, C);
-    out << ",\n  \"K\": ";
-    write_double(out, K);
+    out << ",\n  \"D\": ";
+    write_double(out, D);
     out << ",\n  \"Emin\": ";
     write_double(out, Emin);
     out << ",\n  \"Emax\": ";
@@ -638,14 +638,14 @@ void write_chi2_csv(const std::vector<FitRow> &fits, const std::string &save_fil
 }
 
 // Side CSV of the direct (pre-smoothing) per-position fits (diagnostics only)
-void write_direct_fits_csv(const std::vector<FitRow> &fits, double C, double K,
+void write_direct_fits_csv(const std::vector<FitRow> &fits, double C, double D,
                            const std::string &save_file)
 {
     std::ofstream out(save_file.c_str());
-    out << "x,y,A,B,C,K,Emin,Emax\n";
+    out << "x,y,A,B,C,D,Emin,Emax\n";
     for (const auto &r : fits)
         out << r.x_center << "," << r.y_center << "," << r.A << "," << r.B << "," << C << ","
-            << K << "," << r.Emin << "," << r.Emax << "\n";
+            << D << "," << r.Emin << "," << r.Emax << "\n";
     out.close();
     std::cout << "Direct (unsmoothed) fit CSV saved to " << save_file << std::endl;
 }
@@ -667,9 +667,9 @@ int main(int argc, char **argv)
     std::cout << "Loaded " << rows.size() << " (E,x,y) bin entries" << std::endl;
 
     std::vector<Cell> cells = build_cells(rows);
-    double C, K;
-    fit_global_CK(cells, C, K);
-    std::vector<FitRow> fits = fit_cells(cells, C, K);
+    double C, D;
+    fit_global_CD(cells, C, D);
+    std::vector<FitRow> fits = fit_cells(cells, C, D);
     std::cout << "Fit " << fits.size() << " position bins" << std::endl;
     double Emin = fits.front().Emin, Emax = fits.front().Emax;
     for (const FitRow &f : fits)
@@ -688,9 +688,9 @@ int main(int argc, char **argv)
     std::vector<double> xs(xs_set.begin(), xs_set.end());
     std::vector<double> ys(ys_set.begin(), ys_set.end());
 
-    write_calibration_json(fits, C, K, Emin, Emax, xs, ys, output_file);
+    write_calibration_json(fits, C, D, Emin, Emax, xs, ys, output_file);
     write_chi2_csv(fits, output_file + ".chi2.csv");
-    write_direct_fits_csv(fits, C, K, output_file + ".direct_fits.csv");
+    write_direct_fits_csv(fits, C, D, output_file + ".direct_fits.csv");
 
     return 0;
 }

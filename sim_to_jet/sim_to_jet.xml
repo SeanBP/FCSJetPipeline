@@ -25,6 +25,7 @@
       {{NEVENTS}}           events per job
       {{SAVE_SIMPLETREE}}   N > 0 = keep intermediate SimpleTree_*.root of every
                              Nth job (JOBINDEX % N == 0; 1 = every job), 0 = discard
+      {{SAVE_MUDST}}        1 = keep the job's MuDst (MuDst_*.MuDst.root), 0 = discard
       {{TRIGGER_FILTER}}    comma-separated FCS trigger names (FcsTriggerDefs.h);
                              an event is written (SimpleTree and jetTree)
                              only if one fired, empty = keep all.
@@ -32,6 +33,11 @@
                              events have no real trigger decision)
       {{CALIB_RUN}}         Run 22 run number fixing the FCS gain calibration
                              era (runSimBfc.C); 0 = BFC's nominal date
+      {{SEED_BASE}}         -S: > 0 = generator seed base + JOBINDEX (reproducible
+                             events); 0 = random seed per job
+      {{ECAL_SCALE}}        ECal photon energy scale k (-K), applied to deposited
+                             ECal energy before digitization (runSimBfc.C);
+                             1.0 = unscaled
       {{FILTER_ETHR}}       FcsJetFilter forward-flux threshold, GeV (-e;
                              0 disables the filter)
       {{FILTER_CONEPT}}     FcsJetFilter cone mode (-q): > 0 accepts events with an
@@ -41,7 +47,7 @@
       {{USE_POINTS}}        1 = reco jets from FCS points instead of tower
                              hits (-F)
       {{CALIB_SAMPLE}}      1 = JES calibration sample (-C): no jet pT
-                             minimums, minimum-bias UE step
+                             minimums
       {{OUTDIR}}            absolute output directory
       {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
 
@@ -79,6 +85,10 @@
 
         set seed_temp=`od -vAn -N4 -tu4 &lt; /dev/urandom`
         set myseed=`expr ${seed_temp} % 100000`
+        if ( {{SEED_BASE}} > 0 ) then
+            # fixed seeds: the same base gives the same events (e.g. k comparisons)
+            set myseed=`expr {{SEED_BASE}} + ${JOBINDEX}`
+        endif
         set run_number = ${JOBINDEX}
 
         # ptHatMin/ptHatMax for this job (see header comment)
@@ -116,8 +126,8 @@
         echo ""
         echo "Starting reconstruction..."
 
-        # CINT cannot skip arguments, so all are given to reach CALIB_RUN
-        root4star -b -q runSimBfc.C\({{NEVENTS}},1,\"${pid}\",202207,0,0,1.5,0.0,\"0.0100\",0,0,input_dir,output_dir,input_chain,0,{{CALIB_RUN}}\)
+        # CINT cannot skip arguments, so all are given to reach CALIB_RUN and ECAL_SCALE
+        root4star -b -q runSimBfc.C\({{NEVENTS}},1,\"${pid}\",202207,0,0,1.5,0.0,\"0.0100\",0,0,input_dir,output_dir,input_chain,0,{{CALIB_RUN}},{{ECAL_SCALE}}\)
         root4star -b -q readMudst.C\(0,1,\"${pid}.MuDst.root\",\".\",\"\",202209,${ptcut},${ptcutmax},\"{{TRIGGER_FILTER}}\"\)
 
         echo "Finished reconstruction."
@@ -138,22 +148,20 @@
 
         if ( {{CALIB_SAMPLE}} == 1 ) then
             set jet_pt_cuts = 0
-            set ue_args = "0 minbias"
         else
             set jet_pt_cuts = 1
-            set ue_args = ""
         endif
 
         ./JetMatcher single_file.list "${TRIGGER_FILTER}" {{EM_ONLY}} {{USE_POINTS}} ${jet_pt_cuts}
         mv jet_output.root jet_output_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
 
-        # In-job underlying event (reco_ue_* branches), with this job's own
-        # events as proxies; must run before the SimpleTree is renamed
+        # In-job underlying event (reco_ue_* and truth_ue_* branches: the
+        # in-event pixel ring); must run before the SimpleTree is renamed
         echo "Compiling UnderlyingEvent..."
         g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent \
             `root-config --cflags --libs` -std=c++11
         echo "jet_output_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root SimpleTree_mudst.root" > ue_pairs.list
-        ./UnderlyingEvent ue_pairs.list ${ue_args}
+        ./UnderlyingEvent ue_pairs.list
 
         set keep_simpletree = 0
         if ( {{SAVE_SIMPLETREE}} > 0 ) then
@@ -163,6 +171,9 @@
             mv SimpleTree_mudst.root SimpleTree_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
         else
             rm -f SimpleTree_mudst.root
+        endif
+        if ( {{SAVE_MUDST}} == 1 ) then
+            mv ${pid}.MuDst.root MuDst_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.MuDst.root
         endif
 
         rm -f single_file.list ue_pairs.list ${pid}.genstats.root
@@ -197,5 +208,6 @@
 
     <output fromScratch="jet_output_*.root" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="SimpleTree_*.root" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="MuDst_*.MuDst.root" toURL="file:{{OUTDIR}}/" />
 
 </job>

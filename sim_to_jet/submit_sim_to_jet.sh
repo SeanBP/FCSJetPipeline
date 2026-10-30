@@ -5,7 +5,7 @@
 #       -n <nevents> -s <N> -o <outdir> [-P <ptcutmax>] [-j <nprocesses>] \
 #       [-l <label>] [-k <0|1>] [-f <triggers>] [-c <run_number>] \
 #       [-e <filter_ethr>] [-q <filter_cone_pt>] [-E <0|1>] [-T <tune_pp>] [-F <0|1>] [-M <0|1>]
-#       [-C <0|1>]
+#       [-C <0|1>] [-m <0|1>] [-K <k>] [-S <seed base>]
 #
 #   -g  generator: pythia8 or pythia6
 #   -t  tune/PDF: pythia8 PDF:pSet (8=CTEQ6L1, 5=MSTW2008LO, 3=MRST LO*,
@@ -56,10 +56,18 @@
 #       ptHat cuts (-p/-P/-w) and decays are not part of the bundle.
 #       0/omit = off.
 #   -C  1 = jet-energy-scale calibration sample: no minimum pT on reco or
-#       truth jets, and the in-job underlying-event step in minimum-bias
-#       mode. Cannot be combined with -f. Keep the SimpleTrees (-s 1) and
-#       rerun the UE over the whole sample with
-#       underlying_event/submit_ue_by_pthat.sh. 0/omit = analysis cuts.
+#       truth jets. Cannot be combined with -f. 0/omit = analysis cuts.
+#   -m  1 = also keep each job's MuDst, as MuDst_<gen>_<tune>_pt<N>_<run>.MuDst.root
+#       in the output directory (for reprocessing without regenerating).
+#       0/omit = discard.
+#   -K  ECal photon energy scale k (data/sim): deposited ECal energy is
+#       multiplied by k before digitization (local StFcsFastSimulatorMaker),
+#       so thresholds and clustering see the scaled energy. Default 0.947: the
+#       value at which the simulation's pi0 peak (the ECal gain calibration's
+#       selection, Pi0Playground/pi0_vs_pdg) sits at the PDG mass, as the
+#       calibrated data's does. 1 = unscaled.
+#   -S  > 0 = fixed generator seeds (seed base + job index), so two submissions
+#       with the same -S, ptHat bins and -n hold the same events. 0/omit = random.
 #
 # Example:
 #   ./submit_sim_to_jet.sh -g pythia8 -t 8 -p 10 -n 500 -s 0 \
@@ -89,8 +97,11 @@ EM_ONLY=0
 USE_POINTS=0
 FMS_TUNE=0
 CALIB_SAMPLE=0
+SAVE_MUDST=0
+ECAL_SCALE=0.947
+SEED_BASE=0
 
-while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:q:E:T:F:M:C:h" opt; do
+while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:q:E:T:F:M:C:m:K:S:h" opt; do
   case $opt in
     g) GENERATOR="$OPTARG" ;;
     t) TUNE_PARAM="$OPTARG" ;;
@@ -112,8 +123,11 @@ while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:q:E:T:F:M:C:h" opt; do
     F) USE_POINTS="$OPTARG" ;;
     M) FMS_TUNE="$OPTARG" ;;
     C) CALIB_SAMPLE="$OPTARG" ;;
+    m) SAVE_MUDST="$OPTARG" ;;
+    K) ECAL_SCALE="$OPTARG" ;;
+    S) SEED_BASE="$OPTARG" ;;
     h|*)
-      sed -n '2,62p' "$0"
+      sed -n '2,71p' "$0"
       exit 0
       ;;
   esac
@@ -187,6 +201,16 @@ if [ "$CALIB_SAMPLE" = "1" ] && [ -n "$TRIGGER_FILTER" ]; then
     exit 1
 fi
 
+if ! [[ "$ECAL_SCALE" =~ ^[0-9]*\.?[0-9]+$ ]] || ! awk -v k="$ECAL_SCALE" 'BEGIN{exit !(k>0.5 && k<1.5)}'; then
+    echo "Error: -K must be a number between 0.5 and 1.5 (got '$ECAL_SCALE')"
+    exit 1
+fi
+
+if ! [[ "$SEED_BASE" =~ ^[0-9]+$ ]] || [ "$SEED_BASE" -gt 2000000000 ]; then
+    echo "Error: -S must be a non-negative integer (got '$SEED_BASE')"
+    exit 1
+fi
+
 if [ "$USE_POINTS" != "0" ] && [ "$USE_POINTS" != "1" ]; then
     echo "Error: -F must be 0 or 1 (got '$USE_POINTS')"
     exit 1
@@ -224,7 +248,7 @@ fi
 
 export XML_IN="${SCRIPT_DIR}/sim_to_jet.xml"
 export XML_OUT="${OUTXML}"
-export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR FILTER_CONEPT EM_ONLY PP_TUNE USE_POINTS FMS_TUNE CALIB_SAMPLE
+export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR FILTER_CONEPT EM_ONLY PP_TUNE USE_POINTS FMS_TUNE CALIB_SAMPLE SAVE_MUDST ECAL_SCALE SEED_BASE
 
 python3 << 'PYEOF'
 import json
@@ -283,6 +307,9 @@ xml = xml.replace("{{PP_TUNE}}", os.environ.get("PP_TUNE", "-1"))
 xml = xml.replace("{{USE_POINTS}}", os.environ.get("USE_POINTS", "0"))
 xml = xml.replace("{{FMS_TUNE}}", os.environ.get("FMS_TUNE", "0"))
 xml = xml.replace("{{CALIB_SAMPLE}}", os.environ.get("CALIB_SAMPLE", "0"))
+xml = xml.replace("{{SAVE_MUDST}}", os.environ.get("SAVE_MUDST", "0"))
+xml = xml.replace("{{ECAL_SCALE}}", os.environ.get("ECAL_SCALE", "1.0"))
+xml = xml.replace("{{SEED_BASE}}", os.environ.get("SEED_BASE", "0"))
 
 with open(os.environ["XML_OUT"], "w") as f:
     f.write(xml)
@@ -290,9 +317,9 @@ PYEOF
 
 echo "Generated ${OUTXML}"
 if [ -n "$PTCUT_JSON" ]; then
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} filter_conept=${FILTER_CONEPT} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE} calib_sample=${CALIB_SAMPLE}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} filter_conept=${FILTER_CONEPT} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE} calib_sample=${CALIB_SAMPLE} ecal_scale=${ECAL_SCALE} seed_base=${SEED_BASE}"
 else
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} filter_conept=${FILTER_CONEPT} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE} calib_sample=${CALIB_SAMPLE}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} filter_conept=${FILTER_CONEPT} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE} calib_sample=${CALIB_SAMPLE} ecal_scale=${ECAL_SCALE} seed_base=${SEED_BASE}"
 fi
 
 mkdir -p "${OUTDIR}"
@@ -336,6 +363,9 @@ em_only=${EM_ONLY}
 use_points=${USE_POINTS}
 fms_tune=${FMS_TUNE}
 calib_sample=${CALIB_SAMPLE}
+save_mudst=${SAVE_MUDST}
+ecal_scale=${ECAL_SCALE}
+seed_base=${SEED_BASE}
 EOF
 echo "Wrote run parameters to ${OUTDIR}/run_params_${LABEL}_${REQID}.txt"
 

@@ -10,15 +10,12 @@
 #       count appended as a trailing number)
 #   -s  1 = keep intermediate SimpleTree_mudst files, 0 = discard
 #   -o  output directory (created if missing)
-#   -n  files per job, default 40. The list is reordered by run and by
-#       time within a run, and each run is cut into jobs of at most this
-#       many consecutive files (evenly sized within the run). The
-#       underlying-event step draws a jet's proxy events only from its own
-#       job's files and only from its own run, so a job should hold as long
-#       a stretch of one run as its running time allows.
+#   -n  files per job, default 10: the list is cut into jobs of this many
+#       consecutive lines (the last job takes the rest). Every file is
+#       processed on its own (the underlying event comes from each jet's own
+#       event), so the grouping only sets the jobs' running time.
 #   -j  number of parallel jobs, with the listfile lines split evenly across
-#       them in the order given. Overrides -n; jobs then mix runs and times,
-#       which the underlying-event step tolerates but does worse with.
+#       them in the order given. Overrides -n.
 #   -l  short label for the generated XML's filename, default "run"
 #   -k  1 = save stdout/stderr under <outdir>/log/, 0 = discard, default 0
 #   -t  comma-separated FCS trigger flag names (see FcsTriggerDefs.h); an
@@ -40,7 +37,7 @@ LISTFILE=""
 SAVE_SIMPLETREE=""
 OUTDIR=""
 NPROC=""
-FILES_PER_JOB=40
+FILES_PER_JOB=10
 LABEL="run"
 KEEPLOGS=0
 TRIGGER_FILTER=""
@@ -75,6 +72,10 @@ if [ ! -f "$LISTFILE" ]; then
     echo "Error: listfile '$LISTFILE' does not exist"
     exit 1
 fi
+if [ ! -s "$LISTFILE" ]; then
+    echo "Error: listfile '$LISTFILE' is empty"
+    exit 1
+fi
 
 if [ "$EM_ONLY" != "0" ] && [ "$EM_ONLY" != "1" ]; then
     echo "Error: -E must be 0 or 1 (got '$EM_ONLY')"
@@ -107,9 +108,7 @@ if [ -n "$TRIGGER_FILTER" ]; then
     done
 fi
 
-# Job layout. Without -j: reorder the list by run, then by the file's
-# sequence number (the last five digits of the 7-digit file number, which
-# follows time), and give each job consecutive files of one run.
+# Job layout. Without -j: consecutive chunks of FILES_PER_JOB lines.
 RANGEFILE=""
 if [ -z "$NPROC" ]; then
     if ! [[ "$FILES_PER_JOB" =~ ^[1-9][0-9]*$ ]]; then
@@ -117,28 +116,10 @@ if [ -z "$NPROC" ]; then
         exit 1
     fi
     mkdir -p "${OUTDIR}"
-    SORTEDLIST="${OUTDIR}/filelist_${LABEL}.sorted.list"
     RANGEFILE="${OUTDIR}/filelist_${LABEL}.ranges"
-    NAME_RE='_[0-9]{8}_(raw_)?[0-9]{7}\.MuDst\.root'
-    NBADNAME=$(grep -vcE "${NAME_RE}" "${LISTFILE}" || true)
-    if [ "$NBADNAME" != "0" ]; then
-        echo "Error: ${NBADNAME} line(s) of ${LISTFILE} have no <run>_[raw_]<file>.MuDst.root name; cannot order them by run and time. Use -j for the plain even split."
-        exit 1
-    fi
-    sed -E 's#^(.*_([0-9]{8})_(raw_)?([0-9]{2})([0-9]{5})\.MuDst\.root.*)$#\2 \5 \4 \1#' "${LISTFILE}" \
-        | sort -k1,1n -k2,2n -k3,3n | cut -d' ' -f4- > "${SORTEDLIST}"
-    awk -v N="${FILES_PER_JOB}" '
-        { match($0, /_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_(raw_)?[0-9][0-9][0-9][0-9][0-9][0-9][0-9]\.MuDst\.root/)
-          run = substr($0, RSTART + 1, 8)
-          if (!(run in first)) { first[run] = NR; order[++k] = run }
-          cnt[run]++ }
-        END { for (i = 1; i <= k; i++) {
-                  r = order[i]; n = cnt[r]; c = int((n + N - 1) / N); base = int(n / c); rem = n % c; s = first[r]
-                  for (j = 0; j < c; j++) { m = base + (j < rem ? 1 : 0); print s, m; s += m } } }
-    ' "${SORTEDLIST}" > "${RANGEFILE}"
-    LISTFILE="${SORTEDLIST}"
+    awk -v N="${FILES_PER_JOB}" 'END { for (s = 1; s <= NR; s += N) print s, (s + N - 1 <= NR ? N : NR - s + 1) }' "${LISTFILE}" > "${RANGEFILE}"
     NPROC=$(wc -l < "${RANGEFILE}")
-    echo "Job layout: $(wc -l < "${SORTEDLIST}") files in ${NPROC} jobs of at most ${FILES_PER_JOB} consecutive files of one run (${RANGEFILE})"
+    echo "Job layout: $(wc -l < "${LISTFILE}") files in ${NPROC} jobs of at most ${FILES_PER_JOB} files (${RANGEFILE})"
 fi
 
 if [ "$KEEPLOGS" = "1" ]; then

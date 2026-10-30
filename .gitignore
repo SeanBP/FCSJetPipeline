@@ -24,7 +24,6 @@ submit/
 !/jet_calibration/jet_calibration_em_only.xml
 /jet_calibration/jet_calibration_em_only_*.xml
 /pico_analysis/pico_analysis_*.xml
-/underlying_event/ue_by_pthat_*.xml
 
 # Default scratch output and log folders (root only: FCS2VIRTUE/output/ is tracked)
 /output/
@@ -33,21 +32,6 @@ log/
 # Compiled programs (build lines are at the top of each source)
 /FCS2VIRTUE/FCS2VIRTUE
 /GeometryPlayground/fiducial_from_corners
-/JetScalePlayground/CalibrationMap
-/JetScalePlayground/JetEnergyScaleFineGrid
-/JetScalePlayground/jes_closure
-/JetScalePlayground/plot_bump_bins
-/JetScalePlayground/plot_gaussian_peaks
-/JetScalePlayground/points_ue_form_check
-/JetScalePlayground/summarize_diagnostics
-/UnderlyingEventPlayground/proxy_pt_window
-/UnderlyingEventPlayground/proxy_region_area
-/UnderlyingEventPlayground/proxy_trigger
-/UnderlyingEventPlayground/proxy_ue
-/UnderlyingEventPlayground/recoil_rate
-/UnderlyingEventPlayground/truth_dphi
-/UnderlyingEventPlayground/ue_position_map
-/UnderlyingEventPlayground/ue_pthat_dependence
 /UnfoldingPlayground/fms_multiplicity_unfold
 /UnfoldingPlayground/fms_response
 /UnfoldingPlayground/fms_unfold_stat_scan
@@ -60,26 +44,39 @@ log/
 # Editor/OS cruft
 *~
 .DS_Store
-/UnderlyingEventPlayground/truth_acceptance_diagram
-/UnderlyingEventPlayground/truth_ue_position_map
-/UnderlyingEventPlayground/ue_position_compare
-/UnderlyingEventPlayground/ue_inner_distribution
 /UnderlyingEventPlayground/energy_flow/cal_chain_compare
-/UnderlyingEventPlayground/energy_flow/cone_filter_check
-/UnderlyingEventPlayground/energy_flow/energy_flow
-/UnderlyingEventPlayground/energy_flow/filter_bias
-/UnderlyingEventPlayground/energy_flow/filter_yield
-/UnderlyingEventPlayground/sep_test/band_geometry
-/UnderlyingEventPlayground/sep_test/data_width_check
-/UnderlyingEventPlayground/sep_test/proxy_dr_profile
-/UnderlyingEventPlayground/sep_test/sep_test_compare
-/UnderlyingEventPlayground/truth_decomp/truth_decomp_compare
-/UnderlyingEventPlayground/truth_decomp/ue_method_summary
 
 # Per-submission XMLs and input lists of the playground studies (templates stay)
-/UnderlyingEventPlayground/truth_decomp/truth_decomp_*.xml
-/UnderlyingEventPlayground/sep_test/sep_test_*.xml
-/UnderlyingEventPlayground/sep_test/*.list
+/UnderlyingEventPlayground/in_event/in_event_*.xml
 /ANPlayground/an_job_*.xml
 /ANPlayground/benchmark_*.list
 /ANPlayground/jes/
+
+# Compiled programs and build products of the in-event UE, recoil and pi0 studies
+/UnderlyingEventPlayground/in_event/*
+!/UnderlyingEventPlayground/in_event/*.cpp
+!/UnderlyingEventPlayground/in_event/*.h
+!/UnderlyingEventPlayground/in_event/in_event.xml
+!/UnderlyingEventPlayground/in_event/submit_in_event.sh
+/UnderlyingEventPlayground/recoil_truth/*
+!/UnderlyingEventPlayground/recoil_truth/*.cpp
+!/UnderlyingEventPlayground/recoil_truth/*.csh
+!/UnderlyingEventPlayground/recoil_truth/*.sh
+!/UnderlyingEventPlayground/recoil_truth/*.sub
+!/UnderlyingEventPlayground/recoil_truth/chk.C
+!/UnderlyingEventPlayground/recoil_truth/recoil_jobs.txt
+/Pi0Playground/hot_tower_scan
+/Pi0Playground/pi0_calib_compare
+/Pi0Playground/pi0_compare
+/Pi0Playground/pi0_overlap_study
+/Pi0Playground/pi0_pairs
+/Pi0Playground/pi0_scale_plots
+/Pi0Playground/pi0_trigger_study
+/Pi0Playground/pi0_vs_pdg
+/Pi0Playground/pi0_pairs_*.xml
+/Pi0Playground/minimal/
+/Pi0Playground/trigemu/*
+!/Pi0Playground/trigemu/*.cpp
+!/Pi0Playground/trigemu/*.C
+!/Pi0Playground/trigemu/stage_params.txt
+*.log

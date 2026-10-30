@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- in_event_ue: one job per pairs list (list_${JOBINDEX}.list in {{WORKDIR}}).
+     Filled in by submit_in_event.sh. -->
+<job nProcesses="{{NPROC}}">
+    <ResourceUsage>
+        <Memory><MinMemory>4000</MinMemory></Memory>
+    </ResourceUsage>
+    <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
+    <command>
+        module purge
+        module load fastjet-3.3.4
+        module load root-5.34.38
+        cp shared/* UnderlyingEventPlayground/in_event/in_event_util.h jet_scale/JetXSecWeights.h UnderlyingEventPlayground/in_event/in_event_ue.cpp UnderlyingEventPlayground/in_event/in_event_geo.h .
+        g++ -m64 -O2 in_event_ue.cpp VectorDict.cxx -o in_event_ue -I. `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11
+        if ( ! -x in_event_ue ) then
+            echo "build failed"
+            exit 1
+        endif
+        date
+        mkdir -p in
+        rm -f local.list
+        touch local.list
+        foreach line ( "`cat {{WORKDIR}}/list_${JOBINDEX}.list`" )
+            set f = ( $line )
+            cp $f[1] $f[2] in/
+            echo "$PWD/in/$f[1]:t $PWD/in/$f[2]:t" >> local.list
+        end
+        ./in_event_ue local.list in_event_${JOBINDEX}.root {{MAXJETS}} {{EMUDIR}}
+        rm -rf in local.list
+        date
+    </command>
+    <SandBox installer="ZIP">
+        <Package>
+            <File>file:./shared</File>
+            <File>file:./UnderlyingEventPlayground/in_event/in_event_util.h</File>
+            <File>file:./jet_scale/JetXSecWeights.h</File>
+            <File>file:./UnderlyingEventPlayground/in_event/in_event_ue.cpp</File>
+            <File>file:./UnderlyingEventPlayground/in_event/in_event_geo.h</File>
+        </Package>
+    </SandBox>
+    <stdout URL="{{STDOUT_URL}}"/>
+    <stderr URL="{{STDERR_URL}}"/>
+    <output fromScratch="in_event_*.root" toURL="file:{{WORKDIR}}/out/" />
+</job>

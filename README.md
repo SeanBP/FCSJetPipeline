@@ -8,8 +8,8 @@ with `-h` for its options) and its sources.
 |---|---|
 | `sim_to_jet/` | PYTHIA + starsim -> BFC/MuDst -> SimpleTree -> matched truth/reco jets (+ in-job underlying event) |
 | `data_to_jet/` | official MuDst -> SimpleTree -> reco jets (+ in-job underlying event) |
-| `underlying_event/` | underlying-event (UE) estimate per jet; runs inside the two jobs above, or over a whole simulation sample |
-| `jet_scale/` | simulated JetTrees -> jet-energy-scale (JES) lookup JSON |
+| `underlying_event/` | underlying-event (UE) estimate per jet (in-event pixel ring); runs inside the two jobs above |
+| `jet_scale/` | simulated JetTrees -> jet-energy-scale (JES) lookup JSON and its closure test |
 | `jet_calibration/` | applies a JES JSON to JetTrees, in place |
 | `pico_analysis/` | PicoDst diagnostics, not part of the jet chain |
 
@@ -20,7 +20,8 @@ Shared resources at the root:
 - `shared/VectorDict.*`: the `std::vector` dictionary every program reading
   jetTree vector branches links against.
 - `StRoot/`: `StSimpleReaderMaker`, `StSimpleTreeMaker` and a local
-  `FcsJetFilter` (settable threshold). `.sl73_x8664_gcc485/` is their
+  `FcsJetFilter` (settable threshold), and a local `StFcsFastSimulatorMaker`
+  (the dev version with an ECal energy scale, `sim_to_jet -K`). `.sl73_x8664_gcc485/` is their
   prebuilt cache; jobs do not rebuild it, so rebuild (`stardev`, `cons`)
   after editing `StRoot/`.
 
@@ -59,7 +60,7 @@ plots live outside this repository, in `FCSJetAnalysis/`.
 ```
 ./submit_sim_to_jet.sh -g <pythia8|pythia6> -t <tune> -p <ptHatMin> -n <nevents> -s <N> -o <outdir> \
     [-P <ptHatMax>] [-j <njobs>] [-w <json>] [-l <label>] [-k <0|1>] [-f <triggers>] [-c <run>] \
-    [-e <ethr>] [-E <0|1>] [-F <0|1>] [-T <tune_pp>] [-M <0|1>] [-C <0|1>]
+    [-e <ethr>] [-E <0|1>] [-F <0|1>] [-T <tune_pp>] [-M <0|1>] [-C <0|1>] [-m <0|1>] [-K <k>] [-S <seed>]
 ```
 
 One job generates `-n` events and writes
@@ -76,7 +77,9 @@ checks). Main options:
 | `-E 1` | EM-only reco jets (ECAL only) with the ECAL fiducial rectangle |
 | `-F 1` | reco jets from FCS points (`StMuFcsPoint`) instead of tower hits |
 | `-M 1` | the FMS EM-jet generator settings: pythia6, PyTune 370, PARP(90)=0.213, PARP(91)=1, MSEL=1 |
-| `-C 1` | JES calibration sample: no jet pT minimums and a minimum-bias UE step; no `-f` |
+| `-C 1` | JES calibration sample: no jet pT minimums; no `-f` |
+| `-K` | ECal photon energy scale k applied to the deposited energy before digitization (local `StFcsFastSimulatorMaker`), default 0.947: the simulation's pi0 peak then sits at the PDG mass under the gain calibration's own selection, as in the calibrated data (`Pi0Playground/pi0_vs_pdg`) |
+| `-S` | fixed generator seeds (seed base + job index); 0 = random |
 
 Folder layout: after a submission finishes,
 `organize_sim_output.sh <outdir>` moves the files into
@@ -115,9 +118,9 @@ perl MakeRunList.pl -f mylist.list -l <max_files>      # file catalog query (wav
     [-l <label>] [-k <0|1>] [-t <triggers>] [-E <0|1>] [-F <0|1>]
 ```
 
-The list is ordered by run and time and cut into jobs of at most `-n`
-(default 40) consecutive files of one run, so the in-job UE step finds proxy
-events from the same run. `-j` instead splits the list evenly. Each
+The list is cut into jobs of `-n` (default 10) consecutive files; every file
+is processed on its own (the UE comes from each jet's own event). `-j`
+instead splits the list evenly across that many jobs. Each
 SimpleTree gives one `jet_output_<run>_<file>.root` with the same suffix.
 
 Per event the trees carry the fired FCS trigger flags (resolved from
@@ -130,34 +133,34 @@ together and rebuild StRoot), `Spin_config` (spin DB, covers 2021-12-14 to
 
 ## underlying_event
 
-At both levels the UE subtracted from a jet is, as in the FMS analysis, a
-density times the jet's own area: density = (mean energy in the R cones) /
-(pi R^2). `*_ue_E` and `*_ue_pt` are the area-scaled values; the cone means
-are kept as `*_ue_cone_E`, `*_ue_cone_pt`. Jet files without areas are
-refused.
+The UE of a jet comes from its own event, by the pixel ring
+(`PixelRingUE.h`): the jet's eta band |eta - eta_jet| < R from 2R off the
+jet axis out to 150 deg in azimuth (the 30 deg around 180, the recoil side,
+are left out), other jets kept, over the whole ECal (the fiducial region is
+only for jets). The ring is weighted so that its area-per-eta matches the jet
+cone's: in eta bins of 0.05, a point weighs h_jet(b) / h_ring(b), the ratio
+of the jet cone's to the ring's (live) area in its bin; bins the ring covers
+under 10% of the jet's area carry no weight. The density is
+sum(E r) / sum(r h_ring), so empty parts of the ring count as area, and the
+UE is the density times the jet cone's area: its live area on the ECal at
+reco level (3 cm pixels, 3 x 3 sub-pixels for the areas), pi R^2 at truth
+level (EM-only truth photons, full azimuth, exact areas).
 
-**Reco.** The cone is an R cone at the jet's position, averaged over other
-events (proxy events) of the same group (run in data, ptHat bin in
-simulation) and EM trigger level whose own jet has a similar pT (within 5%)
-and lies near 90 deg in azimuth from the cone, at least 2.5R away
-(`ProxySelection.h`, `ProxySearch.h`). Other jets of a proxy event are not
-vetoed: the cone keeps whatever it contains, as the truth cones do (in
-simulation this matches the truth UE; a jet veto came out ~10% low). Branches `reco_ue_E`, `reco_ue_pt`,
-`reco_ue_cone_E`, `reco_ue_cone_pt`, `reco_ue_nproxy`, `reco_ue_pt_window`.
+`UnderlyingEvent` runs inside the sim_to_jet and data_to_jet jobs, one file
+at a time (no pooling of events, no trigger requirement), and rewrites each
+jet file with, per jet: `reco_ue_rho`, `reco_ue_area`, `reco_ue_E` (= rho x
+area, the UE to subtract), `reco_ue_pt`, `reco_ue_cov` (share of the jet's
+live area in eta bins the ring reaches) and, in simulation, `truth_ue_rho`,
+`truth_ue_E`, `truth_ue_pt`. The energies are -1 where the ring reaches none
+of the jet's eta bins; such jets have no UE estimate and are dropped by the
+JES and calibration steps.
 
-**Truth** (simulation). Same event, as the FMS analysis: the EM-only truth
-photons in two R cones at the jet's eta and phi +- 90 deg, kept whatever they
-contain. The truth photon band has full azimuth, so the cones are always
-inside it. Branches `truth_ue_E`, `truth_ue_pt`, `truth_ue_cone_E`,
-`truth_ue_cone_pt`, `truth_ue_ncone` (2).
-
-The in-job step only sees one job's events. For a simulation sample, rerun it
-over all files of each ptHat bin, one condor job per bin, inputs copied to
-scratch; `-J` first rebuilds the jets from the SimpleTrees with JetMatcher:
-
-```
-./submit_ue_by_pthat.sh -i <sample>[,<sample>...] -w <workdir> [-m minbias|default] [-J "<em_only> <use_points> <jet_pt_cuts>"] [-n]
-```
+The method and its numbers (2026-10, `UnderlyingEventPlayground/in_event/`):
+azimuthal scans on FMS Run 15 data and FCS simulation put the end of the
+jet's own energy at about 2R and the start of the recoil rise at about
+120-130 deg; on the FMS, the ring on FCS-like geometry is within about 10% of
+the FMS two-cone (+-90 deg) estimate (full FMS 4%), which is taken as the UE
+systematic. Weighting per point and per pixel agree within 0.5% on Run 22.
 
 ## jet_scale
 
@@ -165,28 +168,32 @@ scratch; `-J` first rebuilds the jets from the SimpleTrees with JetMatcher:
 ./submit_jet_scale_em_only.sh -i <jettrees_dir/> -o <outdir> [-n <json>] [-s <0|1>] [-l <label>] [-k <0|1>]
 ```
 
-EM-only JES from simulated JetTrees (`sim_to_jet -E 1`; for the calibration
-use a `-C 1` sample with its UE rerun in minimum-bias mode). Reads a flat
-folder (for an organized sample, a folder of links).
+EM-only JES from simulated JetTrees (`sim_to_jet -E 1 -C 1`, with the
+in-job UE). Reads a flat folder (for an organized sample, a folder of links).
+Everything is done on UE-subtracted jets: the energy bins, the scale and its
+fit, and the closure.
 
 1. `JetEnergyScaleFineGrid_em_only`: on a 2.5 cm grid (5 cm match radius,
    10 cm from 37 GeV, where forward jets come from the heaviest-weight low-ptHat
    events and points are short of statistics) and 20 truth-energy bins (3-100 GeV), the cross-section-weighted median of
    scale = (reco_E - reco_ue_E) / (truth_E - truth_ue_E) and of the response.
    Medians close exactly under numerical inversion (arXiv:1609.05195).
-   `noue` turns the UE subtraction off.
+   `noue` turns the UE subtraction off (for checks only).
 2. `CalibrationMap_em_only`: describes the scale vs response as
-   `A + B lnE + C ln^2E + K ln^3E`, with one shared shape (C, K from a single
+   `A + B lnE + C ln^2E + D ln^3E`, with one shared shape (C, D from a single
    least-squares fit over every position, A and B free per position) and A, B
    per position (the level and slope); energy bins with n_eff < 3 are left
    out (a median of one or two effective jets is biased). The fits are linear and exact, so the
    step takes about a second. The A, B maps are smoothed (as the scale at
    3 and 30 GeV) and masked to the fiducial region. The evaluators clamp E to
    the range of all fitted responses [Emin, Emax] (the polynomial has no
-   plateau). The JSON says `"model": "logcubic"`, with the global `C`, `K`,
+   plateau). The JSON says `"model": "logcubic"`, with the global `C`, `D`,
    `Emin`, `Emax` and bins `{i, j, A, B}`; the evaluators
-   refuse maps of earlier forms. `JetScalePlayground/jes_closure` tests a map's
-   closure on weighted simulation.
+   refuse maps of earlier forms (including those with a `K`).
+3. `jes_closure`: the map applied in memory exactly as `jet_calibration`
+   does, on the same UE-subtracted weighted jets: weighted medians of
+   E_corr / E_truth per truth-energy bin and radial band, and the map against
+   the medians it was fitted to (`jes_closure.txt`, `.root`, `.png`).
 
    Known limitation: below about 9 GeV the response varies within an ECal
    tower (about 8% higher at tower boundaries than at centres, 3-8.6 GeV;
@@ -208,9 +215,9 @@ ECAL+HCAL version, with a log-quadratic model and Gaussian-fit modes;
 
 Adds `reco_E_corr` and `reco_x_F_corr` to every file **in place** (asks for
 confirmation). The EM-only map is evaluated at the UE-subtracted energy,
-`reco_E_corr = (reco_E - reco_ue_E) / scale`. Jets without a UE estimate or
-outside the map get `reco_E_corr = reco_x_F_corr = -1` and must be dropped by
-the analysis. x is folded to
+`reco_E_corr = (reco_E - reco_ue_E) / scale`. Jets without a UE estimate
+(`reco_ue_E < 0`) or outside the map get `reco_E_corr = reco_x_F_corr = -1`
+and must be dropped by the analysis. x is folded to
 positive for the lookup, y is not. `submit_jet_calibration.sh` is the
 ECAL+HCAL version (also writes `reco_E_uniform_corr`); `-E 1` forwards to the
 EM-only script. The two JSON schemas are not interchangeable.

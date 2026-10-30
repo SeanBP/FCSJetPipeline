@@ -1,0 +1,14 @@
+universe = vanilla
+executable = run_job.sh
+transfer_input_files = recoil_truth, lhapdf
+should_transfer_files = YES
+when_to_transfer_output = ON_EXIT
+request_memory = 1000
+accounting_group = group_star.cas
+initialdir = /star/u/seanp/FCSJetPipeline/UnderlyingEventPlayground/recoil_truth
+output = /star/data01/pwg/seanp/ue_test/recoil_truth/log/$(name).out
+error = /star/data01/pwg/seanp/ue_test/recoil_truth/log/$(name).err
+log = /star/data01/pwg/seanp/ue_test/recoil_truth/log/condor.log
+transfer_output_remaps = "$(name).root = /star/data01/pwg/seanp/ue_test/recoil_truth/$(name).root"
+arguments = $(lo) $(hi) 40000 $(seed) $(mpi) $(name).root
+queue lo, hi, mpi, seed, name from recoil_jobs.txt

@@ -1,8 +1,8 @@
 // Applies an EM-only JES lookup JSON (CalibrationMap_em_only) to JetTrees in
 // place (TFile "UPDATE", no undo), adding reco_E_corr and reco_x_F_corr.
 //
-// scale(x,y,E) = A + B lnE + C ln^2E + K ln^3E, with A, B interpolated from
-// the map's bins and C, K global (the JSON must say "model": "logcubic"),
+// scale(x,y,E) = A + B lnE + C ln^2E + D ln^3E, with A, B interpolated from
+// the map's bins and C, D global (the JSON must say "model": "logcubic"),
 // evaluated at the jet's own UE-subtracted energy E = reco_E - reco_ue_E
 // clamped to the map's fitted range [Emin, Emax]:
 // reco_E_corr = E / scale.
@@ -34,7 +34,7 @@ struct LookupGrid
 
     std::vector<std::vector<double>> A;
     std::vector<std::vector<double>> B;
-    double C, K; // the same everywhere
+    double C, D; // the same everywhere
     double Emin, Emax; // fitted response range
 };
 
@@ -234,7 +234,7 @@ int main(int argc, char** argv)
     grid.nx = (int)extract_number("nx");
     grid.ny = (int)extract_number("ny");
     grid.C = extract_number("C");
-    grid.K = extract_number("K");
+    grid.D = extract_number("D");
     grid.Emin = extract_number("Emin");
     grid.Emax = extract_number("Emax");
 
@@ -449,17 +449,15 @@ int main(int argc, char** argv)
         if (tree->GetBranch("event_sqrt_s_gev")) tree->SetBranchAddress("event_sqrt_s_gev",&event_sqrt_s_gev);
 
         std::vector<float>* reco_ue_E = 0;
-        std::vector<int>* reco_ue_nproxy = 0;
         if (subtract_ue)
         {
-            if (!tree->GetBranch("reco_ue_E") || !tree->GetBranch("reco_ue_nproxy"))
+            if (!tree->GetBranch("reco_ue_E") || !tree->GetBranch("reco_ue_rho"))
             {
-                std::cerr << "ERROR: no reco_ue_E/reco_ue_nproxy branches; run underlying_event/UnderlyingEvent"
+                std::cerr << "ERROR: no reco_ue_E/reco_ue_rho branches (the pixel-ring UE); run underlying_event/UnderlyingEvent"
                           << " first, or pass noue for a map built without UE subtraction" << std::endl;
                 return 1;
             }
             tree->SetBranchAddress("reco_ue_E",&reco_ue_E);
-            tree->SetBranchAddress("reco_ue_nproxy",&reco_ue_nproxy);
         }
 
         std::vector<float> reco_E_corr;
@@ -510,7 +508,7 @@ int main(int argc, char** argv)
                 double E = reco_E->at(j);
                 if (subtract_ue)
                 {
-                    if (reco_ue_nproxy->at(j) <= 0)
+                    if (reco_ue_E->at(j) < 0)  // no UE estimate
                     {
                         no_ue_counter++;
                         reco_E_corr.push_back(-1.0f);
@@ -533,7 +531,7 @@ int main(int argc, char** argv)
                 double E_eval = clamp(E,grid.Emin,grid.Emax);
 
                 double l = std::log(E_eval);
-                double F_grid = A_grid + l*(B_grid + l*(grid.C + l*grid.K));
+                double F_grid = A_grid + l*(B_grid + l*(grid.C + l*grid.D));
 
                 if(invalid(F_grid) || std::fabs(F_grid)<=1e-8)
                 {

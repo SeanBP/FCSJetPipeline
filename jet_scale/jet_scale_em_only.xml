@@ -73,6 +73,16 @@
         echo "Running CalibrationMap_em_only..."
         ./CalibrationMap_em_only jet_calibration.root {{JSON_NAME}}
 
+        # Closure on the same UE-subtracted jets (weighted medians of E_corr / E_truth,
+        # and the map against the medians it was fitted to)
+        echo "Compiling jes_closure..."
+        g++ -m64 -O2 jes_closure.cpp VectorDict.cxx -o jes_closure \
+            `root-config --cflags --libs` \
+            `fastjet-config --cxxflags --libs` -std=c++11
+        ls ${INDIR}*.root > closure_files.list
+        ./jes_closure closure_files.list {{JSON_NAME}} ue jes_closure jet_calibration.root >&! jes_closure.txt
+        tail -40 jes_closure.txt
+
         if ( {{SAVE_CALIBRATION_ROOT}} == 0 ) then
             rm -f jet_calibration.root
         endif
@@ -87,6 +97,9 @@
             <File>file:./jet_scale/JetEnergyScaleFineGrid_em_only.cpp</File>
             <File>file:./jet_scale/JetXSecWeights.h</File>
             <File>file:./jet_scale/CalibrationMap_em_only.cpp</File>
+            <File>file:./jet_scale/jes_closure.cpp</File>
+            <File>file:./jet_scale/JetPairs.h</File>
+            <File>file:./jet_scale/GaussCore.h</File>
             <File>file:./shared/VectorDict.cxx</File>
             <File>file:./shared/VectorDict.h</File>
             <File>file:./shared/VectorDictClass.h</File>
@@ -100,5 +113,8 @@
 
     <output fromScratch="jet_calibration.root" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="{{JSON_NAME}}" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="jes_closure.txt" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="jes_closure.root" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="jes_closure.png" toURL="file:{{OUTDIR}}/" />
 
 </job>

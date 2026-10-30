@@ -1,44 +1,24 @@
-// Underlying-event (UE) estimate for every jet of a set of files, by the near
-// off-axis proxy-event method (ProxySelection.h, ProxySearch.h). Runs inside
-// sim_to_jet and data_to_jet jobs, and over whole simulation samples
-// (submit_ue_by_pthat.sh).
+// Underlying-event (UE) estimate for every jet of a set of files, by the
+// in-event pixel ring (PixelRingUE.h): the jet's own event, its eta band from
+// 2R out to 150 deg in azimuth, over the whole ECal (not only the jets'
+// fiducial region), weighted to the jet cone's eta distribution. Runs inside
+// sim_to_jet and data_to_jet jobs; each file is independent.
 //
-// Usage: ./UnderlyingEvent pairs.list [n_max] [minbias]
+// Usage: ./UnderlyingEvent pairs.list
 //   pairs.list  one line per file: "<jet_output file> <SimpleTree file>"
-//   n_max       most proxy events per reco jet, 0 (default) = all found
-//   minbias     for samples without trigger or jet pT cuts (JES calibration):
-//               every fiducial reco jet is estimated, untriggered events
-//               match untriggered ones
 //
-// The UE subtracted from a jet is, as in the FMS analysis, a density times
-// the jet's own area: density = (mean energy in the R cones) / (pi R^2), area
-// = reco_area / truth_area (JetAreaDefinition in JetParameters.h). Jet files
-// without the area branches are refused and left as they are.
-//
-// Each jet_output file is rewritten in place with, per reco jet:
-//   reco_ue_cone_E     mean ECal point energy (GeV) in an R cone at the jet
-//                      position, over the proxy events
-//   reco_ue_cone_pt    the same for the points' summed pT
-//   reco_ue_E          reco_ue_cone_E / (pi R^2) x reco_area: the UE to subtract
-//   reco_ue_pt         the same for pT
-//   reco_ue_nproxy     proxy events used; 0 = none found, -1 = not estimated
-//                      (no EM trigger, or jet outside the fiducial region)
-//   reco_ue_pt_window  pT window half-width used, as a fraction of jet pT
-// The energies are -1 where reco_ue_nproxy <= 0.
-//
-// In simulation every truth jet also gets a same-event estimate, as the FMS
-// analysis: the mean energy (and pT) of the EM-only truth photons in two R
-// cones at the jet's eta and phi +- 90 deg, whatever the cones contain. The
-// photons are those the truth jets are built from (IsEmTruthParticle, truth
-// particle eta band), in momentum eta-phi, with full azimuth:
-//   truth_ue_cone_E, truth_ue_cone_pt   mean over the two cones, GeV
-//   truth_ue_E, truth_ue_pt             the same / (pi R^2) x truth_area
-//   truth_ue_ncone                      2 (cones used); 0 = not estimated
-//
-// Reco groups: data files jet_output_<run>_<file>.root are grouped by run and
-// ordered by the last five digits of <file> (time); simulation files
-// ..._pt<ptHatMin>_<job>.root by ptHat bin (events are unweighted within a
-// bin). Other names count as run 0, in list order.
+// Each jet_output file is rewritten in place with, per reco jet (ECal points,
+// the same selection as the reco jets' inputs):
+//   reco_ue_rho    UE density, GeV per unit eta-phi area (live)
+//   reco_ue_area   the jet cone's live eta-phi area on the ECal
+//   reco_ue_E      reco_ue_rho x reco_ue_area: the UE to subtract
+//   reco_ue_pt     the same in pT
+//   reco_ue_cov    share of the jet's live area in eta bins the ring reaches
+// and in simulation, per truth jet (EM-only truth photons, full azimuth):
+//   truth_ue_rho, truth_ue_E (= truth_ue_rho x pi R^2), truth_ue_pt
+// The energies and densities are -1 where the ring reaches none of the jet's
+// eta bins (no estimate; the jet must be dropped where a UE is needed).
+// Earlier reco_ue_* / truth_ue_* branches are replaced.
 //
 // simpletree_entry ties jetTree entries to SimpleTree entries; files without
 // it need equal entry counts.
@@ -53,157 +33,52 @@
 #include <TTree.h>
 #include <TSystem.h>
 
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <vector>
-#include <string>
-#include <cmath>
-#include <cstdio>
-#include <cstdlib>
 #include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
 
 #include "JetParameters.h"
-#include "ProxySelection.h"
-#include "ProxySearch.h"
+#include "PixelRingUE.h"
 
-struct FilePair
-{
-    std::string jet_file, simple_file;
-    int run, sequence, order;                    // order: line number in the list
-    std::vector<int> pool_event;                 // per jetTree entry: its pool event, or -1
-    std::vector<std::vector<float> > truth_E, truth_pt;  // per jetTree entry and truth jet: same-event cone UE
-    bool has_truth;
-};
-
-// Counts for the end-of-job summary, per level
-struct UeSummary
-{
-    long n_jets, n_tried, n_min_reached, n_widened, n_none;
-    double sum_n;
-    UeSummary() : n_jets(0), n_tried(0), n_min_reached(0), n_widened(0), n_none(0), sum_n(0.0) {}
-    void Print(const char *level, const char *which, int n_min) const
-    {
-        const long d = std::max(1L, n_tried);
-        std::cout << "UnderlyingEvent: " << n_jets << " " << level << " jets, " << n_tried << " estimated (" << which << "); of those "
-                  << "the mean number of proxy events is " << sum_n / d << ", " << 100.0 * n_min_reached / d << " % have at least "
-                  << n_min << ", " << 100.0 * n_widened / d << " % used a widened pT window, " << 100.0 * n_none / d << " % found none"
-                  << std::endl;
-    }
-};
-
-// The four output branches of one level (reco or truth), one value per jet
-// Area of an R cone, in which the UE densities are measured
-static const double kConeArea = M_PI * R * R;
-
+// One level's output branches, one value per jet
 struct UeBranches
 {
-    std::vector<float> E, pt, cone_E, cone_pt, window;
-    std::vector<int> nproxy;
-    void Attach(TTree *t, const std::string &level)
+    std::vector<float> E, pt, rho, area, cov;
+    void Attach(TTree *t, const std::string &level, bool with_area)
     {
         t->Branch((level + "_ue_E").c_str(), &E);
         t->Branch((level + "_ue_pt").c_str(), &pt);
-        t->Branch((level + "_ue_cone_E").c_str(), &cone_E);
-        t->Branch((level + "_ue_cone_pt").c_str(), &cone_pt);
-        t->Branch((level + "_ue_nproxy").c_str(), &nproxy);
-        t->Branch((level + "_ue_pt_window").c_str(), &window);
+        t->Branch((level + "_ue_rho").c_str(), &rho);
+        if (with_area) { t->Branch((level + "_ue_area").c_str(), &area); t->Branch((level + "_ue_cov").c_str(), &cov); }
     }
-    // pool_event: the entry's event in the pool, or -1 (no estimate for any jet);
-    // area: the jets' areas, which scale the cone densities
-    void Fill(const ProxyPool &pool, int pool_event, const std::vector<float> &area, int n_max, int n_min, UeSummary &sum)
+    void Clear(size_t n) { E.assign(n, -1.f); pt.assign(n, -1.f); rho.assign(n, -1.f); area.assign(n, -1.f); cov.assign(n, 0.f); }
+    void Set(size_t j, const UeResult &r)
     {
-        const size_t nj = area.size();
-        E.assign(nj, -1.f); pt.assign(nj, -1.f); cone_E.assign(nj, -1.f); cone_pt.assign(nj, -1.f);
-        nproxy.assign(nj, -1); window.assign(nj, (float)proxy_pt_window_fraction);
-        for (size_t j = 0; j < nj && pool_event >= 0; j++)
-        {
-            const ProxyResult res = pool.Estimate(pool_event, (int)j, n_max);
-            nproxy[j] = res.n;
-            window[j] = (float)res.window;
-            if (res.n > 0)
-            {
-                cone_E[j] = (float)res.ue_E; cone_pt[j] = (float)res.ue_pt;
-                E[j] = (float)(res.ue_E / kConeArea * area[j]); pt[j] = (float)(res.ue_pt / kConeArea * area[j]);
-            }
-
-            if (res.n < 0) continue;
-            sum.n_tried++;
-            sum.sum_n += res.n;
-            if (res.n >= n_min) sum.n_min_reached++;
-            if (res.n_nominal < n_min && res.n > res.n_nominal) sum.n_widened++;
-            if (res.n == 0) sum.n_none++;
-        }
-        sum.n_jets += nj;
+        E[j] = (float)r.E(); pt[j] = (float)r.pt(); rho[j] = (float)r.rho; area[j] = (float)r.area; cov[j] = (float)r.cov;
     }
 };
-
-// Truth-level UE of a jet at (eta, phi): mean energy and pT of the truth
-// photons in two R cones at the jet's eta and phi +- 90 deg (same event)
-static void TruthOffAxisCones(double eta, double phi, const std::vector<float> &p_eta, const std::vector<float> &p_phi,
-                              const std::vector<float> &p_E, float &ue_E, float &ue_pt)
-{
-    double e = 0.0, pt = 0.0;
-    for (int c = 0; c < 2; c++)
-    {
-        const double cone_phi = phi + (c == 0 ? 0.5 : -0.5) * M_PI;
-        for (size_t i = 0; i < p_E.size(); i++)
-            if (ProxyDeltaR(p_eta[i], p_phi[i], eta, cone_phi) < R)
-            {
-                e += p_E[i];
-                pt += p_E[i] / std::cosh(p_eta[i]);
-            }
-    }
-    ue_E = (float)(0.5 * e);
-    ue_pt = (float)(0.5 * pt);
-}
-
-static bool ByTime(const FilePair &a, const FilePair &b)
-{
-    if (a.run != b.run) return a.run < b.run;
-    if (a.sequence != b.sequence) return a.sequence < b.sequence;
-    return a.order < b.order;
-}
 
 int main(int argc, char **argv)
 {
     gROOT->SetBatch(kTRUE);
     if (argc < 2)
     {
-        std::cerr << "usage: ./UnderlyingEvent pairs.list [n_max] [minbias]" << std::endl;
+        std::cerr << "usage: ./UnderlyingEvent pairs.list" << std::endl;
         return 1;
     }
-    const int n_max = argc > 2 ? std::atoi(argv[2]) : proxy_n_max; // 0 = every proxy event found
-    const bool minimum_bias = argc > 3 && std::string(argv[3]) == "minbias";
-
-    std::vector<FilePair> files;
+    std::vector<std::pair<std::string, std::string> > files;
     {
         std::ifstream in(argv[1]);
         std::string line;
         while (std::getline(in, line))
         {
             std::istringstream ss(line);
-            FilePair fp;
-            if (!(ss >> fp.jet_file >> fp.simple_file)) continue;
-            fp.run = 0; fp.sequence = 0; fp.order = (int)files.size(); fp.has_truth = false;
-            const size_t slash = fp.jet_file.find_last_of('/');
-            const std::string base = slash == std::string::npos ? fp.jet_file : fp.jet_file.substr(slash + 1);
-            int run = 0, file_number = 0;
-            if (std::sscanf(base.c_str(), "jet_output_%d_%d.root", &run, &file_number) == 2)
-            {
-                fp.run = run; fp.sequence = file_number % 100000;
-            }
-            else
-            {
-                // simulation: ..._pt<ptHatMin>_<job>.root; groups are negative so they never equal a run number
-                const size_t p = base.rfind("_pt");
-                int pthat = 0, job = 0;
-                if (p != std::string::npos && std::sscanf(base.c_str() + p, "_pt%d_%d.root", &pthat, &job) == 2)
-                {
-                    fp.run = -1 - pthat; fp.sequence = job;
-                }
-            }
-            files.push_back(fp);
+            std::string a, b;
+            if (ss >> a >> b) files.push_back(std::make_pair(a, b));
         }
     }
     if (files.empty())
@@ -211,57 +86,54 @@ int main(int argc, char **argv)
         std::cerr << "ERROR: no file pairs in " << argv[1] << std::endl;
         return 1;
     }
-    std::sort(files.begin(), files.end(), ByTime);
 
-    // ---------------- pass 1: read every event into the pool ----------------
-    ProxyPool pool;
-    if (minimum_bias) pool.SetMinimumBias();
+    UeGeometry geo;
+    geo.Build();
+    const TruthPixelRing truth_ring;
     const int MAX_MC = 10000; // matches JetMatcher.cpp's mcpart_* array size
+    const int MAX_PTS = 200;  // matches StSimpleReaderMaker.h's Cal_pt_* array size
     std::vector<Int_t> mc_geid(MAX_MC), mc_idVtx(MAX_MC);
     std::vector<Float_t> mc_px(MAX_MC), mc_py(MAX_MC), mc_pz(MAX_MC), mc_E(MAX_MC), mc_vx(MAX_MC), mc_vy(MAX_MC), mc_vz(MAX_MC);
-    long n_truth_files = 0;
-    const int MAX_PTS = 200; // matches StSimpleReaderMaker.h's Cal_pt_* array size
-    int n_bad = 0;
+    long n_bad = 0, n_reco = 0, n_reco_none = 0, n_truth = 0, n_truth_none = 0;
+    double sum_reco = 0, sum_truth = 0;
 
     for (size_t f = 0; f < files.size(); f++)
     {
-        FilePair &fp = files[f];
-        TFile *fj = TFile::Open(fp.jet_file.c_str());
-        TFile *fs = TFile::Open(fp.simple_file.c_str());
-        TTree *jt = (fj && !fj->IsZombie()) ? (TTree *)fj->Get("jetTree") : 0;
+        const std::string &jet_file = files[f].first, &simple_file = files[f].second;
+        TFile *fin = TFile::Open(jet_file.c_str());
+        TFile *fs = TFile::Open(simple_file.c_str());
+        TTree *jt = (fin && !fin->IsZombie()) ? (TTree *)fin->Get("jetTree") : 0;
         TTree *st = (fs && !fs->IsZombie()) ? (TTree *)fs->Get("data") : 0;
         const bool has_entry = jt && jt->GetBranch("simpletree_entry");
         if (!jt || !st || !st->GetBranch("Cal_npts") || (!has_entry && jt->GetEntries() != st->GetEntries()))
         {
-            std::cerr << "ERROR: cannot use " << fp.jet_file << " with " << fp.simple_file
-                      << " (unreadable, no points, or no simpletree_entry branch and differing entry counts);"
-                      << " its jets get no UE estimate" << std::endl;
+            std::cerr << "ERROR: cannot use " << jet_file << " with " << simple_file
+                      << " (unreadable, no points, or no simpletree_entry branch and differing entry counts); left as it is" << std::endl;
             n_bad++;
-            if (fj) { fj->Close(); delete fj; }
+            if (fin) { fin->Close(); delete fin; }
             if (fs) { fs->Close(); delete fs; }
             continue;
         }
+        // earlier UE branches stay out of the copy
+        TIter next_branch(jt->GetListOfBranches());
+        while (TObject *b = next_branch())
+        {
+            const std::string name = b->GetName();
+            if (name.compare(0, 8, "reco_ue_") == 0 || name.compare(0, 9, "truth_ue_") == 0) jt->SetBranchStatus(name.c_str(), 0);
+        }
 
-        std::vector<float> *reco_pt = 0, *reco_eta = 0, *reco_phi = 0, *reco_x = 0, *reco_y = 0;
-        Int_t em0 = 0, em1 = 0, em2 = 0;
+        std::vector<float> *reco_eta = 0, *reco_phi = 0, *truth_eta = 0, *truth_phi = 0;
         Long64_t simpletree_entry = -1;
         Double_t event_sqrt_s_gev = kSqrtS_MainRun22_GeV;
-        jt->SetBranchStatus("*", 0);
-        const char *jb[] = {"reco_pt", "reco_eta", "reco_phi", "reco_x", "reco_y", "fcsEM0", "fcsEM1", "fcsEM2"};
-        for (int i = 0; i < 8; i++) jt->SetBranchStatus(jb[i], 1);
-        jt->SetBranchAddress("reco_pt", &reco_pt);
         jt->SetBranchAddress("reco_eta", &reco_eta);
         jt->SetBranchAddress("reco_phi", &reco_phi);
-        jt->SetBranchAddress("reco_x", &reco_x);
-        jt->SetBranchAddress("reco_y", &reco_y);
-        jt->SetBranchAddress("fcsEM0", &em0);
-        jt->SetBranchAddress("fcsEM1", &em1);
-        jt->SetBranchAddress("fcsEM2", &em2);
-        if (has_entry) { jt->SetBranchStatus("simpletree_entry", 1); jt->SetBranchAddress("simpletree_entry", &simpletree_entry); }
-        // The energy cut on points depends on sqrt(s), as in the jet finders
-        if (jt->GetBranch("event_sqrt_s_gev")) { jt->SetBranchStatus("event_sqrt_s_gev", 1); jt->SetBranchAddress("event_sqrt_s_gev", &event_sqrt_s_gev); }
+        if (has_entry) jt->SetBranchAddress("simpletree_entry", &simpletree_entry);
+        // the point energy cut depends on sqrt(s), as in the jet finders
+        if (jt->GetBranch("event_sqrt_s_gev")) jt->SetBranchAddress("event_sqrt_s_gev", &event_sqrt_s_gev);
+        const bool has_truth = jt->GetBranch("truth_eta") && st->GetBranch("mcpart_num");
+        if (has_truth) { jt->SetBranchAddress("truth_eta", &truth_eta); jt->SetBranchAddress("truth_phi", &truth_phi); }
 
-        Int_t Cal_npts = 0;
+        Int_t Cal_npts = 0, mcpart_num = 0;
         Float_t Cal_pt_energy[MAX_PTS], Cal_pt_x[MAX_PTS], Cal_pt_y[MAX_PTS], Cal_pt_z[MAX_PTS];
         Int_t Cal_pt_detid[MAX_PTS];
         st->SetBranchStatus("*", 0);
@@ -273,166 +145,75 @@ int main(int argc, char **argv)
         st->SetBranchAddress("Cal_pt_y", Cal_pt_y);
         st->SetBranchAddress("Cal_pt_z", Cal_pt_z);
         st->SetBranchAddress("Cal_pt_detid", Cal_pt_detid);
-
-        // Truth level (simulation only)
-        fp.has_truth = jt->GetBranch("truth_pt") && st->GetBranch("mcpart_num");
-        std::vector<float> *truth_pt = 0, *truth_eta = 0, *truth_phi = 0;
-        Int_t mcpart_num = 0;
-        if (fp.has_truth)
+        if (has_truth)
         {
-            n_truth_files++;
-            const char *tb[] = {"truth_pt", "truth_eta", "truth_phi"};
-            for (int i = 0; i < 3; i++) jt->SetBranchStatus(tb[i], 1);
-            jt->SetBranchAddress("truth_pt", &truth_pt);
-            jt->SetBranchAddress("truth_eta", &truth_eta);
-            jt->SetBranchAddress("truth_phi", &truth_phi);
             const char *mb[] = {"mcpart_num", "mcpart_px", "mcpart_py", "mcpart_pz", "mcpart_E", "mcpart_geid", "mcpart_idVtx",
                                 "mcpart_Vtx_x", "mcpart_Vtx_y", "mcpart_Vtx_z"};
             for (int i = 0; i < 10; i++) st->SetBranchStatus(mb[i], 1);
             st->SetBranchAddress("mcpart_num", &mcpart_num);
-            st->SetBranchAddress("mcpart_px", &mc_px[0]);
-            st->SetBranchAddress("mcpart_py", &mc_py[0]);
-            st->SetBranchAddress("mcpart_pz", &mc_pz[0]);
-            st->SetBranchAddress("mcpart_E", &mc_E[0]);
-            st->SetBranchAddress("mcpart_geid", &mc_geid[0]);
-            st->SetBranchAddress("mcpart_idVtx", &mc_idVtx[0]);
-            st->SetBranchAddress("mcpart_Vtx_x", &mc_vx[0]);
-            st->SetBranchAddress("mcpart_Vtx_y", &mc_vy[0]);
-            st->SetBranchAddress("mcpart_Vtx_z", &mc_vz[0]);
+            st->SetBranchAddress("mcpart_px", &mc_px[0]); st->SetBranchAddress("mcpart_py", &mc_py[0]); st->SetBranchAddress("mcpart_pz", &mc_pz[0]);
+            st->SetBranchAddress("mcpart_E", &mc_E[0]); st->SetBranchAddress("mcpart_geid", &mc_geid[0]); st->SetBranchAddress("mcpart_idVtx", &mc_idVtx[0]);
+            st->SetBranchAddress("mcpart_Vtx_x", &mc_vx[0]); st->SetBranchAddress("mcpart_Vtx_y", &mc_vy[0]); st->SetBranchAddress("mcpart_Vtx_z", &mc_vz[0]);
         }
 
-        const Long64_t n = jt->GetEntries();
-        fp.pool_event.assign(n, -1);
-        if (fp.has_truth) { fp.truth_E.assign(n, std::vector<float>()); fp.truth_pt.assign(n, std::vector<float>()); }
-        std::vector<ProxyJet> jets;
-        std::vector<float> p_eta, p_phi, p_E;
-        for (Long64_t ev = 0; ev < n; ev++)
-        {
-            if (jt->GetEntry(ev) <= 0) continue;
-            const bool any_truth = fp.has_truth && !truth_pt->empty();
-            if (reco_pt->empty() && !any_truth) continue;      // no jet to estimate for
-            if (st->GetEntry(has_entry ? simpletree_entry : ev) <= 0) continue;
-            const int em_level = ProxyEmLevel(em0, em1, em2);
-
-            // Truth level: same-event off-axis cones over the EM-only truth
-            // photons in the truth particle eta band, as the truth jets
-            if (any_truth)
-            {
-                p_eta.clear(); p_phi.clear(); p_E.clear();
-                float vx = 0, vy = 0, vz = 0;
-                const int nmc = std::min((int)mcpart_num, MAX_MC);
-                if (FindEmTruthPrimaryVertex(nmc, &mc_idVtx[0], &mc_vx[0], &mc_vy[0], &mc_vz[0], vx, vy, vz))
-                    for (int i = 0; i < nmc; i++)
-                    {
-                        if (!IsEmTruthParticle(mc_geid[i], mc_vx[i], mc_vy[i], mc_vz[i], vx, vy, vz)) continue;
-                        const double pt = std::sqrt((double)mc_px[i] * mc_px[i] + (double)mc_py[i] * mc_py[i]);
-                        if (!(pt > 0)) continue;
-                        const double eta = std::asinh(mc_pz[i] / pt);
-                        if (!InTruthParticleEtaRange(eta)) continue;
-                        p_eta.push_back(eta); p_phi.push_back(std::atan2(mc_py[i], mc_px[i])); p_E.push_back(mc_E[i]);
-                    }
-                std::vector<float> &tE = fp.truth_E[ev], &tpt = fp.truth_pt[ev];
-                tE.resize(truth_pt->size()); tpt.resize(truth_pt->size());
-                for (size_t j = 0; j < truth_pt->size(); j++)
-                    TruthOffAxisCones(truth_eta->at(j), truth_phi->at(j), p_eta, p_phi, p_E, tE[j], tpt[j]);
-            }
-            if (reco_pt->empty()) continue;
-
-            jets.clear(); p_eta.clear(); p_phi.clear(); p_E.clear();
-            for (size_t j = 0; j < reco_pt->size(); j++)
-            {
-                ProxyJet jet = {reco_pt->at(j), reco_eta->at(j), reco_phi->at(j), reco_x->at(j), reco_y->at(j)};
-                jets.push_back(jet);
-            }
-            // Points: the same selection and direction convention as the reco
-            // jets' own inputs (RecoJets.cpp / JetMatcher.cpp, use_points)
-            for (int i = 0; i < Cal_npts; i++)
-            {
-                if (Cal_pt_detid[i] != 0 && Cal_pt_detid[i] != 1) continue;
-                if (!pass_point_energy_cut(Cal_pt_energy[i], event_sqrt_s_gev)) continue;
-                const double rho = std::sqrt((double)Cal_pt_x[i] * Cal_pt_x[i] + (double)Cal_pt_y[i] * Cal_pt_y[i]);
-                p_eta.push_back(std::asinh(Cal_pt_z[i] / rho)); p_phi.push_back(std::atan2(Cal_pt_y[i], Cal_pt_x[i]));
-                p_E.push_back(Cal_pt_energy[i]);
-            }
-            fp.pool_event[ev] = pool.AddEvent(fp.run, em_level, jets, p_eta, p_phi, p_E);
-        }
-        fj->Close(); delete fj;
-        fs->Close(); delete fs;
-    }
-    std::cout << "UnderlyingEvent: " << files.size() << " file pairs (" << n_bad << " unusable), " << pool.NEvents()
-              << " events with a reco jet, " << pool.NJets() << " jets, " << pool.MemoryMB() << " MB" << std::endl;
-
-    // ---------------- pass 2: estimate, and rewrite each jet file ----------------
-    const int n_min = n_max > 0 ? std::min(proxy_n_min, n_max) : proxy_n_min;
-    UeSummary reco_sum;
-    long n_truth_jets = 0;
-    double truth_ue_sum = 0.0;
-
-    for (size_t f = 0; f < files.size(); f++)
-    {
-        FilePair &fp = files[f];
-        TFile *fin = TFile::Open(fp.jet_file.c_str());
-        TTree *jt = (fin && !fin->IsZombie()) ? (TTree *)fin->Get("jetTree") : 0;
-        if (!jt)
-        {
-            std::cerr << "ERROR: cannot reopen " << fp.jet_file << "; left as it is" << std::endl;
-            if (fin) { fin->Close(); delete fin; }
-            continue;
-        }
-        // A file already processed keeps its old UE branches out of the copy
-        TIter next_branch(jt->GetListOfBranches());
-        while (TObject *b = next_branch())
-        {
-            const std::string name = b->GetName();
-            if (name.compare(0, 8, "reco_ue_") == 0 || name.compare(0, 9, "truth_ue_") == 0) jt->SetBranchStatus(name.c_str(), 0);
-        }
-
-        // The UE is scaled to each jet's area
-        if (!jt->GetBranch("reco_area") || (fp.has_truth && !jt->GetBranch("truth_area")))
-        {
-            std::cerr << "ERROR: " << fp.jet_file << " has no jet areas (reco_area/truth_area): rebuild it with the current"
-                      << " jet finder; left as it is" << std::endl;
-            fin->Close(); delete fin;
-            continue;
-        }
-        std::vector<float> *reco_area = 0, *truth_area = 0;
-        jt->SetBranchAddress("reco_area", &reco_area);
-        if (fp.has_truth) jt->SetBranchAddress("truth_area", &truth_area);
-
-        const std::string tmp_name = fp.jet_file + ".ue_tmp";
+        const std::string tmp_name = jet_file + ".ue_tmp";
         TFile *fout = TFile::Open(tmp_name.c_str(), "RECREATE");
         TTree *out = jt->CloneTree(0);
-        UeBranches reco_br;
-        reco_br.Attach(out, "reco");
-        std::vector<float> truth_ue_E, truth_ue_pt, truth_ue_cone_E, truth_ue_cone_pt;
-        std::vector<int> truth_ue_ncone;
-        if (fp.has_truth)
-        {
-            out->Branch("truth_ue_E", &truth_ue_E);
-            out->Branch("truth_ue_pt", &truth_ue_pt);
-            out->Branch("truth_ue_cone_E", &truth_ue_cone_E);
-            out->Branch("truth_ue_cone_pt", &truth_ue_cone_pt);
-            out->Branch("truth_ue_ncone", &truth_ue_ncone);
-        }
+        UeBranches reco_br, truth_br;
+        reco_br.Attach(out, "reco", true);
+        if (has_truth) truth_br.Attach(out, "truth", false);
 
+        std::vector<float> p_eta, p_phi, p_E;
+        std::vector<int> p_pix;
         const Long64_t n = jt->GetEntries();
         for (Long64_t ev = 0; ev < n; ev++)
         {
             jt->GetEntry(ev);
-            const int pe = ev < (Long64_t)fp.pool_event.size() ? fp.pool_event[ev] : -1;
-            reco_br.Fill(pool, pe, *reco_area, n_max, n_min, reco_sum);
-            if (fp.has_truth)
+            const size_t nr = reco_eta->size(), nt = has_truth ? truth_eta->size() : 0;
+            reco_br.Clear(nr);
+            if (has_truth) truth_br.Clear(nt);
+            if ((nr > 0 || nt > 0) && st->GetEntry(has_entry ? simpletree_entry : ev) > 0)
             {
-                const size_t nj = truth_area->size();
-                const bool done = ev < (Long64_t)fp.truth_E.size() && fp.truth_E[ev].size() == nj;
-                truth_ue_E.assign(nj, -1.f); truth_ue_pt.assign(nj, -1.f); truth_ue_ncone.assign(nj, 0);
-                truth_ue_cone_E.assign(nj, -1.f); truth_ue_cone_pt.assign(nj, -1.f);
-                for (size_t j = 0; j < nj && done; j++)
+                // reco: ECal points, as the reco jets' own inputs (RecoJets.cpp / JetMatcher.cpp, use_points)
+                p_eta.clear(); p_phi.clear(); p_E.clear(); p_pix.clear();
+                for (int i = 0; i < std::min((int)Cal_npts, MAX_PTS) && nr > 0; i++)
                 {
-                    truth_ue_cone_E[j] = fp.truth_E[ev][j]; truth_ue_cone_pt[j] = fp.truth_pt[ev][j]; truth_ue_ncone[j] = 2;
-                    truth_ue_E[j] = (float)(fp.truth_E[ev][j] / kConeArea * truth_area->at(j));
-                    truth_ue_pt[j] = (float)(fp.truth_pt[ev][j] / kConeArea * truth_area->at(j));
-                    n_truth_jets++; truth_ue_sum += truth_ue_E[j];
+                    if (Cal_pt_detid[i] != 0 && Cal_pt_detid[i] != 1) continue;
+                    if (!pass_point_energy_cut(Cal_pt_energy[i], event_sqrt_s_gev)) continue;
+                    const double rho = std::sqrt((double)Cal_pt_x[i] * Cal_pt_x[i] + (double)Cal_pt_y[i] * Cal_pt_y[i]);
+                    p_eta.push_back(std::asinh(Cal_pt_z[i] / rho)); p_phi.push_back(std::atan2(Cal_pt_y[i], Cal_pt_x[i]));
+                    p_E.push_back(Cal_pt_energy[i]); p_pix.push_back(geo.PixelOf(Cal_pt_x[i], Cal_pt_y[i]));
+                }
+                for (size_t j = 0; j < nr; j++)
+                {
+                    const UeResult r = RecoPixelRing(geo, reco_eta->at(j), reco_phi->at(j), p_eta, p_phi, p_E, p_pix);
+                    reco_br.Set(j, r);
+                    n_reco++;
+                    if (r.rho < 0) n_reco_none++; else sum_reco += r.E();
+                }
+                // truth: the EM-only photons the truth jets are built from, full azimuth
+                if (nt > 0)
+                {
+                    p_eta.clear(); p_phi.clear(); p_E.clear();
+                    float vx = 0, vy = 0, vz = 0;
+                    const int nmc = std::min((int)mcpart_num, MAX_MC);
+                    if (FindEmTruthPrimaryVertex(nmc, &mc_idVtx[0], &mc_vx[0], &mc_vy[0], &mc_vz[0], vx, vy, vz))
+                        for (int i = 0; i < nmc; i++)
+                        {
+                            if (!IsEmTruthParticle(mc_geid[i], mc_vx[i], mc_vy[i], mc_vz[i], vx, vy, vz)) continue;
+                            const double pt = std::sqrt((double)mc_px[i] * mc_px[i] + (double)mc_py[i] * mc_py[i]);
+                            if (!(pt > 0)) continue;
+                            const double eta = std::asinh(mc_pz[i] / pt);
+                            if (!InTruthParticleEtaRange(eta)) continue;
+                            p_eta.push_back(eta); p_phi.push_back(std::atan2(mc_py[i], mc_px[i])); p_E.push_back(mc_E[i]);
+                        }
+                    for (size_t j = 0; j < nt; j++)
+                    {
+                        const UeResult r = truth_ring.Estimate(truth_eta->at(j), truth_phi->at(j), p_eta, p_phi, p_E);
+                        truth_br.Set(j, r);
+                        n_truth++;
+                        if (r.rho < 0) n_truth_none++; else sum_truth += r.E();
+                    }
                 }
             }
             out->Fill();
@@ -441,14 +222,16 @@ int main(int argc, char **argv)
         out->Write("", TObject::kOverwrite);
         fout->Close(); delete fout;
         fin->Close(); delete fin;
-
-        if (gSystem->Rename(tmp_name.c_str(), fp.jet_file.c_str()) != 0)
-            std::cerr << "ERROR: could not replace " << fp.jet_file << " with " << tmp_name << std::endl;
+        fs->Close(); delete fs;
+        if (gSystem->Rename(tmp_name.c_str(), jet_file.c_str()) != 0)
+            std::cerr << "ERROR: could not replace " << jet_file << " with " << tmp_name << std::endl;
     }
 
-    reco_sum.Print("reco", minimum_bias ? "fiducial; minimum-bias mode" : "EM-triggered and fiducial", n_min);
-    if (n_truth_files > 0)
-        std::cout << "UnderlyingEvent: " << n_truth_jets << " truth jets estimated from same-event off-axis cones, mean UE (area-scaled) "
-                  << truth_ue_sum / std::max(1L, n_truth_jets) << " GeV" << std::endl;
+    std::cout << "UnderlyingEvent: " << files.size() << " file pairs (" << n_bad << " unusable); " << n_reco << " reco jets, "
+              << n_reco_none << " without a ring, mean UE " << sum_reco / std::max(1L, n_reco - n_reco_none) << " GeV";
+    if (n_truth > 0)
+        std::cout << "; " << n_truth << " truth jets, " << n_truth_none << " without a ring, mean UE "
+                  << sum_truth / std::max(1L, n_truth - n_truth_none) << " GeV";
+    std::cout << std::endl;
     return 0;
 }

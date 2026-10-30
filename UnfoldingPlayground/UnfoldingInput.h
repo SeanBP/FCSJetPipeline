@@ -76,7 +76,7 @@ inline bool LoadJetPairs(const std::vector<std::string> &files, MatchMode mode, 
 
         std::vector<float> *rE = 0, *rpt = 0, *rx = 0, *ry = 0, *reta = 0, *rphi = 0, *rueE = 0, *ruept = 0;
         std::vector<float> *tE = 0, *tpt = 0, *teta = 0, *tphi = 0, *tueE = 0, *tuept = 0;
-        std::vector<int> *rnph = 0, *tnph = 0, *rue_n = 0, *tue_n = 0, *mr = 0, *mt = 0;
+        std::vector<int> *rnph = 0, *tnph = 0, *mr = 0, *mt = 0;
         Int_t em0 = 0, em1 = 0, em2 = 0;
         t->SetBranchStatus("*", 0);
         const char *used[] = {"reco_E", "reco_pt", "reco_x", "reco_y", "reco_eta", "reco_phi", "reco_nphotons", "truth_E", "truth_pt",
@@ -101,14 +101,12 @@ inline bool LoadJetPairs(const std::vector<std::string> &files, MatchMode mode, 
         t->SetBranchAddress("fcsEM2", &em2);
         if (ue)
         {
-            const char *ub[] = {"reco_ue_E", "reco_ue_pt", "reco_ue_nproxy", "truth_ue_E", "truth_ue_pt", "truth_ue_ncone"};
-            for (int k = 0; k < 6; k++) t->SetBranchStatus(ub[k], 1);
+            const char *ub[] = {"reco_ue_E", "reco_ue_pt", "truth_ue_E", "truth_ue_pt"};
+            for (int k = 0; k < 4; k++) t->SetBranchStatus(ub[k], 1);
             t->SetBranchAddress("reco_ue_E", &rueE);
             t->SetBranchAddress("reco_ue_pt", &ruept);
-            t->SetBranchAddress("reco_ue_nproxy", &rue_n);
             t->SetBranchAddress("truth_ue_E", &tueE);
             t->SetBranchAddress("truth_ue_pt", &tuept);
-            t->SetBranchAddress("truth_ue_ncone", &tue_n);
         }
 
         for (Long64_t ev = 0; ev < t->GetEntries(); ev++)
@@ -144,7 +142,7 @@ inline bool LoadJetPairs(const std::vector<std::string> &files, MatchMode mode, 
                 p.rE = rE->at(ri); p.rpt = rpt->at(ri); p.rx = rx->at(ri); p.ry = ry->at(ri);
                 p.reta = reta->at(ri); p.rphi = rphi->at(ri); p.rnph = rnph->at(ri);
                 p.tE = tE->at(ti); p.tpt = tpt->at(ti); p.teta = teta->at(ti); p.tphi = tphi->at(ti); p.tnph = tnph->at(ti);
-                p.has_ue = ue && rue_n->at(ri) > 0 && tue_n->at(ti) > 0;
+                p.has_ue = ue && rueE->at(ri) >= 0 && tueE->at(ti) >= 0;
                 p.rueE = p.has_ue ? rueE->at(ri) : 0.f; p.ruept = p.has_ue ? ruept->at(ri) : 0.f;
                 p.tueE = p.has_ue ? tueE->at(ti) : 0.f; p.tuept = p.has_ue ? tuept->at(ti) : 0.f;
                 p.em_level = em2 ? 2 : (em1 ? 1 : (em0 ? 0 : -1));
