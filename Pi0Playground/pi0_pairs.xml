@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- pi0_pairs: one job per list ({{WORKDIR}}/list_${JOBINDEX}.list, mode ("data" or "sim") in
+     {{WORKDIR}}/mode_${JOBINDEX}.txt: data or sim). Filled in by submit_pi0_pairs.sh. -->
+<job nProcesses="{{NPROC}}">
+    <ResourceUsage>
+        <Memory><MinMemory>3000</MinMemory></Memory>
+    </ResourceUsage>
+    <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
+    <command>
+        module purge
+        module load fastjet-3.3.4
+        module load root-5.34.38
+        cp shared/* jet_scale/JetXSecWeights.h Pi0Playground/pi0_pairs.cpp .
+        g++ -m64 -O2 pi0_pairs.cpp VectorDict.cxx -o pi0_pairs -I. `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11
+        if ( ! -x pi0_pairs ) then
+            echo "build failed"
+            exit 1
+        endif
+        mkdir in
+        set n = 0
+        foreach f ( `cat {{WORKDIR}}/list_${JOBINDEX}.list` )
+            cp $f in/
+            @ n++
+        end
+        ls $PWD/in/*.root > local.list
+        echo "$n files copied"
+        ./pi0_pairs local.list pi0_pairs_${JOBINDEX}.root `cat {{WORKDIR}}/mode_${JOBINDEX}.txt`
+        rm -rf in
+    </command>
+    <SandBox installer="ZIP">
+        <Package>
+            <File>file:./shared</File>
+            <File>file:./jet_scale/JetXSecWeights.h</File>
+            <File>file:./Pi0Playground/pi0_pairs.cpp</File>
+        </Package>
+    </SandBox>
+    <stdout URL="file:{{WORKDIR}}/log/$JOBID.out"/>
+    <stderr URL="file:{{WORKDIR}}/log/$JOBID.err"/>
+    <output fromScratch="pi0_pairs_*.root" toURL="file:{{WORKDIR}}/out/" />
+</job>

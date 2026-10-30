@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MuDst -> SimpleTree with DEFAULT FCS clustering (runMudst_defclu.C), EM-triggered
+     events of {{TRIGFILTER}} (empty = all), {{NPERJOB}} files per job from {{LIST}}. Filled in by submit_defclu.sh. -->
+<job nProcesses="{{NPROC}}">
+    <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
+    <command>
+        stardev
+        cp data_to_jet/FcsTriggerDefs.h Pi0Playground/defclu/runMudst_defclu.C .
+        cp -r data_to_jet/hcal_gain_corrections .
+        @ first = ${JOBINDEX} * {{NPERJOB}} + 1
+        @ last = ${first} + {{NPERJOB}} - 1
+        sed -n "${first},${last}p" {{LIST}} > my_lines.list
+        foreach RAWLINE ( `cat my_lines.list` )
+            set FILEURL = `echo ${RAWLINE} | rev | cut -d'/' -f2- | rev`
+            set LOCALFILE = `basename ${FILEURL}`
+            xrdcp --retry 3 ${FILEURL} ${LOCALFILE}
+            if ( ! -s ${LOCALFILE} ) then
+                echo "ERROR: could not fetch ${FILEURL}"
+                rm -f ${LOCALFILE}
+                continue
+            endif
+            root4star -b -q runMudst_defclu.C\(\"${LOCALFILE}\",-1,-2,\".\",1,0,\"{{TRIGFILTER}}\"\)
+            rm -f ${LOCALFILE}
+        end
+        ls -l SimpleTree_mudst_*.root
+    </command>
+    <SandBox installer="ZIP">
+        <Package>
+            <File>file:./Pi0Playground/defclu/runMudst_defclu.C</File>
+            <File>file:./data_to_jet/FcsTriggerDefs.h</File>
+            <File>file:./data_to_jet/hcal_gain_corrections</File>
+            <File>file:./.sl73_x8664_gcc485</File>
+            <File>file:./StRoot</File>
+        </Package>
+    </SandBox>
+    <stdout URL="file:{{WORKDIR}}/log/$JOBID.out"/>
+    <stderr URL="file:{{WORKDIR}}/log/$JOBID.err"/>
+    <output fromScratch="SimpleTree_mudst_*.root" toURL="file:{{WORKDIR}}/simpletrees/" />
+</job>
