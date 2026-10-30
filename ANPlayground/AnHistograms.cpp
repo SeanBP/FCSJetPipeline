@@ -2,11 +2,12 @@
 // underlying-event step and ApplyCorrections_em_only), so the jet and
 // SimpleTree files need not be kept.
 //
-// Per event: the highest EM trigger level (AnConfig.h) and the spin state
-// (Spin_config); events with neither are dropped. Per jet: a valid
-// calibration (reco_E_corr > 0), the physical cut (pass_physical_jet_cut:
-// E <= sqrt(s)/2, 0 < x_F <= 1) and corrected pT = reco_E_corr / cosh(eta)
-// above kTriggerPtFactor times the event's EM threshold. Each passing jet
+// Per event: no FCS LED (fcs_led), the highest EM trigger level (AnConfig.h)
+// and the spin state (Spin_config); events failing any are dropped. Per jet:
+// a valid calibration (reco_E_corr > 0), the physical cut
+// (pass_physical_jet_cut: E <= sqrt(s)/2, 0 < x_F <= 1), corrected pT =
+// reco_E_corr / cosh(eta) above kJetPtCorrMin and above kTriggerPtFactor
+// times the event's EM threshold. Each passing jet
 // fills x_F (reco_x_F_corr) in
 //   h_xF_<EM level>_<photon class>_<side>_<spin state>
 // e.g. h_xF_EM1_np2_xpos_BuYd. Also written:
@@ -47,8 +48,8 @@ static int RunFromFileName(const std::string &path)
     return std::sscanf(base.c_str(), "jet_output_%d_%d.root", &run, &file_number) == 2 ? run : 0;
 }
 
-enum Cut { kAllJets, kEmLevel, kSpin, kCalibrated, kPhysical, kTriggerPt, kNCuts };
-static const char *const kCutName[kNCuts] = {"all jets", "EM trigger", "spin state", "calibrated", "physical", "pT > 1.1 thr"};
+enum Cut { kAllJets, kNoLed, kEmLevel, kSpin, kCalibrated, kPhysical, kPtMin, kTriggerPt, kNCuts };
+static const char *const kCutName[kNCuts] = {"all jets", "no LED", "EM trigger", "spin state", "calibrated", "physical", "pT > 2", "pT > 1.15 thr"};
 
 int main(int argc, char **argv)
 {
@@ -66,11 +67,12 @@ int main(int argc, char **argv)
     if (t.GetNtrees() == 0) { std::cerr << "ERROR: no files in " << argv[1] << std::endl; return 1; }
     if (!t.GetBranch("reco_E_corr")) { std::cerr << "ERROR: no reco_E_corr; run ApplyCorrections_em_only first" << std::endl; return 1; }
 
-    Int_t spin_config = -1, em[kNEmLevels] = {0};
+    Int_t spin_config = -1, led = 0, em[kNEmLevels] = {0};
     Double_t sqrt_s = 0;
     std::vector<float> *eta = 0, *x = 0, *e_corr = 0, *xf_corr = 0;
     std::vector<int> *nphotons = 0;
     t.SetBranchAddress("Spin_config", &spin_config);
+    t.SetBranchAddress("fcs_led", &led);
     t.SetBranchAddress("event_sqrt_s_gev", &sqrt_s);
     t.SetBranchAddress("fcsEM0", &em[0]);
     t.SetBranchAddress("fcsEM1", &em[1]);
@@ -117,6 +119,8 @@ int main(int argc, char **argv)
         const int spin = SpinState(spin_config);
         const size_t nj = eta->size();
         h_cut->Fill(kAllJets, nj);
+        if (led) continue;
+        h_cut->Fill(kNoLed, nj);
         if (level < 0) continue;
         h_cut->Fill(kEmLevel, nj);
         if (spin < 0) continue;
@@ -131,6 +135,8 @@ int main(int argc, char **argv)
             if (!pass_physical_jet_cut(E, (*eta)[j], sqrt_s)) continue;
             h_cut->Fill(kPhysical);
             const double pt = E / std::cosh((*eta)[j]);
+            if (pt <= kJetPtCorrMin) continue;
+            h_cut->Fill(kPtMin);
             h_pt[level]->Fill(pt);
             if (pt <= pt_min) continue;
             h_cut->Fill(kTriggerPt);

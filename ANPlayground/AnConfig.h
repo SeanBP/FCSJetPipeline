@@ -6,8 +6,8 @@
 #include <cmath>
 
 // ------------------ EM trigger levels ------------------
-// Highest EM trigger fired, as the underlying-event step (ProxyEmLevel in
-// underlying_event/ProxySelection.h): fcsEM2 > fcsEM1 > fcsEM0. With
+// Highest EM trigger fired, as UnderlyingEventPlayground/in_event/
+// in_event_util.h ProxyEmLevel: fcsEM2 > fcsEM1 > fcsEM0. With
 // prescales a lower flag can be missing, so the highest flag present counts.
 // fcsEM3 (runs 23101059-23108024 only) and the fcsEM*_tpc copies are not
 // used; no event of run 23007048 fired only a _tpc copy.
@@ -22,8 +22,13 @@ static const char *const kEmLevelName[kNEmLevels] = {"EM0", "EM1", "EM2"};
 static const double kEmThresholdGeV[kNEmLevels] = {1.5, 2.6, 3.7};
 
 // A jet counts only if its corrected pT is above this fraction of its
-// event's highest EM trigger threshold (above the trigger turn-on)
-static const double kTriggerPtFactor = 1.1;
+// event's highest EM trigger threshold (above the trigger turn-on); 1.15 as
+// the FMS EM-jet analysis (UnderlyingEventPlayground/fms_emjet_reference.txt)
+static const double kTriggerPtFactor = 1.15;
+
+// Corrected jet pT minimum (GeV), after UE subtraction and calibration, as
+// the FMS analysis; the same value as the reco cut at jet finding
+static const double kJetPtCorrMin = 2.0;
 
 // ------------------ Point multiplicity ------------------
 // reco_nphotons (FCS points above point_energy_min in the jet) classes:

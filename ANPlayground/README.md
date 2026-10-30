@@ -23,7 +23,7 @@ SimpleTrees are deleted after step 3, and jet files after step 5.
   - EM levels and thresholds. `kEmThresholdGeV` is a PLACEHOLDER: about
     1.5 / 2.6 / 3.7 GeV, from where EM1 and EM2 turn on in run 23007048,
     scaled by the stage-2 thresholds 63 / 111 / 158.
-  - The 1.1 × threshold factor.
+  - The 1.15 × threshold factor (as the FMS EM-jet analysis) and the 2 GeV corrected pT minimum.
   - Point-multiplicity classes, spin states and x_F bins.
 - **`AnHistograms.cpp`**: fills, per jet, `h_xF_<EM level>_<np class>_<side>_<spin>`.
   - EM level: the highest of fcsEM0/1/2 fired. The `_tpc` copies and
@@ -32,7 +32,7 @@ SimpleTrees are deleted after step 3, and jet files after step 5.
   - Side: the sign of x.
   - Spin: `Spin_config` 5/6/9/10; events with other values are dropped.
   - Cuts: calibrated (`reco_E_corr > 0`), `pass_physical_jet_cut`, and
-    corrected pT = `reco_E_corr / cosh(eta)` > 1.1 × that event's threshold.
+    corrected pT = `reco_E_corr / cosh(eta)` > 2 GeV and > 1.15 × that event's threshold; events with `fcs_led` set are dropped.
   - Also written: a cut flow, events per spin state per EM level, corrected
     pT before the threshold cut, and the run numbers.
   - The classes are kept apart so they can be combined when A_N is formed.
