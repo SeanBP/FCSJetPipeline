@@ -175,15 +175,18 @@ fit, and the closure.
 
 1. `JetEnergyScaleFineGrid_em_only`: on a 2.5 cm grid (5 cm match radius,
    10 cm from 37 GeV, where forward jets come from the heaviest-weight low-ptHat
-   events and points are short of statistics) and 20 truth-energy bins (3-100 GeV), the cross-section-weighted median of
-   scale = (reco_E - reco_ue_E) / (truth_E - truth_ue_E) and of the response.
-   Medians close exactly under numerical inversion (arXiv:1609.05195).
+   events and points are short of statistics) and 20 truth-energy bins (3-100 GeV), the cross-section-weighted Gaussian-core mean
+   (`GaussCore.h`) of scale = (reco_E - reco_ue_E) / (truth_E - truth_ue_E) and
+   of the response, where n_eff >= 50 and the fit is good (converged, chi2/ndf < 3,
+   sigma/mean < 0.35); elsewhere the peak of a kernel
+   density (`GaussCoreKernelPeak`). The closure is judged with the same two estimators,
+   and closes up to the expected term of arXiv:1609.05195 Eq. 24.
    `noue` turns the UE subtraction off (for checks only).
 2. `CalibrationMap_em_only`: describes the scale vs response as
    `A + B lnE + C ln^2E + D ln^3E`, with one shared shape (C, D from a single
    least-squares fit over every position, A and B free per position) and A, B
    per position (the level and slope); energy bins with n_eff < 3 are left
-   out (a median of one or two effective jets is biased). The fits are linear and exact, so the
+   out (an estimate from one or two effective jets is biased). The fits are linear and exact, so the
    step takes about a second. The A, B maps are smoothed (as the scale at
    3 and 30 GeV) and masked to the fiducial region. The evaluators clamp E to
    the range of all fitted responses [Emin, Emax] (the polynomial has no
@@ -191,9 +194,13 @@ fit, and the closure.
    `Emin`, `Emax` and bins `{i, j, A, B}`; the evaluators
    refuse maps of earlier forms (including those with a `K`).
 3. `jes_closure`: the map applied in memory exactly as `jet_calibration`
-   does, on the same UE-subtracted weighted jets: weighted medians of
-   E_corr / E_truth per truth-energy bin and radial band, and the map against
-   the medians it was fitted to (`jes_closure.txt`, `.root`, `.png`).
+   does, on the same UE-subtracted weighted jets: the Gaussian core (kernel peak
+   below n_eff 250, out to 100 GeV) of E_corr / E_truth per truth-energy bin and
+   radial band, with bootstrap errors and the Eq. 24
+   expectation, and the map against the points it was fitted to
+   (`jes_closure.txt`, `.root`, `.png`). The table also gives the energy resolution
+   before and after correction (`RES` rows): the half-width of the shortest interval
+   holding 68% of the weight, over the central value.
 
    Known limitation: below about 9 GeV the response varies within an ECal
    tower (about 8% higher at tower boundaries than at centres, 3-8.6 GeV;
@@ -210,8 +217,12 @@ ECAL+HCAL version, with a log-quadratic model and Gaussian-fit modes;
 ## jet_calibration
 
 ```
-./submit_jet_calibration_em_only.sh -i <jettrees_dir> -c <json> -j <njobs> [-l <label>] [-k <0|1>]
+./submit_jet_calibration_em_only.sh -i <jettrees_dir> -j <njobs> [-c <json>] [-l <label>] [-k <0|1>]
 ```
+
+The standard JES map is tracked at
+`jet_calibration/JES_Lookups/JetEnergyScale_lookup_em_only.json` and is the
+default for `-c`. It is a copy of `jes_points/jesmap_pixring_v1`.
 
 Adds `reco_E_corr` and `reco_x_F_corr` to every file **in place** (asks for
 confirmation). The EM-only map is evaluated at the UE-subtracted energy,

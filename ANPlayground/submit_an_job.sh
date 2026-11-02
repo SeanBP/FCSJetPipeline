@@ -13,10 +13,9 @@
 #       its own job's files of one run). Also sets the job's scratch use,
 #       ~0.1 GB per file of SimpleTree plus one MuDst (~1.2 GB).
 #   -c  EM-only point-jet JES lookup JSON, default
-#       /star/data01/pwg/seanp/jes_points/jesmap_v3/JetEnergyScale_lookup_points_ue_v3_lognormal.json
+#       jet_calibration/JES_Lookups/JetEnergyScale_lookup_em_only.json
 #       (copied into ANPlayground/jes/ for the SandBox). It must be a
-#       "logcubic" map; the default is of the earlier log-normal form and is
-#       refused until a UE-subtracted log-cubic map replaces it
+#       "logcubic" map
 #   -t  FCS trigger names an event must have fired, default
 #       fcsEM0,fcsEM1,fcsEM2 (the EM levels the UE step and the histograms use)
 #   -l  label for the generated XML, default "an"
@@ -28,7 +27,7 @@ set -e
 LISTFILE=""
 OUTDIR=""
 FILES_PER_JOB=40
-CALIB=/star/data01/pwg/seanp/jes_points/jesmap_v3/JetEnergyScale_lookup_points_ue_v3_lognormal.json
+CALIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../jet_calibration/JES_Lookups" && pwd)/JetEnergyScale_lookup_em_only.json"
 TRIGGER_FILTER="fcsEM0,fcsEM1,fcsEM2"
 LABEL="an"
 KEEPLOGS=0

@@ -1,8 +1,6 @@
 // Step 1 of the EM-only JES calibration: per position on a fine x-y grid and
-// per truth-energy bin, the weighted median scale and response of matched
-// EM-only jets, written to a "bins" tree for CalibrationMap_em_only.
-// Medians give exact closure under numerical inversion for any response
-// shape (Cukierman & Nachman, arXiv:1609.05195, Eq. 35).
+// per truth-energy bin, the scale and response of matched EM-only jets (see
+// Estimator below), written to a "bins" tree for CalibrationMap_em_only.
 //
 // The underlying event is subtracted at both levels by default:
 // scale = (reco_E - reco_ue_E) / (truth_E - truth_ue_E), binned in subtracted
@@ -10,19 +8,17 @@
 // a calibration sample (sim_to_jet -C 1, with its in-job pixel-ring UE). A file
 // without the UE branches is an error unless "noue" is given.
 //
-// Estimator: the weighted median (default). With "gauss" in argv[8], points
-// whose n_eff is at least gauss_min_neff (argv[9], default 50) use the
-// Gaussian-core mean instead (jet_scale/GaussCore.h, default window) where the
-// fit converges with chi2/ndf < gauss_max_chi2 and sigma < gauss_max_sigma
-// and sigma / mean < gauss_max_rel_sigma (a Gaussian does not describe the
-// broad, flat-topped response at the edges);
-// elsewhere (low statistics or a poor fit) the weighted numerical mean. The
-// bins tree records which (branch "estimator": 0 median, 1 Gaussian core,
-// 2 weighted mean).
+// Estimator: points whose n_eff is at least gauss_min_neff (argv[8], default 50)
+// use the Gaussian-core mean (jet_scale/GaussCore.h, default window) where the
+// fit converges with chi2/ndf < gauss_max_chi2 and sigma / mean <
+// gauss_max_rel_sigma (a Gaussian does not describe the broad, flat-topped
+// response at the edges); elsewhere (low statistics or a poor fit) the peak of
+// a kernel density (GaussCoreKernelPeak). The bins tree records which (branch
+// "estimator": 1 Gaussian core, 2 kernel peak).
 //
 // Usage: JetEnergyScaleFineGrid_em_only <jettrees_dir/> [match_radius_cm]
 //        [E0_GeV] [Emax_GeV] [noue] [match_radius_high_cm] [E_high_pool_GeV]
-//        [median|gauss] [gauss_min_neff]
+//        [gauss_min_neff]
 //        (an empty string "" keeps that slot's default)
 
 #include <TFile.h>
@@ -154,7 +150,7 @@ struct BinData
           scale_mu_err(NAN),
           resp_mu_err(NAN) {}
 
-    int estimator = 0; // 0 median, 1 Gaussian core, 2 weighted mean
+    int estimator = 0; // 1 Gaussian core, 2 kernel peak
 
     BinData(double s, double r, double se, double re)
         : scale_mu(s),
@@ -197,14 +193,14 @@ double median_of(const std::vector<double> &v, const std::vector<double> &w)
     return v[order.back()];
 }
 
-// Gaussian-core mean (GaussCore.h) where it converges, else the median. The
+// Gaussian-core mean (GaussCore.h), if the fit is good. The
 // error is the fit's, floored at the median's error / 1.2533 (the error of a
 // Gaussian mean for the same width and n_eff), so it cannot collapse.
 // Quality cuts on the Gaussian core: chi2/ndf and the relative width
 // (sigma / mean, so the same cut serves the scale and the response in GeV)
 const double gauss_max_chi2 = 3.0, gauss_max_rel_sigma = 0.35; // the outer-ring raw response is ~15% wide; the fit width is bounded by GaussCore anyway
 long n_rej_conv = 0, n_rej_chi2 = 0, n_rej_sigma = 0;
-FitResult core_or_median(const std::vector<double> &v, const std::vector<double> &w, const FitResult &med, bool &used_core)
+FitResult core_fit(const std::vector<double> &v, const std::vector<double> &w, const FitResult &med, bool &used_core)
 {
     used_core = false;
     GaussCoreResult c = GaussCoreFit(v, w);
@@ -219,23 +215,8 @@ FitResult core_or_median(const std::vector<double> &v, const std::vector<double>
     return r;
 }
 
-// Weighted numerical mean, with error sqrt(weighted variance / n_eff)
-FitResult mean_fit(const std::vector<double> &v, const std::vector<double> &w)
-{
-    FitResult r;
-    double sw = 0, s = 0;
-    for (size_t i = 0; i < v.size(); i++) { sw += w[i]; s += w[i] * v[i]; }
-    if (!(sw > 0)) return r;
-    const double m = s / sw;
-    double var = 0;
-    for (size_t i = 0; i < v.size(); i++) var += w[i] * (v[i] - m) * (v[i] - m);
-    var /= sw;
-    r.mu = m;
-    r.sigma = std::sqrt(var);
-    r.mu_err = std::sqrt(var / std::max(1.0, EffectiveEntries(w)));
-    return r;
-}
-
+// Weighted median and its MAD width: the points' error scale, and the gate on
+// which points can be estimated at all
 FitResult median_fit(const std::vector<double> &v, const std::vector<double> &w)
 {
     FitResult r;
@@ -298,11 +279,10 @@ int main(int argc, char** argv)
         match_radius_high = std::atof(argv[6]);
     if (argc > 7 && argv[7][0] != '\0')
         E_high_pool = std::atof(argv[7]);
-    //   argv[8]: "gauss" -- Gaussian-core mean where n_eff >= argv[9] (default 30)
-    const bool use_gauss = argc > 8 && std::string(argv[8]) == "gauss";
-    const double gauss_min_neff = (argc > 9 && argv[9][0] != '\0') ? std::atof(argv[9]) : 50.0;
-    std::cout << "Estimator: " << (use_gauss ? "Gaussian core where n_eff >= " + std::to_string(gauss_min_neff) + " and the fit is good, else weighted mean" : std::string("median")) << std::endl;
-    long n_core = 0, n_core_tried = 0, n_mean = 0;
+    //   argv[8]: gauss_min_neff
+    const double gauss_min_neff = (argc > 8 && argv[8][0] != '\0') ? std::atof(argv[8]) : 50.0;
+    std::cout << "Estimator: Gaussian core where n_eff >= " << gauss_min_neff << " and the fit is good, else kernel peak" << std::endl;
+    long n_core = 0, n_core_tried = 0, n_peak = 0;
     std::cout << "Pooling radius " << match_radius << " cm";
     if (E_high_pool < 1e9)
         std::cout << ", " << match_radius_high << " cm for truth-energy bins from " << E_high_pool << " GeV";
@@ -521,24 +501,24 @@ int main(int argc, char** argv)
         if (!std::isfinite(sc.mu) || !std::isfinite(resp.mu))
             continue;
 
-        int est = 0;
-        if (use_gauss)
+        bool ok_s = false, ok_r = false;
+        FitResult sc_c, resp_c;
+        if (EffectiveEntries(w_vals) >= gauss_min_neff)
         {
-            bool ok_s = false, ok_r = false;
-            FitResult sc_c, resp_c;
-            if (EffectiveEntries(w_vals) >= gauss_min_neff)
-            {
-                n_core_tried++;
-                sc_c = core_or_median(scale_vals, w_vals, sc, ok_s);
-                resp_c = core_or_median(resp_vals, w_vals, resp, ok_r);
-            }
-            if (ok_s && ok_r) { sc = sc_c; resp = resp_c; est = 1; n_core++; }
-            else
-            {
-                // low statistics or a poor fit: the weighted numerical mean
-                FitResult sm = mean_fit(scale_vals, w_vals), rm = mean_fit(resp_vals, w_vals);
-                if (std::isfinite(sm.mu) && std::isfinite(rm.mu)) { sc = sm; resp = rm; est = 2; n_mean++; }
-            }
+            n_core_tried++;
+            sc_c = core_fit(scale_vals, w_vals, sc, ok_s);
+            resp_c = core_fit(resp_vals, w_vals, resp, ok_r);
+        }
+        int est = 1;
+        if (ok_s && ok_r) { sc = sc_c; resp = resp_c; n_core++; }
+        else
+        {
+            // low statistics or a poor fit: the kernel peak. Its error is the median's
+            // x 1.25, about the ratio of their spreads when cells are subsampled to
+            // n_eff 10-50 (0.97-1.27)
+            sc.mu = GaussCoreKernelPeak(scale_vals, w_vals); sc.mu_err *= 1.25;
+            resp.mu = GaussCoreKernelPeak(resp_vals, w_vals); resp.mu_err *= 1.25;
+            est = 2; n_peak++;
         }
 
         bin_mu_map[it->first] = BinData(sc.mu, resp.mu, sc.mu_err, resp.mu_err);
@@ -615,9 +595,8 @@ int main(int argc, char** argv)
     t.Write();
     fout.Close();
 
-    if (use_gauss)
-        std::cout << "Gaussian core used for " << n_core << " points (of " << n_core_tried << " with n_eff >= " << gauss_min_neff << "); weighted mean for " << n_mean
-                  << "\n  rejected core fits (scale and response counted separately): not converged " << n_rej_conv << ", chi2/ndf >= " << gauss_max_chi2
-                  << " " << n_rej_chi2 << ", sigma/mean >= " << gauss_max_rel_sigma << " " << n_rej_sigma << std::endl;
+    std::cout << "Gaussian core used for " << n_core << " points (of " << n_core_tried << " with n_eff >= " << gauss_min_neff << "); kernel peak for " << n_peak
+              << "\n  rejected core fits (scale and response counted separately): not converged " << n_rej_conv << ", chi2/ndf >= " << gauss_max_chi2
+              << " " << n_rej_chi2 << ", sigma/mean >= " << gauss_max_rel_sigma << " " << n_rej_sigma << std::endl;
     std::cout << "Output written to jet_calibration.root" << std::endl;
 }

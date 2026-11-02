@@ -1,5 +1,5 @@
 // Step 2 of the EM-only JES calibration: builds the JES lookup JSON from the
-// "bins" tree of JetEnergyScaleFineGrid_em_only (per-bin weighted medians).
+// "bins" tree of JetEnergyScaleFineGrid_em_only (Gaussian core or kernel peak).
 // The scale vs response at each (x,y) position bin is described by
 //   scale(E) = A + B lnE + C ln^2 E + D ln^3 E
 // with A and B per position and C and D shared by the whole face: the shape
@@ -17,6 +17,14 @@
 // slope are carried along that shape (a per-position clamp held the outer
 // positions, with no reliable points above about 40 GeV, flat from there,
 // overcorrecting their high-E jets by up to 5%).
+//
+// A log-polynomial form is used, following ATLAS Collaboration, "Jet energy
+// measurement with the ATLAS detector in proton-proton collisions at sqrt(s) =
+// 7 TeV", Eur. Phys. J. C 73 (2013) 2304, arXiv:1112.6426, Eq. 9. The order is
+// the lowest that describes the shape: on jesmap_pixring_v1 removing
+// the cubic term worsens the global chi2 by 956 and shifts the scale by about
+// 1% at the ends of the energy range (D is small only because ln^3 E is large:
+// the D term is -0.295 at 100 GeV).
 //
 // The JSON carries "model": "logcubic", the global "C", "D", "Emin" and
 // "Emax", and bins {i, j, A, B} (read by jet_calibration/ApplyCorrections_em_only.cpp
@@ -55,8 +63,8 @@ const double SCALE_SANITY_MAX = 1.5;
 // Positions with fewer valid energy bins are not fit (they are filled by the smoothing)
 const int MIN_POINTS = 4;
 
-// Energy bins with a smaller Kish effective count are not used: a weighted
-// median of one or two effective jets is biased (jesmap_nofilt_raw: the 417
+// Energy bins with a smaller Kish effective count are not used: an estimate
+// from one or two effective jets is biased (2026-10 no-UE map: the 417
 // bins below 3 sit 0.5-0.9% off the map, about 4 sigma; above 3 the pulls are
 // about 1 at every n_eff). Bins down to n_eff 3 need the MAD floor of
 // JetEnergyScaleFineGrid_em_only (27 Oct 2026); with the bare weighted MAD

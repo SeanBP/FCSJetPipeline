@@ -3,8 +3,8 @@
 <!--
     EM-only jet-energy-scale calibration: a folder of EM-only sim_to_jet
     JetTrees (-E 1, UE branches at both levels) -> JSON lookup table.
-      1. JetEnergyScaleFineGrid_em_only: weighted median scale/response of
-         matched jets on a fine (E,x,y) grid -> jet_calibration.root
+      1. JetEnergyScaleFineGrid_em_only: Gaussian-core scale/response
+         (kernel peak where there is no good core) of matched jets on a fine (E,x,y) grid -> jet_calibration.root
       2. CalibrationMap_em_only: scale = A + B lnE + C ln^2E + D ln^3E with
          C, D from one fit over the face and A, B per (x,y) bin, smoothed ->
          JSON ("model": "logcubic", applied by jet_calibration_em_only.xml)
@@ -64,7 +64,8 @@
             `fastjet-config --cxxflags --libs` -std=c++11
 
         echo "Running JetEnergyScaleFineGrid_em_only..."
-        ./JetEnergyScaleFineGrid_em_only "${INDIR}"
+        # Gaussian-core mean where n_eff >= 50 and the fit is good, else the kernel peak
+        ./JetEnergyScaleFineGrid_em_only "${INDIR}" "" "" "" "" "" "" 50
 
         echo "Compiling CalibrationMap_em_only..."
         g++ -m64 CalibrationMap_em_only.cpp -o CalibrationMap_em_only \
@@ -73,13 +74,13 @@
         echo "Running CalibrationMap_em_only..."
         ./CalibrationMap_em_only jet_calibration.root {{JSON_NAME}}
 
-        # Closure on the same UE-subtracted jets (weighted medians of E_corr / E_truth,
-        # and the map against the medians it was fitted to)
+        # Closure on the same UE-subtracted jets (Gaussian core or kernel peak of
+        # E_corr / E_truth, and the map against the points it was fitted to)
         echo "Compiling jes_closure..."
         g++ -m64 -O2 jes_closure.cpp VectorDict.cxx -o jes_closure \
             `root-config --cflags --libs` \
             `fastjet-config --cxxflags --libs` -std=c++11
-        ls ${INDIR}*.root > closure_files.list
+        find "${INDIR}" -maxdepth 1 -name "*.root" | sort > closure_files.list
         ./jes_closure closure_files.list {{JSON_NAME}} ue jes_closure jet_calibration.root >&amp;! jes_closure.txt
         tail -40 jes_closure.txt
 
@@ -113,6 +114,8 @@
 
     <output fromScratch="jet_calibration.root" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="{{JSON_NAME}}" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="{{JSON_NAME}}.direct_fits.csv" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="{{JSON_NAME}}.chi2.csv" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="jes_closure.txt" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="jes_closure.root" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="jes_closure.png" toURL="file:{{OUTDIR}}/" />

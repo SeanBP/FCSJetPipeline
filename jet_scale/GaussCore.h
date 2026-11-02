@@ -56,6 +56,40 @@ inline double GaussCoreMedian(std::vector<std::pair<double, double>> vw)
     return vw.back().first;
 }
 
+// Peak of a weighted Gaussian kernel density, bandwidth 0.9 x MAD width x n_eff^(-1/5)
+// (Silverman's rule), searched over median +- 4 MAD widths: a mode that no single jet can define
+inline double GaussCoreKernelPeak(const std::vector<double> &v, const std::vector<double> &w, double sigma_floor = 0.002)
+{
+    if (v.empty()) return NAN;
+    std::vector<std::pair<double, double>> vw(v.size());
+    double sw = 0, sw2 = 0;
+    for (size_t i = 0; i < v.size(); i++) { vw[i] = {v[i], w[i]}; sw += w[i]; sw2 += w[i] * w[i]; }
+    if (!(sw > 0)) return NAN;
+    const double med = GaussCoreMedian(vw);
+    for (size_t i = 0; i < v.size(); i++) vw[i].first = std::fabs(v[i] - med);
+    const double s = std::max(1.4826 * GaussCoreMedian(vw), sigma_floor);
+    const double h = 0.9 * s * std::pow(sw * sw / sw2, -0.2);
+    const int nb = 400;
+    const double x0 = med - 4 * s, bw = 8 * s / nb;
+    std::vector<double> c(nb, 0.0);
+    for (size_t i = 0; i < v.size(); i++)
+    {
+        const int b = (int)std::floor((v[i] - x0) / bw);
+        if (b >= 0 && b < nb) c[b] += w[i];
+    }
+    const int rad = (int)std::ceil(3 * h / bw);
+    std::vector<double> k(rad + 1);
+    for (int q = 0; q <= rad; q++) k[q] = std::exp(-0.5 * q * bw * q * bw / (h * h));
+    double best = -1, peak = med;
+    for (int b = 0; b < nb; b++)
+    {
+        double f = 0;
+        for (int q = std::max(0, b - rad); q <= std::min(nb - 1, b + rad); q++) f += c[q] * k[std::abs(q - b)];
+        if (f > best) { best = f; peak = x0 + (b + 0.5) * bw; }
+    }
+    return peak;
+}
+
 // keep_hist / keep_fit, if given, receive the last iteration's histogram and
 // function (owned by the caller), for plotting
 inline GaussCoreResult GaussCoreFit(const std::vector<double> &v, const std::vector<double> &w, const GaussCoreConfig &cfg = GaussCoreConfig(),

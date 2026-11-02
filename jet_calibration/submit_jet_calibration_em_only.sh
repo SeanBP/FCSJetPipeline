@@ -3,24 +3,24 @@
 # counterpart of submit_jet_calibration.sh (same folder); the JSON must come
 # from submit_jet_scale_em_only.sh, not submit_jet_scale.sh).
 # Usage:
-#   ./submit_jet_calibration_em_only.sh -i <jettrees_dir> -c <calib_json> -j <nprocesses> [-l <label>] [-k <0|1>]
+#   ./submit_jet_calibration_em_only.sh -i <jettrees_dir> -j <nprocesses> [-c <calib_json>] [-l <label>] [-k <0|1>]
 #
 #   -i  absolute path to a folder of jet_output_*.root (JetTrees) files;
 #       every file in it is modified in place (no undo)
-#   -c  absolute path to the calibration JSON lookup table
+#   -c  absolute path to the calibration JSON lookup table, default the
+#       standard map tracked in JES_Lookups/ (same folder)
 #   -j  number of parallel jobs to evenly split the folder's files across
 #   -l  short label for the generated XML's filename, default "run"
 #   -k  1 = save stdout/stderr under <jettrees_dir>/log/, 0 = discard, default 0
 #
 # Example:
 #   ./submit_jet_calibration_em_only.sh -i /star/data01/pwg/seanp/pipeline_output/em_only_production \
-#       -c /star/data01/pwg/seanp/em_only_cal/JetEnergyScale_lookup_em_only.json \
 #       -j 10
 
 set -e
 
 JETTREES_DIR=""
-CALIB_JSON=""
+CALIB_JSON="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/JES_Lookups/JetEnergyScale_lookup_em_only.json"
 NPROCESSES=""
 LABEL="run"
 KEEPLOGS=0
@@ -39,7 +39,7 @@ while getopts "i:c:j:l:k:h" opt; do
   esac
 done
 
-if [ -z "$JETTREES_DIR" ] || [ -z "$CALIB_JSON" ] || [ -z "$NPROCESSES" ]; then
+if [ -z "$JETTREES_DIR" ] || [ -z "$NPROCESSES" ]; then
     echo "Missing required argument. Run with -h for usage."
     exit 1
 fi

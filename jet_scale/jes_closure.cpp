@@ -2,25 +2,31 @@
 // cross-section-weighted simulation: applies the map in memory exactly as
 // jet_calibration/ApplyCorrections_em_only.cpp does (bilinear interpolation
 // of A, B at the jet's |x|, y; one evaluation at the jet's own energy
-// clamped to the map's [Emin, Emax]; E_corr = E / scale) and reports the weighted median of
-// E_corr / E_truth in bins of truth energy, for all positions and three
-// radial bands. The map is built from weighted medians, so the closure has
-// to be weighted too (FCSJetAnalysis/CalibrationAnalysis_em.cpp is not).
+// clamped to the map's [Emin, Emax]; E_corr = E / scale) and reports the central
+// value of E_corr / E_truth in bins of truth energy, for all positions and three
+// radial bands, with the estimators the map is built from (arXiv:1609.05195,
+// Sec. 2.1): the Gaussian-core mean (jet_scale/GaussCore.h) where the bin has
+// n_eff >= core_min_neff, and below that, where the fit can lock onto a single
+// heavily weighted jet (widths under 0.01, against 0.016 or more above it), the
+// kernel peak (GaussCoreKernelPeak). The bootstrap spread is printed and drawn as
+// the error, since the fit's own error shrinks with the same lock-on.
 //
-// Closure is defined with the central tendency the map was built from
-// (Cukierman & Nachman, arXiv:1609.05195, Sec. 2.1), so each table also gives
-// the Gaussian-core mean (jet_scale/GaussCore.h, the "gauss" map estimator;
-// a fit to the core picks out the mode) before and after, its width, and the
-// first-order mode non-closure expected from the inversion itself (their
-// Eq. 24): C_mo ~ 1 + f''(x) / f'(x)^3 sigma~(x)^2 / x, with f(x) = R_mo(x) x
-// from the cores before correction (finite differences between bins) and
-// sigma~ = core width x x. A median map closes exactly in the median; a
-// Gaussian-core map closes in the mode only up to this term.
+// The table also gives the core's width and the first-order non-closure
+// expected from the inversion itself (their Eq. 24): C_mo ~ 1 + f''(x) / f'(x)^3
+// sigma~(x)^2 / x, with f(x) = R_mo(x) x from the cores before correction (finite
+// differences between bins) and sigma~ = core width x x.
 //
 // With "ue" the map is taken to be built from UE-subtracted energies (the
 // default of JetEnergyScaleFineGrid_em_only): reco and truth energies are both
 // UE subtracted and only pairs with both estimates are used. With "noue" raw
 // energies are used throughout.
+//
+// It also prints the jet energy resolution per truth-energy bin and band, before
+// and after correction, as "RES" rows at the end (plot_jes_resolution.C draws
+// them): sigma_eff / central value, with sigma_eff the half-width of the shortest
+// interval holding 68.27% of the weight (EffWidth) and bootstrap errors. The core's
+// width is no resolution: it follows only the peak (9% at 10 GeV, against
+// sigma_eff 25%) and collapses where the fit locks onto a heavily weighted jet.
 //
 // It also writes <output_base>.root with the 2D histograms of
 // FCSJetAnalysis/CalibrationAnalysis_em.cpp, same names and binning
@@ -29,7 +35,7 @@
 // for matched jets inside the reco fiducial region where the map is defined.
 //
 // With a fifth argument, the jet_calibration.root the map was built from, it
-// also compares the map with the per-bin medians it was fitted to: the
+// also compares the map with the points it was fitted to: the
 // n_eff-weighted mean of scale_mu - map(x, y, response_mu) per truth-energy
 // bin and radial band. A residual there is a failure of the fitted form (or of
 // the smoothing); a non-closure without one comes from the inversion itself.
@@ -42,6 +48,7 @@
 #include <TStyle.h>
 #include <TCanvas.h>
 #include <TGraphErrors.h>
+#include <TRandom3.h>
 #include <TH1F.h>
 #include <TLegend.h>
 #include <TLatex.h>
@@ -168,14 +175,64 @@ static double Scale(const Map &m, double x, double y, double E)
     return p[0] + l * (p[1] + l * (m.C + l * m.D));
 }
 
-static double WeightedMedian(std::vector<std::pair<double, double> > &v)
+static const double core_min_neff = 250;
+
+// The bin's central value: Gaussian core, or kernel peak below core_min_neff
+static double Central(const std::vector<double> &v, const std::vector<double> &w, bool use_core)
 {
-    std::sort(v.begin(), v.end());
+    return use_core ? GaussCoreFit(v, w).mu : GaussCoreKernelPeak(v, w);
+}
+
+// Spread of the central value over bootstrap resamples of the bin (fewer for the big low-energy bins)
+static double CentralBootstrap(const std::vector<double> &v, const std::vector<double> &w, bool use_core, TRandom3 &rnd)
+{
+    const int nboot = v.size() > 20000 ? 20 : 100;
+    std::vector<double> bv(v.size()), bw(v.size());
+    double s = 0, s2 = 0;
+    int n = 0;
+    for (int ib = 0; ib < nboot; ib++)
+    {
+        for (size_t i = 0; i < v.size(); i++) { const size_t j = rnd.Integer(v.size()); bv[i] = v[j]; bw[i] = w[j]; }
+        const double c = Central(bv, bw, use_core);
+        if (std::isfinite(c)) { s += c; s2 += c * c; n++; }
+    }
+    return n > 1 ? std::sqrt(std::max(0.0, s2 / n - (s / n) * (s / n))) : NAN;
+}
+
+// Half-width of the shortest interval holding 68.27% of the weight
+static double EffWidth(const std::vector<double> &v, const std::vector<double> &w)
+{
+    std::vector<std::pair<double, double> > a(v.size());
     double tot = 0;
-    for (size_t i = 0; i < v.size(); i++) tot += v[i].second;
-    double cum = 0;
-    for (size_t i = 0; i < v.size(); i++) { cum += v[i].second; if (cum >= 0.5 * tot) return v[i].first; }
-    return NAN;
+    for (size_t i = 0; i < v.size(); i++) { a[i] = std::make_pair(v[i], w[i]); tot += w[i]; }
+    std::sort(a.begin(), a.end());
+    double best = NAN, run = 0;
+    size_t r = 0;
+    for (size_t l = 0; l < a.size(); l++)
+    {
+        while (r < a.size() && run < 0.6827 * tot) run += a[r++].second;
+        if (run < 0.6827 * tot) break;
+        const double width = a[r - 1].first - a[l].first;
+        if (!(width >= best)) best = width;
+        run -= a[l].second;
+    }
+    return 0.5 * best;
+}
+
+// Spread of EffWidth over bootstrap resamples of the bin (fewer for the big low-energy bins)
+static double EffWidthBootstrap(const std::vector<double> &v, const std::vector<double> &w, TRandom3 &rnd)
+{
+    const int nboot = v.size() > 20000 ? 20 : 100;
+    std::vector<double> bv(v.size()), bw(v.size());
+    double s = 0, s2 = 0;
+    int n = 0;
+    for (int ib = 0; ib < nboot; ib++)
+    {
+        for (size_t i = 0; i < v.size(); i++) { const size_t j = rnd.Integer(v.size()); bv[i] = v[j]; bw[i] = w[j]; }
+        const double c = EffWidth(bv, bw);
+        if (std::isfinite(c)) { s += c; s2 += c * c; n++; }
+    }
+    return n > 1 ? std::sqrt(std::max(0.0, s2 / n - (s / n) * (s / n))) : NAN;
 }
 
 int main(int argc, char **argv)
@@ -247,24 +304,37 @@ int main(int argc, char **argv)
     TCanvas c("c", "", 1400, 1000);
     c.Divide(2, 2, 0.001, 0.001);
     std::vector<TObject *> keep;
+    // central values and their errors, kept for the resolution: [region][0 before, 1 after][bin]
+    std::vector<std::vector<std::vector<double> > > cen(nreg, std::vector<std::vector<double> >(2, std::vector<double>(nb, NAN))), cen_err = cen;
     for (int g = 0; g < nreg; g++)
     {
-        std::cout << "\n== " << reg_name[g] << " ==\n  truth E (GeV)    jets   median scale before   after    core before  after  [core width]  Eq.24 C_mo" << std::endl;
-        // Gaussian cores before / after, and the Eq. 24 expectation
+        std::cout << "\n== " << reg_name[g] << " ==\n  truth E (GeV)    jets   before    after  [core width]  Eq.24 C_mo  boot before  after  n_eff  (1 core, 2 kernel peak; core needs n_eff >= " << core_min_neff << ")" << std::endl;
+        // central values before / after, and the Eq. 24 expectation
+        std::vector<double> mb(nb, NAN), ma(nb, NAN), eb_b(nb, NAN), eb_a(nb, NAN), ne(nb, 0.0);
         std::vector<GaussCoreResult> cb(nb), ca(nb);
+        std::vector<bool> use_core(nb, false);
+        TRandom3 rnd(12345 + g);
         for (int b = 0; b < nb; b++)
         {
             if (after[g][b].size() < 50) continue;
             std::vector<double> vb, va, ww;
             for (size_t i = 0; i < before[g][b].size(); i++) { vb.push_back(before[g][b][i].first); va.push_back(after[g][b][i].first); ww.push_back(before[g][b][i].second); }
-            cb[b] = GaussCoreFit(vb, ww); ca[b] = GaussCoreFit(va, ww);
+            double sw = 0, sw2 = 0;
+            for (size_t i = 0; i < ww.size(); i++) { sw += ww[i]; sw2 += ww[i] * ww[i]; }
+            ne[b] = sw * sw / sw2;
+            use_core[b] = ne[b] >= core_min_neff;
+            if (use_core[b]) { cb[b] = GaussCoreFit(vb, ww); ca[b] = GaussCoreFit(va, ww); mb[b] = cb[b].mu; ma[b] = ca[b].mu; }
+            else { mb[b] = GaussCoreKernelPeak(vb, ww); ma[b] = GaussCoreKernelPeak(va, ww); }
+            eb_b[b] = CentralBootstrap(vb, ww, use_core[b], rnd); eb_a[b] = CentralBootstrap(va, ww, use_core[b], rnd);
+            cen[g][0][b] = mb[b]; cen[g][1][b] = ma[b]; cen_err[g][0][b] = eb_b[b]; cen_err[g][1][b] = eb_a[b];
         }
-        TGraph *gb = new TGraph(), *ga = new TGraph();
+        // q = 0 core, 1 kernel peak
+        TGraphErrors *gb[2], *ga[2];
+        for (int q = 0; q < 2; q++) { gb[q] = new TGraphErrors(); ga[q] = new TGraphErrors(); }
         double worst = 1, worst_E = 0;
         for (int b = 0; b < nb; b++)
         {
             if (after[g][b].size() < 50) continue;
-            const double mb = WeightedMedian(before[g][b]), ma = WeightedMedian(after[g][b]);
             const double ec = 0.5 * (eb[b] + eb[b + 1]);
             // f(x) = R(x) x at the neighbouring bin centres (cores before correction)
             double cmo = NAN;
@@ -277,31 +347,40 @@ int main(int argc, char **argv)
                 const double st = cb[b].sigma * x1;
                 if (d1 > 0) cmo = 1 + d2 / (d1 * d1 * d1) * st * st / x1;
             }
-            std::printf("  %6.1f-%6.1f  %8zu   %8.4f   %8.4f    %8.4f %8.4f  [%6.4f]  %8.4f\n", eb[b], eb[b + 1], after[g][b].size(), mb, ma,
-                        cb[b].mu, ca[b].mu, ca[b].sigma, cmo);
-            gb->SetPoint(gb->GetN(), ec, mb);
-            ga->SetPoint(ga->GetN(), ec, ma);
-            if (std::fabs(ma - 1) > std::fabs(worst - 1)) { worst = ma; worst_E = ec; }
+            std::printf("  %6.1f-%6.1f  %8zu   %8.4f %8.4f  [%6.4f]  %8.4f  %8.4f %8.4f  %9.1f  %d\n", eb[b], eb[b + 1], after[g][b].size(), mb[b], ma[b],
+                        ca[b].sigma, cmo, eb_b[b], eb_a[b], ne[b], use_core[b] ? 1 : 2);
+            if (!std::isfinite(mb[b]) || !std::isfinite(ma[b])) continue;
+            const int q = use_core[b] ? 0 : 1;
+            gb[q]->SetPoint(gb[q]->GetN(), ec, mb[b]); gb[q]->SetPointError(gb[q]->GetN() - 1, 0, eb_b[b]);
+            ga[q]->SetPoint(ga[q]->GetN(), ec, ma[b]); ga[q]->SetPointError(ga[q]->GetN() - 1, 0, eb_a[b]);
+            if (std::fabs(ma[b] - 1) > std::fabs(worst - 1)) { worst = ma[b]; worst_E = ec; }
         }
         std::cout << "  largest deviation after correction: " << worst << " at " << worst_E << " GeV" << std::endl;
         c.cd(g + 1);
         gPad->SetLeftMargin(0.12); gPad->SetRightMargin(0.03); gPad->SetTopMargin(0.08); gPad->SetBottomMargin(0.11);
         TH1F *fr = gPad->DrawFrame(0, 0.5, 100, 1.5);
         fr->GetXaxis()->SetTitle(ue ? "truth jet energy - UE (GeV)" : "truth jet energy (GeV)");
-        fr->GetYaxis()->SetTitle("weighted median reco / truth energy");
+        fr->GetYaxis()->SetTitle("reco / truth energy");
         TLine *l1 = new TLine(0, 1, 100, 1); l1->SetLineStyle(2); l1->Draw();
         TLine *l2 = new TLine(0, 1.02, 100, 1.02); l2->SetLineStyle(3); l2->SetLineColor(kGray + 1); l2->Draw();
         TLine *l3 = new TLine(0, 0.98, 100, 0.98); l3->SetLineStyle(3); l3->SetLineColor(kGray + 1); l3->Draw();
-        gb->SetMarkerStyle(24); gb->SetMarkerColor(kGray + 2); gb->SetLineColor(kGray + 2); gb->Draw("PL same");
-        ga->SetMarkerStyle(20); ga->SetMarkerColor(kRed + 1); ga->SetLineColor(kRed + 1); ga->Draw("PL same");
-        TLegend *leg = new TLegend(0.55, 0.75, 0.96, 0.9);
+        gb[0]->SetMarkerStyle(24); gb[1]->SetMarkerStyle(26); ga[0]->SetMarkerStyle(20); ga[1]->SetMarkerStyle(22);
+        TLegend *leg = new TLegend(0.5, 0.68, 0.96, 0.9);
         leg->SetBorderSize(0); leg->SetFillStyle(0); leg->SetTextSize(0.04);
-        leg->AddEntry(gb, "before correction", "pl");
-        leg->AddEntry(ga, "after correction", "pl");
+        for (int q = 0; q < 2; q++)
+        {
+            gb[q]->SetMarkerColor(kGray + 2); gb[q]->SetLineColor(kGray + 2); ga[q]->SetMarkerColor(kRed + 1); ga[q]->SetLineColor(kRed + 1);
+            gb[q]->Draw("PL same"); ga[q]->Draw("PL same");
+            keep.push_back(gb[q]); keep.push_back(ga[q]);
+        }
+        leg->AddEntry(gb[0], "core, before correction", "pl");
+        leg->AddEntry(ga[0], "core, after correction", "pl");
+        leg->AddEntry(gb[1], "kernel peak, before correction", "pl");
+        leg->AddEntry(ga[1], "kernel peak, after correction", "pl");
         leg->Draw();
         TLatex *t = new TLatex(); t->SetNDC(); t->SetTextSize(0.05); t->SetTextFont(62);
         t->DrawLatex(0.12, 0.935, reg_name[g]);
-        keep.push_back(gb); keep.push_back(ga); keep.push_back(leg); keep.push_back(t);
+        keep.push_back(leg); keep.push_back(t);
         keep.push_back(l1); keep.push_back(l2); keep.push_back(l3);
     }
     fh.cd();
@@ -342,6 +421,28 @@ int main(int argc, char **argv)
             std::printf("\n");
         }
     }
+
+    std::cout << "\nResolution, sigma_eff / central value of reco / truth energy (region 0 all, 1 inner, 2 middle, 3 outer):\n"
+              << "RES region lo hi jets before err_before after err_after" << std::endl;
+    TRandom3 rnd_res(54321);
+    for (int g = 0; g < nreg; g++)
+        for (int b = 0; b < nb; b++)
+        {
+            if (after[g][b].size() < 50) continue;
+            std::vector<double> ww;
+            for (size_t i = 0; i < after[g][b].size(); i++) ww.push_back(after[g][b][i].second);
+            double res[2], res_err[2];
+            for (int q = 0; q < 2; q++)
+            {
+                const std::vector<std::pair<double, double> > &src = q == 0 ? before[g][b] : after[g][b];
+                std::vector<double> v;
+                for (size_t i = 0; i < src.size(); i++) v.push_back(src[i].first);
+                const double se = EffWidth(v, ww), se_err = EffWidthBootstrap(v, ww, rnd_res), m = cen[g][q][b];
+                res[q] = se / m;
+                res_err[q] = res[q] * std::sqrt(std::pow(se_err / se, 2) + std::pow(cen_err[g][q][b] / m, 2));
+            }
+            std::printf("RES %d %.1f %.1f %zu %.4f %.4f %.4f %.4f\n", g, eb[b], eb[b + 1], after[g][b].size(), res[0], res_err[0], res[1], res_err[1]);
+        }
     c.SaveAs((out_base + ".png").c_str());
     c.SaveAs((out_base + ".pdf").c_str());
     return 0;
