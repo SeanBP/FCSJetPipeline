@@ -11,6 +11,7 @@ with `-h` for its options) and its sources.
 | `underlying_event/` | underlying-event (UE) estimate per jet (in-event eta-weighted side wedges); runs inside the two jobs above |
 | `jet_scale/` | simulated JetTrees -> jet-energy-scale (JES) lookup JSON and its closure test |
 | `jet_calibration/` | applies a JES JSON to JetTrees, in place |
+| `asymmetry/` | Run 22 EM-jet A_N(x_F): MuDst -> per-run yield histograms in one job (jets, UE, JES), then A_N with bad runs, per-run polarization and statistical errors |
 | `pico_analysis/` | PicoDst diagnostics, not part of the jet chain |
 
 Shared resources at the root:
@@ -232,6 +233,21 @@ and must be dropped by the analysis. x is folded to
 positive for the lookup, y is not. `submit_jet_calibration.sh` is the
 ECAL+HCAL version (also writes `reco_E_uniform_corr`); `-E 1` forwards to the
 EM-only script. The two JSON schemas are not interchangeable.
+
+## asymmetry
+
+```
+./make_smoke_list.py <prefix> [--runs 60] [--files 40]
+./submit_an_job.sh -f <listfile> -o <outdir> [-n 40] [-c <JES json>] [-k 1] [-N]
+./smoke_report.sh <outdir> <prefix>_good_runs.txt
+```
+
+Each job runs `data_to_jet` (MuDst -> SimpleTree -> jets), the in-event UE
+and the EM-only JES on up to 40 MuDsts of one run and keeps only the A_N
+yield and sanity histograms and a per-stage timing table.
+`smoke_report.sh` forms A_N, projects its statistical errors to the full
+good-run sample, and makes the yield, sanity, per-run and resource reports.
+See `asymmetry/README.md`.
 
 ## pico_analysis
 

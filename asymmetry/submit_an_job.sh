@@ -14,7 +14,7 @@
 #       ~0.1 GB per file of SimpleTree plus one MuDst (~1.2 GB).
 #   -c  EM-only point-jet JES lookup JSON, default
 #       jet_calibration/JES_Lookups/JetEnergyScale_lookup_em_only.json
-#       (copied into ANPlayground/jes/ for the SandBox). It must be a
+#       (copied into asymmetry/jes/ for the SandBox). It must be a
 #       "logcubic" map
 #   -t  FCS trigger names an event must have fired, default
 #       fcsEM0,fcsEM1,fcsEM2 and their _tpc copies (the EM triggers AnHistograms
@@ -113,7 +113,7 @@ sed -e "s#{{LISTFILE}}#${SORTEDLIST}#g" \
 echo "Generated ${OUTXML}"
 
 cat > "${OUTDIR}/run_params_${LABEL}.txt" <<EOF
-# ANPlayground an_job run parameters
+# asymmetry an_job run parameters
 submitted_utc=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 label=${LABEL}
 pipeline_commit=$(git -C "${PIPELINE_ROOT}" rev-parse HEAD 2>/dev/null || echo unknown)
@@ -130,7 +130,7 @@ EOF
 
 cd "${PIPELINE_ROOT}"
 MARKER=$(mktemp)
-star-submit "ANPlayground/an_job_${LABEL}.xml"
+star-submit "asymmetry/an_job_${LABEL}.xml"
 SUBMIT_DIR="${PIPELINE_ROOT}/submit"
 mkdir -p "${SUBMIT_DIR}"
 REPORT=$(find "${PIPELINE_ROOT}" -maxdepth 1 -name 'sched*.report' -newer "${MARKER}")

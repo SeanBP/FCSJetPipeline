@@ -2,12 +2,16 @@
 // yellow beam at x_F < 0, each point at its bin's mean x_F with the bin as the
 // horizontal bar and the statistical error as the vertical bar (no
 // systematic or polarization-scale uncertainty).
-// Usage: root -b -q 'plot_an.C("an.root", "an_vs_xf.png"[, "all"[, "all"]])'
+// Usage: root -b -q 'plot_an.C("an.root", "an_vs_xf.png"[, "all"[, "all"[, err_scale[, at_zero]]]])'
 //   third argument: EM level (EM0, EM1, EM2 or all = their sum, the final result)
 //   fourth argument: photon class (np0 ... np5plus, or all)
+//   err_scale: multiplies the errors, for a projection to more data
+//     (project_errors.py prints it); 1 = the measured errors
+//   at_zero: 1 draws the points at A_N = 0, to show the projected errors alone
 // Writes the .png and a .pdf next to it.
 
-void plot_an(const char *in_root, const char *out_png, const char *level = "all", const char *cls = "all")
+void plot_an(const char *in_root, const char *out_png, const char *level = "all", const char *cls = "all",
+             double err_scale = 1, int at_zero = 0)
 {
     gStyle->SetOptStat(0);
     TFile *f = TFile::Open(in_root);
@@ -20,12 +24,17 @@ void plot_an(const char *in_root, const char *out_png, const char *level = "all"
     {
         g[b] = (TGraphAsymmErrors *)f->Get(Form("gr_AN_%s_%s_%s", beam[b], level, cls));
         if (!g[b]) { printf("no gr_AN_%s_%s_%s in %s\n", beam[b], level, cls, in_root); return; }
+        g[b] = (TGraphAsymmErrors *)g[b]->Clone(Form("g_%s", beam[b]));
         g[b]->SetMarkerStyle(mk[b]); g[b]->SetMarkerSize(1.0);
         g[b]->SetMarkerColor(col[b]); g[b]->SetLineColor(col[b]); g[b]->SetLineWidth(2);
         for (int i = 0; i < g[b]->GetN(); i++)
         {
-            ymin = TMath::Min(ymin, g[b]->GetY()[i] - g[b]->GetErrorYlow(i));
-            ymax = TMath::Max(ymax, g[b]->GetY()[i] + g[b]->GetErrorYhigh(i));
+            const double y = at_zero ? 0 : g[b]->GetY()[i];
+            g[b]->SetPoint(i, g[b]->GetX()[i], y);
+            g[b]->SetPointEYlow(i, err_scale * g[b]->GetErrorYlow(i));
+            g[b]->SetPointEYhigh(i, err_scale * g[b]->GetErrorYhigh(i));
+            ymin = TMath::Min(ymin, y - g[b]->GetErrorYlow(i));
+            ymax = TMath::Max(ymax, y + g[b]->GetErrorYhigh(i));
         }
     }
     const double pad = 0.15 * (ymax - ymin + 1e-3);
@@ -39,10 +48,11 @@ void plot_an(const char *in_root, const char *out_png, const char *level = "all"
     TLine *zero = new TLine(-1.0, 0, 1.0, 0);
     zero->SetLineStyle(2); zero->Draw();
     for (int b = 0; b < 2; b++) g[b]->Draw("P SAME");
-    TLegend *lg = new TLegend(0.13, 0.72, 0.55, 0.88);
+    TLegend *lg = new TLegend(0.13, 0.72, 0.62, 0.88);
     lg->AddEntry(g[0], "blue beam polarized (x_{F} > 0)", "pe");
     lg->AddEntry(g[1], "yellow beam polarized (x_{F} < 0)", "pe");
-    lg->AddEntry((TObject *)0, "statistical errors only", "");
+    if (err_scale == 1) lg->AddEntry((TObject *)0, "statistical errors only", "");
+    else lg->AddEntry((TObject *)0, Form("projected statistical errors (test errors x %.3f)%s", err_scale, at_zero ? ", at A_{N} = 0" : ""), "");
     lg->SetBorderSize(0); lg->SetFillStyle(0);
     lg->Draw();
     c->SaveAs(out_png);

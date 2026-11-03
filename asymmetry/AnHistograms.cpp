@@ -32,6 +32,14 @@
 //                                same jets
 //   runs                         TNamed, the run numbers of the input (from
 //                                the file names, jet_output_<run>_<file>.root)
+// and sanity distributions, qa_<variable>_<stage>, at two stages: "evt",
+// every jet of the events passing the event cuts (no LED, an EM trigger, a
+// spin state), and "sel", the jets entering the yields: eta, phi, energy
+// (uncorrected reco_E, UE reco_ue_E, corrected), pT (uncorrected, corrected),
+// corrected x_F, points in the jet, jet position (reco_x, reco_y), and per
+// event the jets and selected jets, the vertex z (event_vertex_z, -9999 =
+// none, and its source) and the listed EM triggers. qa_xy_sel_<side> is
+// split by side for the left/right acceptance.
 // Output files of one run, or of a fill, add with hadd.
 //
 // Usage: ./AnHistograms <jet file list> <output.root>
@@ -41,6 +49,7 @@
 #include <TChain.h>
 #include <TFile.h>
 #include <TH1D.h>
+#include <TH2D.h>
 #include <TNamed.h>
 
 #include <cmath>
@@ -85,7 +94,9 @@ int main(int argc, char **argv)
 
     Int_t spin_config = -1, led = 0, em[kNEmLevels] = {0}, em_tpc[kNEmLevels] = {0};
     Double_t sqrt_s = 0;
-    std::vector<float> *eta = 0, *x = 0, *y = 0, *pt_raw = 0, *e_corr = 0, *xf_corr = 0;
+    Float_t vz = -9999;
+    Int_t vz_source = 0;
+    std::vector<float> *eta = 0, *phi = 0, *e_raw = 0, *e_ue = 0, *x = 0, *y = 0, *pt_raw = 0, *e_corr = 0, *xf_corr = 0;
     std::vector<int> *nphotons = 0;
     t.SetBranchAddress("Spin_config", &spin_config);
     t.SetBranchAddress("fcs_led", &led);
@@ -99,7 +110,12 @@ int main(int argc, char **argv)
         const TString b = TString::Format("fcsEM%d_tpc", l);
         if (t.GetBranch(b)) t.SetBranchAddress(b, &em_tpc[l]);
     }
+    if (t.GetBranch("event_vertex_z")) t.SetBranchAddress("event_vertex_z", &vz);
+    if (t.GetBranch("event_vertex_source")) t.SetBranchAddress("event_vertex_source", &vz_source);
     t.SetBranchAddress("reco_eta", &eta);
+    t.SetBranchAddress("reco_phi", &phi);
+    t.SetBranchAddress("reco_E", &e_raw);
+    t.SetBranchAddress("reco_ue_E", &e_ue);
     t.SetBranchAddress("reco_x", &x);
     t.SetBranchAddress("reco_y", &y);
     t.SetBranchAddress("reco_pt", &pt_raw);
@@ -132,6 +148,36 @@ int main(int argc, char **argv)
         h_pt[l] = new TH1D(TString::Format("h_ptcorr_%s", kEmLevelName[l]), ";corrected jet p_{T} (GeV);jets", 100, 0, 20);
         h_ptraw[l] = new TH1D(TString::Format("h_ptraw_%s", kEmLevelName[l]), ";uncorrected jet p_{T} (GeV);jets", 100, 0, 20);
     }
+    // sanity distributions: [0] jets of events passing the event cuts, [1] selected jets
+    const char *const stage[2] = {"evt", "sel"};
+    TH1D *q_eta[2], *q_phi[2], *q_e[2], *q_ue[2], *q_ecorr[2], *q_pt[2], *q_ptcorr[2], *q_xf[2], *q_np[2], *q_njet[2];
+    TH2D *q_xy[2];
+    for (int g = 0; g < 2; g++)
+    {
+        const char *st = stage[g];
+        q_eta[g] = new TH1D(TString::Format("qa_eta_%s", st), ";jet #eta;jets", 60, 2.0, 5.0);
+        q_phi[g] = new TH1D(TString::Format("qa_phi_%s", st), ";jet #phi;jets", 72, -M_PI, M_PI);
+        q_e[g] = new TH1D(TString::Format("qa_E_%s", st), ";uncorrected jet E (GeV);jets", 125, 0, 125);
+        q_ue[g] = new TH1D(TString::Format("qa_ueE_%s", st), ";UE energy in the jet (GeV);jets", 100, 0, 10);
+        q_ecorr[g] = new TH1D(TString::Format("qa_Ecorr_%s", st), ";corrected jet E (GeV);jets", 125, 0, 125);
+        q_pt[g] = new TH1D(TString::Format("qa_pt_%s", st), ";uncorrected jet p_{T} (GeV);jets", 100, 0, 20);
+        q_ptcorr[g] = new TH1D(TString::Format("qa_ptcorr_%s", st), ";corrected jet p_{T} (GeV);jets", 100, 0, 20);
+        q_xf[g] = new TH1D(TString::Format("qa_xF_%s", st), ";corrected x_{F};jets", kNXfBins, kXfMin, kXfMax);
+        q_np[g] = new TH1D(TString::Format("qa_np_%s", st), ";points in the jet;jets", 20, 0, 20);
+        q_njet[g] = new TH1D(TString::Format("qa_njet_%s", st), ";jets per event;events", 10, 0, 10);
+        q_xy[g] = new TH2D(TString::Format("qa_xy_%s", st), ";jet x (cm);jet y (cm)", 60, -150, 150, 44, -110, 110);
+    }
+    TH1D *q_vz = new TH1D("qa_vz", ";event vertex z (cm), events with a vertex;events", 80, -80, 80);
+    TH1D *q_vzsrc = new TH1D("qa_vz_source", ";vertex source;events", 4, 0, 4);
+    const char *const vz_name[4] = {"none", "TPC", "VPD", "BBC"};
+    for (int i = 0; i < 4; i++) q_vzsrc->GetXaxis()->SetBinLabel(i + 1, vz_name[i]);
+    TH1D *q_trig = new TH1D("qa_em_listed", ";listed EM triggers;events", 8, 0, 8);
+    for (int i = 0; i < 8; i++)
+        q_trig->GetXaxis()->SetBinLabel(i + 1, i == 0 ? "none" : TString::Format("%s%s%s", i & 1 ? "0" : "", i & 2 ? "1" : "", i & 4 ? "2" : ""));
+    TH1D *q_spin = new TH1D("qa_spin_config", ";Spin_config;events", 17, -1, 16);
+    TH2D *q_xy_side[kNSides];
+    for (int s = 0; s < kNSides; s++)
+        q_xy_side[s] = new TH2D(TString::Format("qa_xy_sel_%s", kSideName[s]), ";jet x (cm);jet y (cm)", 60, -150, 150, 44, -110, 110);
     TH1D *h_cut = new TH1D("h_cutflow", ";;jets", kNCuts + 1, 0, kNCuts + 1);
     for (int c = 0; c < kNCuts; c++) h_cut->GetXaxis()->SetBinLabel(c + 1, kCutName[c]);
     h_cut->GetXaxis()->SetBinLabel(kNCuts + 1, "events read");
@@ -156,14 +202,24 @@ int main(int argc, char **argv)
         h_cut->Fill(kAllJets, nj);
         if (led) continue;
         h_cut->Fill(kNoLed, nj);
+        q_trig->Fill((listed[0] ? 1 : 0) + (listed[1] ? 2 : 0) + (listed[2] ? 4 : 0));
         if (level < 0) continue;
         h_cut->Fill(kEmLevel, nj);
+        q_spin->Fill(spin_config);
         if (spin < 0) continue;
         h_cut->Fill(kSpin, nj);
         h_events[level]->Fill(spin);
+        q_vzsrc->Fill(vz_source >= 0 && vz_source < 4 ? vz_source : 0);
+        if (vz > -9000) q_vz->Fill(vz);
+        q_njet[0]->Fill(nj);
+        int nsel = 0;
         for (size_t j = 0; j < nj; j++)
         {
             const double E = (*e_corr)[j];
+            // sanity distributions of every jet here; the selected jets' below
+            q_eta[0]->Fill((*eta)[j]); q_phi[0]->Fill((*phi)[j]); q_e[0]->Fill((*e_raw)[j]); q_ue[0]->Fill((*e_ue)[j]);
+            q_ecorr[0]->Fill(E); q_pt[0]->Fill((*pt_raw)[j]); q_ptcorr[0]->Fill(E > 0 ? E / std::cosh((*eta)[j]) : -1); q_xf[0]->Fill((*xf_corr)[j]);
+            q_np[0]->Fill((*nphotons)[j]); q_xy[0]->Fill((*x)[j], (*y)[j]);
             if (!(E > 0)) continue;
             h_cut->Fill(kCalibrated);
             if (!pass_physical_jet_cut(E, (*eta)[j], sqrt_s)) continue;
@@ -184,7 +240,12 @@ int main(int argc, char **argv)
             h[jl][cls][side][spin]->Fill((*xf_corr)[j]);
             h_xfs[jl][cls]->Fill((*xf_corr)[j], (*xf_corr)[j]);
             h_cos[jl][cls]->Fill((*xf_corr)[j], std::fabs((*x)[j]) / std::hypot((*x)[j], (*y)[j]));
+            nsel++;
+            q_eta[1]->Fill((*eta)[j]); q_phi[1]->Fill((*phi)[j]); q_e[1]->Fill((*e_raw)[j]); q_ue[1]->Fill((*e_ue)[j]);
+            q_ecorr[1]->Fill(E); q_pt[1]->Fill((*pt_raw)[j]); q_ptcorr[1]->Fill(pt); q_xf[1]->Fill((*xf_corr)[j]);
+            q_np[1]->Fill((*nphotons)[j]); q_xy[1]->Fill((*x)[j], (*y)[j]); q_xy_side[side]->Fill((*x)[j], (*y)[j]);
         }
+        q_njet[1]->Fill(nsel);
     }
 
     std::ostringstream rs;

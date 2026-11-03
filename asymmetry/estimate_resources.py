@@ -4,13 +4,15 @@
 Usage:
   ./estimate_resources.py <timing dir> [--catalog catalog_runs_local.txt]
       [--files-per-job 40] [--slots 1000,3000,5000] [--run-min 23005044]
-      [--run-max 23108024]
+      [--run-max 23108024] [--runs <good_runs.txt>]
 
 Inputs: the timing_<run>_<job>.txt tables of benchmark jobs (an_job.xml) and
 the per-run catalog counts (catalog_query.sh counts). Runs are those in
 [--run-min, --run-max] minus MakeRunList.pl's excluded ranges. The RunLog
 shift-crew flags and the pi0 bad-run list (applied later, by MakeRunList.pl
-and AnAsymmetry -r) are not taken off here, so the totals are an upper bound.
+and AnAsymmetry -r) are not taken off here, so the totals are an upper bound,
+unless --runs gives a run list (first column; make_smoke_list.py's
+<prefix>_good_runs.txt) to restrict the pass to.
 
 Model, per job of n files of one run:
   per file   fetch (wall, per GB) + MuDst -> SimpleTree (wall = a + b * events,
@@ -64,6 +66,7 @@ def main():
     ap.add_argument('--slots', default='1000,3000,5000')
     ap.add_argument('--run-min', type=int, default=23005044)
     ap.add_argument('--run-max', type=int, default=23108024)
+    ap.add_argument('--runs', default=None)
     a = ap.parse_args()
 
     tables = sorted(glob.glob(os.path.join(a.timing_dir, 'timing_*.txt')))
@@ -77,6 +80,7 @@ def main():
 
     rows = [r for j in jobs for r in j]
     fetch = [r for r in rows if r['stage'] == 'fetch']
+    failed = [r for r in rows if r['stage'] == 'fetchfail']
     mudst = [r for r in rows if r['stage'] == 'mudst']
     jets = [r for r in rows if r['stage'] == 'jets']
     per_job = {s: [sum(r['wall'] for r in j if r['stage'] == s) for j in jobs] for s in ('ue', 'calib', 'hists')}
@@ -93,6 +97,10 @@ def main():
     print('  MuDst->Simple   %6.1f s  (fit %.1f s + %.2f ms/event; CPU/wall %.2f)' % (
         statistics.mean(r['wall'] for r in mudst), a0, 1e3 * b0, cpu_frac))
     print('  jet finding     %6.1f s' % jets_per_file)
+    if failed:
+        print('  failed fetches  %d of %d (%.0f s lost in all)' % (len(failed), len(failed) + len(fetch), sum(r['wall'] for r in failed)))
+    slow = sorted(r['wall'] for r in fetch)
+    print('  fetch wall      median %.0f s, 95%% %.0f s, max %.0f s' % (slow[len(slow) // 2], slow[int(0.95 * (len(slow) - 1))], slow[-1]))
     print('per job (measured n = %.1f files):' % n_meas)
     for s in ('compile', 'ue', 'calib', 'hists'):
         print('  %-15s %6.1f s  (max %.1f)' % (s, statistics.mean(per_job[s]), max(per_job[s])))
@@ -107,6 +115,9 @@ def main():
     print('  peak scratch    %6.2f GB; SimpleTree %.0f MB/file' % (scratch, st_mb))
     print('  output          %6.0f kB histograms per job' % out_kb)
 
+    keep = None
+    if a.runs:
+        keep = set(int(l.split()[0]) for l in open(a.runs) if l.strip() and not l.startswith('#'))
     runs = []
     for line in open(a.catalog):
         f = line.strip().split('::')
@@ -114,6 +125,8 @@ def main():
             continue
         r = int(f[0])
         if r < a.run_min or r > a.run_max or any(lo <= r <= hi for lo, hi in EXCLUDED):
+            continue
+        if keep is not None and r not in keep:
             continue
         runs.append((r, float(f[1]), int(f[2]), float(f[3])))
     n = a.files_per_job
@@ -134,8 +147,8 @@ def main():
             total_s += w
             job_walls.append(w)
     job_walls.sort()
-    print('\nfull pass: runs %d-%d, %d runs, %d files, %.2e events, %.0f TB read' % (
-        a.run_min, a.run_max, len(runs), tot_files, tot_ev, tot_gb / 1e3))
+    print('\nfull pass%s: runs %d-%d, %d runs, %d files, %.2e events, %.0f TB read' % (
+        ' (runs in ' + a.runs + ')' if a.runs else '', a.run_min, a.run_max, len(runs), tot_files, tot_ev, tot_gb / 1e3))
     print('  jobs            %d of <= %d files' % (njobs, n))
     print('  job wall        median %.0f min, 99%% %.0f min, max %.0f min' % (
         job_walls[len(job_walls) // 2] / 60, job_walls[int(0.99 * (len(job_walls) - 1))] / 60, job_walls[-1] / 60))

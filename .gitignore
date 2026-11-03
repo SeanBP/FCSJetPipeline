@@ -48,9 +48,9 @@ log/
 
 # Per-submission XMLs and input lists of the playground studies (templates stay)
 /UnderlyingEventPlayground/in_event/in_event_*.xml
-/ANPlayground/an_job_*.xml
-/ANPlayground/benchmark_*.list
-/ANPlayground/jes/
+/asymmetry/an_job_*.xml
+/asymmetry/benchmark_*.list
+/asymmetry/jes/
 
 # Compiled programs and build products of the in-event UE, recoil and pi0 studies
 /UnderlyingEventPlayground/in_event/*

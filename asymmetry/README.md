@@ -1,10 +1,33 @@
-# ANPlayground
+# asymmetry
 
 The Run 22 EM-jet A_N(x_F) analysis: the condor job that turns MuDsts into
 per-run yield histograms, the A_N step (bad runs, per-run polarization,
-statistical errors, final plot), and the sizing study that extrapolates the
+statistical errors, final plot), the yield and sanity plots, the projection
+of the errors to the full sample, and the sizing study that extrapolates the
 job's wall time, memory, scratch and output to the full sample. Unfolding is
 not included.
+
+## Smoke test (a sample spread over Run 22)
+
+```
+./make_smoke_list.py <outdir>/<prefix> --runs 60 --files 40
+./submit_an_job.sh -f <outdir>/<prefix>.list -o <outdir> -l <prefix> -k 1
+./smoke_report.sh <outdir> <outdir>/<prefix>_good_runs.txt     # once the jobs end
+```
+
+- `make_smoke_list.py`: the good runs (catalog analysis runs that pass the
+  RunLog shift-crew flag, are not flagged in the pi0 bad-run list and have
+  polarization) and, from them, runs evenly spaced over Run 22 with files
+  evenly spaced through each run.
+- `smoke_report.sh` writes `<outdir>/report/`: A_N (`an.root`, `an.txt`,
+  `an_vs_xf*.png`), the errors projected to all good runs
+  (`an_projected.txt`, `an_vs_xf_projected*.png`), yield and sanity plots
+  and per-run trends (`plots/`), and wall time, memory and scratch per
+  stage, per job (also condor's record) and extrapolated to the full pass
+  (`resources.txt`, `condor_jobs.txt`).
+- `smoke_v1` (2026-11-03): 60 runs 23008012-23107043, 2357 files, 2.08e7
+  events, 0.27% of the 7.85e9 good-run events, in
+  `/star/data01/pwg/seanp/asymmetry/smoke_v1`.
 
 Each job runs the whole chain on up to 40 MuDsts of one run. It keeps only
 the A_N yield histograms, so no SimpleTrees or jet trees are stored.
@@ -15,8 +38,8 @@ the A_N yield histograms, so no SimpleTrees or jet trees are stored.
 | 2. Jet finding | `data_to_jet/RecoJets` (`1 1`) | EM-only jets from FCS points, with areas |
 | 3. UE subtraction | `underlying_event/UnderlyingEvent` | in-event eta-weighted side wedges: each jet's own event, its eta band from 2R out to 150° in azimuth |
 | 4. JES calibration | `jet_calibration/ApplyCorrections_em_only` | calibrates the UE-subtracted energy: `reco_E_corr = (reco_E - reco_ue_E) / scale` |
-| 5. A_N histograms | `AnHistograms` | yields vs x_F (`reco_x_F_corr`) |
-| 6. A_N (offline) | `AnAsymmetry -r`, `plot_an.C` | per-run yield files: bad runs dropped (D. Kapukchyan's list), per-run polarization, A_N with statistical errors |
+| 5. A_N histograms | `AnHistograms` | yields vs x_F (`reco_x_F_corr`) and sanity distributions |
+| 6. A_N (offline) | `AnAsymmetry -r`, `plot_an.C`, `AnPlots`, `project_errors.py` | per-run yield files: flagged bad runs dropped (D. Kapukchyan's list), per-run polarization, A_N with statistical errors; yield and sanity plots; projected errors |
 
 SimpleTrees are deleted after step 3, and jet files after step 5. Step 6 runs
 on the job outputs, not in the job.
@@ -45,21 +68,28 @@ on the job outputs, not in the job.
     bin's mean |cos phi| and mean corrected x_F.
   - Also written: a cut flow, events per spin state per EM level, corrected
     pT before the threshold cut, and the run numbers.
+  - Sanity distributions `qa_<variable>_evt` (every jet of the events
+    passing the event cuts) and `qa_<variable>_sel` (the jets in the
+    yields): eta, phi, uncorrected, UE and corrected energy, pT, x_F, points,
+    jets per event, and the x-y map (`qa_xy_*`, also per side); per event the
+    vertex z and source, the listed EM triggers and `Spin_config`.
   - The classes are kept apart so they can be combined when A_N is formed.
     Files of one run or fill add with `hadd`.
 - **`AnAsymmetry.cpp`**: A_N from the yields (not part of the job):
   ```
   ./AnAsymmetry <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]
-  ./AnAsymmetry -r <yield file list> run22_polarization.txt <out.root> [rebin = 2]
+  ./AnAsymmetry -r <yield file list> run22_polarization.txt <out.root> [rebin = 2] [list | none] [flagged | all]
   ```
   - `-r`: one yield file per run, summed; each bin uses the mean polarization
     of its jets (runs weighted by their jets, as FMS weighted by events).
-  - `-r` also drops bad runs: by default every run in D. Kapukchyan's pi0 QA
-    list (`/star/u/dkap7827/Fcs2019/FcsAsymRun22/BadRuns.txt`, read at each
-    call; 414 runs, 59 with a flag, covering runs to 23024003 as of
-    2026-02-07). Further arguments: `[list | none] [all | flagged]`. The
-    output's TNamed `bad_runs` records the list's path, date and the runs
-    removed.
+  - `-r` also drops bad runs: by default the runs with a flag in D.
+    Kapukchyan's pi0 QA list (`/star/u/dkap7827/Fcs2019/FcsAsymRun22/BadRuns.txt`,
+    read at each call). As of 2026-02-07 the list has a line for every
+    analysis run up to 23024003 (413) and 59 have a flag (LowStat, EnShift,
+    DoublePeak, ...), so an empty flag is read as a run that passed; mode
+    `all` would drop the whole reviewed period. Runs after 23024003 are not
+    reviewed yet. The output's TNamed `bad_runs` records the list's path,
+    date and the runs removed.
   - Points at the bin's mean corrected x_F; rebin 2 = x_F bins of 0.05.
   - Statistical errors: Poisson from the raw counts in each cross ratio,
     combined over the other beam's spin states, divided by <P><|cos phi|>;
@@ -68,9 +98,10 @@ on the job outputs, not in the job.
   - Also writes `<out>.txt`: every point with its statistical error, jets,
     <|cos phi|> and <P>.
 - **`plot_an.C`**: the final A_N vs x_F (blue at x_F > 0, yellow at x_F < 0,
-  statistical errors only), `.png` and `.pdf`:
+  statistical errors only), `.png` and `.pdf`; optional error scale and
+  points at zero for a projection:
   ```
-  root -b -q 'plot_an.C("an.root","an_vs_xf.png","all","all")'
+  root -b -q 'plot_an.C("an.root","an_vs_xf.png","all","all"[,err_scale[,at_zero]])'
   ```
   - Left-right cross ratio per beam, the other beam's spin held fixed (one
     cross ratio per state, averaged); A_N = eps / (P <|cos phi|>).
@@ -84,13 +115,25 @@ on the job outputs, not in the job.
   ```
   ./make_run_polarization.py <fill table> run22_polarization.txt
   ```
+- **`AnPlots.cpp`**: `./AnPlots <yield file list> <out dir>`: cut flow,
+  jet distributions (both stages), x-y maps, event quantities, pT by EM
+  level with the threshold cuts, yields vs x_F per side and spin state (per
+  EM level), per photon class and per level, and per-run trends (events,
+  jets per event, x > 0 / x < 0, spin-state fractions, EM level mix, mean
+  energy; `runs.txt`). PNGs and one `plots.pdf`.
+- **`project_errors.py`**: `./project_errors.py <outdir> <an.txt> <good_runs.txt>`:
+  stat_full = stat x sqrt(events processed / good-run events), from the
+  catalog events of the files the jobs processed; writes
+  `<an>_projected.txt` and prints the factor for `plot_an.C`'s `err_scale`.
 - **`an_toy_closure.cpp`**: toy jets with injected blue and yellow A_N,
   defined as left = spin x beam direction, unequal spin-state luminosities
   and a side-dependent efficiency; AnAsymmetry recovers both signs and sizes
   (0.05 bins: chi2 37.4 / 40 on 2e7 jets; two runs with different P through
   `-r`: 33.7 / 40).
 - **`an_job.xml`, `submit_an_job.sh`**: the condor job. Each stage runs
-  under `/usr/bin/time`. Every job writes
+  under `/usr/bin/time`. An xrootd fetch that fails or takes over 20 min
+  is cut off, recorded as `fetchfail` and the file skipped (stalls of over
+  an hour were seen on 2026-11-03). Every job writes
   `timing/timing_<run>_<job>.txt`, one row per stage call: wall, user and
   sys time, peak RSS, and scratch use afterwards. Histograms go to `hists/`.
   ```
@@ -102,7 +145,7 @@ on the job outputs, not in the job.
   - `counts <out>` writes per-run events, files and bytes. The P24ia st_fwd
     copy of 2026-10-20 is `catalog_runs_local.txt`.
   - `list <out> <runs...> [-l N]` writes a MuDst list.
-- **`estimate_resources.py <outdir>/timing`**: fits the per-file costs from
+- **`estimate_resources.py <outdir>/timing [--runs good_runs.txt]`**: fits the per-file costs from
   the benchmark (MuDst step = a + b·events, fetch per GB, jet finding per
   file) and the per-job costs (UE, calibration and histograms linear in
   files; compiles fixed). It applies them to every run in the catalog

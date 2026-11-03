@@ -37,8 +37,11 @@
 // Bad runs (-r only). Runs in a bad-run list are left out. By default the list
 // is D. Kapukchyan's pi0 QA list, read from his directory at every call, so
 // his updates apply without changes here (kBadRunListDefault: "Runnumber |
-// Flag | AdditionalNotes" lines; the flag column is empty for most entries).
-// Mode "all" drops every listed run, "flagged" only those with a flag. The
+// Flag | AdditionalNotes" lines). The list has a line for every run he
+// reviewed (as of 2026-02-07, all 413 analysis runs up to 23024003; 59 with a
+// flag such as LowStat, EnShift, DoublePeak), so an empty flag reads as a run
+// that passed. Mode "flagged" (default) drops the flagged runs; "all" drops
+// every listed run, i.e. the whole reviewed period. The
 // list's path, modification time, mode and the runs it removed are printed and
 // written to the output as TNamed "bad_runs". "none" uses no list.
 //
@@ -67,7 +70,7 @@
 //
 // Usage: ./AnAsymmetry <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]
 //        ./AnAsymmetry -r <yield file list> <run polarization table> <out.root> [rebin = 2]
-//                         [bad-run list = kBadRunListDefault | none] [all | flagged]
+//                         [bad-run list = kBadRunListDefault | none] [flagged | all]
 //   rebin 2 gives x_F bins of 0.05, as the FMS EM-jet analysis
 //   Prints, for each EM level and all levels, A_N per x_F bin of both beams
 //   with all photon classes summed; writes graphs
@@ -223,7 +226,7 @@ int main(int argc, char **argv)
     if (argc < 5)
     {
         std::cerr << "Usage: " << argv[0] << " <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]\n"
-                  << "       " << argv[0] << " -r <yield file list> <run polarization table> <out.root> [rebin = 2] [bad-run list | none] [all | flagged]" << std::endl;
+                  << "       " << argv[0] << " -r <yield file list> <run polarization table> <out.root> [rebin = 2] [bad-run list | none] [flagged | all]" << std::endl;
         return 1;
     }
     const int rebin = argc > 5 ? std::atoi(argv[5]) : 2;
@@ -255,7 +258,7 @@ int main(int argc, char **argv)
         }
         // bad-run list, read now so the current version applies
         const std::string bad_path = argc > 6 ? argv[6] : kBadRunListDefault;
-        const std::string bad_mode = argc > 7 ? argv[7] : "all";
+        const std::string bad_mode = argc > 7 ? argv[7] : "flagged";
         if (bad_mode != "all" && bad_mode != "flagged") { std::cerr << "ERROR: bad-run mode must be all or flagged" << std::endl; return 1; }
         std::map<int, std::string> bad;
         if (bad_path != "none")

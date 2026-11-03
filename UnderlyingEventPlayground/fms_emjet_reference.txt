@@ -252,70 +252,73 @@ Embedding                 listed as a planned step in starSim/README.md; no
                           code for it was found
 
 
-10. HOW FCSJetPipeline COMPARES (EM-only, point-based mode: -E 1 -F 1)
-----------------------------------------------------------------------
+10. HOW FCSJetPipeline COMPARES (EM-only point jets, A_N chain; updated 2026-11-03)
+--------------------------------------------------------------------------------
+Sections 1-9 are the FMS analysis as read from its code. Below, the FCS
+pipeline as it stands (RecoJets / JetMatcher -E 1 -F 1, UnderlyingEvent,
+ApplyCorrections_em_only, asymmetry/ AnHistograms + AnAsymmetry).
+
 Same as FMS:
-  - anti-kT, R = 0.7, E-scheme.
-  - Reco input: points, not tower hits.
-  - Point energy window: E > 1.0 GeV and E <= sqrt(s)/2 (about 254 GeV, the
-    counterpart of the FMS 100 GeV limit at sqrt(s) = 200 GeV), through
-    pass_point_energy_cut() in simulation and data alike.
-  - Truth jets from photons only, no electrons.
-  - Truth particles restricted to 1 < eta < 5 (here by the generator macros'
-    SetEtaRange, i.e. on what is handed to GEANT).
-  - Jet pT minimum at jet finding: 2.0 GeV reco, 1.0 GeV truth.
-  - Generator settings, when -M 1 ("FMS tune") is given: PYTHIA 6.4.28,
-    PyTune 370, PARP(90) = 0.213, PARP(91) = 1, CTEQ6L1, MSEL 1.
+  - Jets: anti-kT, R = 0.7, E-scheme, active areas (ghost area 0.04, |y| < 5).
+  - Reco input: points, E > 1 GeV (FMS code; the FMS analysis note says
+    E > 2 GeV and E_T > 0.2 GeV) with an upper limit at one beam's energy
+    (FMS 100 GeV at 200 GeV; here sqrt(s)/2 = 254 GeV).
+  - Jet pT at finding: 2 GeV reco (uncorrected), 1 GeV truth (JES sample: none).
+  - Truth jets from photons only.
+  - Order: UE subtraction, then energy correction, then the 2 GeV pT cut on the
+    corrected jet, and E <= sqrt(s)/2, 0 < x_F <= 1 on the corrected jet.
+  - Trigger rule: a jet passes if its pT exceeds 1.15 x the nominal threshold
+    of a trigger that recorded the event (FMS "extended" version: raw pT, as
+    here; FMS base version: corrected pT).
+  - LED events vetoed; both beams polarized (spin4 = 5, 6, 9, 10), which also
+    removes abort-gap and single-beam bunches (run 23007048: 8 of 51411 events
+    have spin4 1, 4 or 8, none other).
+  - At least one photon per jet: reco_nphotons (points > 1 GeV within R of the
+    axis) is never 0 for a found jet (run 23007048, 40 files: none); classes
+    1, 2, 3, 4, >= 5 kept separately, to be grouped as FMS (1-2, 3, ...).
+  - A_N reported for blue at x_F > 0 and yellow at x_F < 0, |x_F| from the
+    corrected energy, polarization weighted per run by the jets.
+  - PYTHIA 6.4.28, PyTune 370, PARP(90) = 0.213, PARP(91) = 1, CTEQ6L1, MSEL 1
+    (FMS tune) for the simulation behind the JES.
 
-Different from FMS:
-  - UE subtraction: energy, not pT. Reco: per jet from proxy events (other
-    events of the same run or ptHat bin and EM trigger level, with a jet of
-    similar pT near 90 deg from the cone; ../underlying_event/), since the FCS
-    does not cover full azimuth. Truth: same-event cones at phi +- 90 deg, as
-    FMS. Jet areas are not computed.
-  - Jet direction: constituent directions are taken from the origin, as if
-    there were no vertex information; event_vertex_z is stored but not used.
-  - Truth source: GEANT tracks created within 100 um of the primary vertex
-    (STAR's Pythia 6 wrapper leaves pi0/eta stable and GEANT decays them), versus PYTHIA
-    status-1 photons with pi0/eta decayed in PYTHIA. Photons from long-lived
-    parents (K0S, Lambda, ...) are excluded.
-  - (Same as FMS:) truth photons carry no energy cut, for the jets and for
-    truth_nphotons, although reco points need 1 GeV. How to cut truth photons
-    to match the detector photons is left open, as in FMS.
-  - Acceptance: reco jet axis inside the ECAL x-y fiducial rectangle with a
-    20 cm buffer (eta 2.34-3.57); truth jet axis within R/2 of that region in
-    eta-phi (only jets that could be matched); truth photons in a
-    full-azimuth eta band 1.5R beyond its eta range (1.29-4.62).
-    FMS: 2.8 < eta < 3.8 on the jet axis.
-  - Matching: one-to-one, closest pairs first, dR < R/2 = 0.35 (the CMS
-    choice, arXiv:1607.03663), versus nearest within 0.2, not one-to-one.
-  - Energy scale: (E, x, y) map with median numerical inversion, versus 1D
-    polynomials in E and pT.
-  - Unfolding: planned to follow FMS (SVD on the photon-multiplicity
-    response); not yet settled (../UnfoldingPlayground/).
-  - ptHat: disjoint weighted bins with cross-section weights, versus one flat
-    2-80 GeV range. sqrt(s) = 508.4 GeV versus 200 GeV.
-  - Generator-level filter: FcsJetFilter (energy on one FCS arm above a
-    threshold, default 50 GeV), versus StFmsJetFilter.
-  - Simulated vertex: Gaussian (sigma_z = 30 cm), versus a file of data
-    vertices.
-  - Tower hits (when -F 0): MIP-fraction cut, 0.31 GeV ECAL, no upper cut.
+Different on purpose:
+  - UE: energy subtracted (eta-weighted side wedges, 2R to 150 deg, the jet's
+    own event, area-matched), FMS: pT subtracted with two cones at +-90 deg.
+    The FCS has no full azimuth.
+  - Energy correction: (x, y, E) log-cubic map from numerical inversion
+    (jesmap_pixring_v1), FMS: 1D polynomials in E and pT.
+  - Acceptance: jet axis in the ECal rectangle with a 20 cm buffer (eta about
+    2.3-3.6), FMS: 2.8 < eta < 3.8.
+  - Triggers: fcsEM0/1/2 (and _tpc copies; nominal 2.0 / 3.5 / 5.0 GeV E_T),
+    FMS: JP0-2 and board sums. FCS jet patches add HCal energy, so they are
+    not used for EM jets.
+  - A_N: left-right cross ratio with <|cos phi|> correction, the other beam's
+    spin held fixed; FMS: cross ratio in 16 phi bins fitted with
+    p0 cos(phi) + p1, the other beam summed.
+  - Binning: x_F bins of 0.05 (FMS note also in x_F; FMS code bins in E and pT).
+  - Matching (JES only): one-to-one, dR < R/2; FMS: nearest within 0.2.
+  - Simulation: ptHat bins with cross-section weights and no generator
+    filter, sqrt(s) 508.4 GeV, ECal scale k = 0.947; FMS: flat ptHat 2-80 GeV
+    with a generator and an E_T filter.
+  - Truth photons: GEANT photons made within 0.01 cm of the primary vertex
+    (pi0/eta decayed by GEANT); FMS: PYTHIA status-1 photons (pi0/eta decayed
+    by PYTHIA). Long-lived decays (K0S, Lambda) excluded in both.
+  - Run list: catalog runs 23005044-23108024 minus MakeRunList.pl ranges and
+    RunLog flags (to 23027047), minus D. Kapukchyan's pi0 bad-run list
+    (AnAsymmetry -r); FMS: its own run list and fill 18764.
 
-Applied after the pipeline, not in it:
-  - Unphysical jets: E <= sqrt(s)/2 and 0 < x_F <= 1 on the final energy,
-    after UE subtraction and calibration (pass_physical_jet_cut() in
-    JetParameters.h holds the definition).
-  - The second 2 GeV jet pT cut, on the corrected pT.
-  - Trigger-dependent jet pT thresholds (section 6).
-  - Trigger selection: flags are saved in the trees; simulation is produced
-    without a trigger requirement.
+Not the same, to check:
+  - Vertex: no vertex used here (the FCS data has BBC vertices in about 37% of
+    events, no TPC/VPD in st_fwd); directions from the origin in data and
+    simulation. FMS: |vz| < 80 cm and directions from the vertex. The
+    simulation's vertex (Gaussian at 0, sigma 30 cm) does not match the data:
+    BBC vertices of run 23007048 have mean -15.8 cm, RMS 17.2 cm (BBC
+    resolution included). FMS drew simulated vertices from data.
+  - Hot / bad channels: FMS masked them per run (TStFmsHotChDB); here only the
+    DB's gains and the point energy upper limit act on them; no explicit mask.
 
-Not used:
-  - Post-detector E_T filter, hot-channel mask in simulation, |vz| cut,
-    abort-gap removal, spin-state cut, ring-of-fire cut.
-
-Geometry caution for the off-axis cones: the FMS covers full azimuth, so cones
-at phi +/- 90 degrees always land on active detector. The FCS has a gap between
-its two halves (ECAL inner edge at |x| ~ 20.5 cm) and ends at y ~ -97 / +86 cm,
-so a cone at +/- 90 degrees from a jet near y ~ 0 sits across the gap and
-partly off the detector. This is a geometric estimate, not a measured effect.
+Not applied in either (systematics in the FMS note):
+  - Ring-of-fire cut (FMS: stored, cut commented out; varied as a systematic),
+    pile-up, polarization scale.
+  - Unfolding: FMS SVD (RooUnfold) on E, pT and photon multiplicity; here not
+    yet.
