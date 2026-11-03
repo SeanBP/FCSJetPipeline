@@ -40,10 +40,11 @@ void plot_an(const char *in_root, const char *out_png, const char *level = "all"
     const double pad = 0.15 * (ymax - ymin + 1e-3);
     TCanvas *c = new TCanvas("c_an", "c_an", 900, 650);
     c->SetGridy();
-    c->SetLeftMargin(0.12);
+    c->SetLeftMargin(0.14);
     TH1D *frame = new TH1D("frame_an", Form("Run 22 FCS EM-jet A_{N}, %s levels, %s photon classes;x_{F};A_{N}",
                                             level, cls), 100, -1.0, 1.0);
     frame->SetMinimum(ymin - pad); frame->SetMaximum(ymax + pad);
+    frame->GetYaxis()->SetTitleOffset(1.5);
     frame->Draw();
     TLine *zero = new TLine(-1.0, 0, 1.0, 0);
     zero->SetLineStyle(2); zero->Draw();
@@ -52,7 +53,7 @@ void plot_an(const char *in_root, const char *out_png, const char *level = "all"
     lg->AddEntry(g[0], "blue beam polarized (x_{F} > 0)", "pe");
     lg->AddEntry(g[1], "yellow beam polarized (x_{F} < 0)", "pe");
     if (err_scale == 1) lg->AddEntry((TObject *)0, "statistical errors only", "");
-    else lg->AddEntry((TObject *)0, Form("projected statistical errors (test errors x %.3f)%s", err_scale, at_zero ? ", at A_{N} = 0" : ""), "");
+    else lg->AddEntry((TObject *)0, Form("projected statistical errors (test errors x %.4g)%s", err_scale, at_zero ? ", at A_{N} = 0" : ""), "");
     lg->SetBorderSize(0); lg->SetFillStyle(0);
     lg->Draw();
     c->SaveAs(out_png);

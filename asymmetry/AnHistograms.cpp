@@ -156,7 +156,7 @@ int main(int argc, char **argv)
     {
         const char *st = stage[g];
         q_eta[g] = new TH1D(TString::Format("qa_eta_%s", st), ";jet #eta;jets", 60, 2.0, 5.0);
-        q_phi[g] = new TH1D(TString::Format("qa_phi_%s", st), ";jet #phi;jets", 72, -M_PI, M_PI);
+        q_phi[g] = new TH1D(TString::Format("qa_phi_%s", st), ";jet #phi (reco_phi, 0 to 2#pi);jets", 72, 0, 2 * M_PI);
         q_e[g] = new TH1D(TString::Format("qa_E_%s", st), ";uncorrected jet E (GeV);jets", 125, 0, 125);
         q_ue[g] = new TH1D(TString::Format("qa_ueE_%s", st), ";UE energy in the jet (GeV);jets", 100, 0, 10);
         q_ecorr[g] = new TH1D(TString::Format("qa_Ecorr_%s", st), ";corrected jet E (GeV);jets", 125, 0, 125);

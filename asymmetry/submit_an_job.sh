@@ -3,7 +3,7 @@
 # per-stage timing table per job.
 # Usage:
 #   ./submit_an_job.sh -f <listfile> -o <outdir> [-n <files_per_job>] \
-#       [-c <calib json>] [-t <triggers>] [-l <label>] [-k <0|1>] [-N]
+#       [-c <calib json>] [-t <triggers>] [-l <label>] [-k <0|1>] [-J <N>] [-N]
 #
 #   -f  MakeRunList.pl-format list ("<url or path>/<events>" per line)
 #   -o  output directory; histograms go to <outdir>/hists/, timing tables
@@ -21,6 +21,9 @@
 #       counts; an event listing only a _tpc copy is a valid EM event)
 #   -l  label for the generated XML, default "an"
 #   -k  1 = save stdout/stderr under <outdir>/log/, default 0
+#   -J  keep the calibrated jet files (UE-subtracted, JES applied) of every
+#       N-th job in <outdir>/jets/: 1 = all, 0 = none (default). About
+#       0.3 MB per MuDst
 #   -N  write the XML and job layout, do not submit
 
 set -e
@@ -32,9 +35,10 @@ CALIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../jet_calibration/JES_Lookups" && p
 TRIGGER_FILTER="fcsEM0,fcsEM1,fcsEM2,fcsEM0_tpc,fcsEM1_tpc,fcsEM2_tpc"
 LABEL="an"
 KEEPLOGS=0
+KEEP_JETS=0
 DRYRUN=0
 
-while getopts "f:o:n:c:t:l:k:Nh" opt; do
+while getopts "f:o:n:c:t:l:k:J:Nh" opt; do
   case $opt in
     f) LISTFILE="$OPTARG" ;;
     o) OUTDIR="$OPTARG" ;;
@@ -43,6 +47,7 @@ while getopts "f:o:n:c:t:l:k:Nh" opt; do
     t) TRIGGER_FILTER="$OPTARG" ;;
     l) LABEL="$OPTARG" ;;
     k) KEEPLOGS="$OPTARG" ;;
+    J) KEEP_JETS="$OPTARG" ;;
     N) DRYRUN=1 ;;
     h|*) sed -n '2,27p' "$0"; exit 0 ;;
   esac
@@ -55,6 +60,7 @@ fi
 [ -f "$CALIB" ] || { echo "Error: calibration JSON '$CALIB' does not exist"; exit 1; }
 grep -q '"model": *"logcubic"' "$CALIB" || { echo "Error: $CALIB is not a log-cubic EM-only map (CalibrationMap_em_only); pass one with -c"; exit 1; }
 [[ "$FILES_PER_JOB" =~ ^[1-9][0-9]*$ ]] || { echo "Error: -n must be a positive integer"; exit 1; }
+[[ "$KEEP_JETS" =~ ^[0-9]+$ ]] || { echo "Error: -J must be a non-negative integer"; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIPELINE_ROOT="$(dirname "${SCRIPT_DIR}")"
@@ -68,6 +74,7 @@ for name in "${REQUESTED[@]}"; do
 done
 
 mkdir -p "${OUTDIR}/hists" "${OUTDIR}/timing"
+[ "$KEEP_JETS" != "0" ] && mkdir -p "${OUTDIR}/jets"
 CALIB_NAME=$(basename "$CALIB")
 cp -p "$CALIB" "${SCRIPT_DIR}/jes/${CALIB_NAME}"
 
@@ -106,6 +113,7 @@ sed -e "s#{{LISTFILE}}#${SORTEDLIST}#g" \
     -e "s/{{NPROCESSES}}/${NPROC}/g" \
     -e "s/{{TRIGGER_FILTER}}/${TRIGGER_FILTER}/g" \
     -e "s/{{CALIB_NAME}}/${CALIB_NAME}/g" \
+    -e "s/{{KEEP_JETS}}/${KEEP_JETS}/g" \
     -e "s#{{OUTDIR}}#${OUTDIR}#g" \
     -e "s#{{STDOUT_URL}}#${STDOUT_URL}#g" \
     -e "s#{{STDERR_URL}}#${STDERR_URL}#g" \
@@ -124,6 +132,7 @@ files_per_job=${FILES_PER_JOB}
 calib_json=${CALIB}
 trigger_filter=${TRIGGER_FILTER}
 keep_logs=${KEEPLOGS}
+keep_jets_every=${KEEP_JETS}
 EOF
 
 [ "$DRYRUN" = "1" ] && { echo "Dry run (-N): not submitted"; exit 0; }

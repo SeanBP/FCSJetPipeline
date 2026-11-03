@@ -61,8 +61,8 @@ cat "${REP}/resources.txt"
 REQ=$(grep '^request_id=' "${OUTDIR}"/run_params_*.txt | head -1 | cut -d= -f2)
 if [ -n "$REQ" ]; then
     {
-        echo "# condor_history for request ${REQ}: job wall_s cpu_s memory_MB(peak) disk_kB exit_code"
-        condor_history seanp -constraint "regexp(\"${REQ}\", Cmd)" \
+        echo "# condor_history for request ${REQ}: job wall_s cpu_s memory_MB (condor MemoryUsage) disk_kB (job sandbox only, not scratch) exit_code"
+        condor_history seanp -constraint "regexp(\"${REQ}\", Arguments)" \
             -af:h ProcId RemoteWallClockTime RemoteUserCpu MemoryUsage DiskUsage ExitCode 2>/dev/null | sort -n
     } > "${REP}/condor_jobs.txt"
     awk 'NR > 2 && $2 > 0 { n++; w += $2; if ($2 > wm) wm = $2; if ($4 > mm) mm = $4 }

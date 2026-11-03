@@ -238,7 +238,7 @@ EM-only script. The two JSON schemas are not interchangeable.
 
 ```
 ./make_smoke_list.py <prefix> [--runs 60] [--files 40]
-./submit_an_job.sh -f <listfile> -o <outdir> [-n 40] [-c <JES json>] [-k 1] [-N]
+./submit_an_job.sh -f <listfile> -o <outdir> [-n 40] [-c <JES json>] [-k 1] [-J <N>] [-N]
 ./smoke_report.sh <outdir> <prefix>_good_runs.txt
 ```
 

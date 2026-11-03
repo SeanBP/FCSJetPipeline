@@ -165,7 +165,8 @@ int main(int argc, char **argv)
             a->SetTitle(""); a->SetMinimum(0.5); a->Draw("hist"); b->Draw("hist same");
             if (!lg)
             {
-                lg = new TLegend(0.35, 0.75, 0.88, 0.88);
+                lg = new TLegend(0.40, 0.80, 0.89, 0.89);
+                lg->SetTextSize(0.035);
                 lg->AddEntry(a, "jets, events passing event cuts", "l");
                 lg->AddEntry(b, "jets in the A_{N} yields", "l");
                 lg->SetBorderSize(0); lg->SetFillStyle(0);

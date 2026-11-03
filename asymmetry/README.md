@@ -11,7 +11,7 @@ not included.
 
 ```
 ./make_smoke_list.py <outdir>/<prefix> --runs 60 --files 40
-./submit_an_job.sh -f <outdir>/<prefix>.list -o <outdir> -l <prefix> -k 1
+./submit_an_job.sh -f <outdir>/<prefix>.list -o <outdir> -l <prefix> -k 1 -J 1
 ./smoke_report.sh <outdir> <outdir>/<prefix>_good_runs.txt     # once the jobs end
 ```
 
@@ -29,8 +29,10 @@ not included.
   events, 0.27% of the 7.85e9 good-run events, in
   `/star/data01/pwg/seanp/asymmetry/smoke_v1`.
 
-Each job runs the whole chain on up to 40 MuDsts of one run. It keeps only
-the A_N yield histograms, so no SimpleTrees or jet trees are stored.
+Each job runs the whole chain on up to 40 MuDsts of one run. It keeps the
+A_N yield and sanity histograms; no SimpleTrees are stored, and the
+calibrated jet files (about 0.3 MB per MuDst) only for every N-th job with
+`-J N` (`-J 1` all, default none), in `<outdir>/jets/`.
 
 | Step | Program | Note |
 |---|---|---|
@@ -41,7 +43,8 @@ the A_N yield histograms, so no SimpleTrees or jet trees are stored.
 | 5. A_N histograms | `AnHistograms` | yields vs x_F (`reco_x_F_corr`) and sanity distributions |
 | 6. A_N (offline) | `AnAsymmetry -r`, `plot_an.C`, `AnPlots`, `project_errors.py` | per-run yield files: flagged bad runs dropped (D. Kapukchyan's list), per-run polarization, A_N with statistical errors; yield and sanity plots; projected errors |
 
-SimpleTrees are deleted after step 3, and jet files after step 5. Step 6 runs
+SimpleTrees are deleted after step 3, and jet files after step 5 unless
+the job keeps them (`-J`). Step 6 runs
 on the job outputs, not in the job.
 
 ## Files
@@ -131,13 +134,14 @@ on the job outputs, not in the job.
   (0.05 bins: chi2 37.4 / 40 on 2e7 jets; two runs with different P through
   `-r`: 33.7 / 40).
 - **`an_job.xml`, `submit_an_job.sh`**: the condor job. Each stage runs
-  under `/usr/bin/time`. An xrootd fetch that fails or takes over 20 min
-  is cut off, recorded as `fetchfail` and the file skipped (stalls of over
-  an hour were seen on 2026-11-03). Every job writes
+  under `/usr/bin/time`. An xrootd fetch that fails or takes over 5 min
+  is cut off and tried once more (`fetchretry` row); a second failure is
+  recorded as `fetchfail` and the file skipped. Normal fetches take seconds;
+  stalls of over an hour were seen on 2026-11-03. Every job writes
   `timing/timing_<run>_<job>.txt`, one row per stage call: wall, user and
   sys time, peak RSS, and scratch use afterwards. Histograms go to `hists/`.
   ```
-  ./submit_an_job.sh -f <list> -o <outdir> [-n 40] [-c <JES json>] [-k 1] [-N]
+  ./submit_an_job.sh -f <list> -o <outdir> [-n 40] [-c <JES json>] [-k 1] [-J <N>] [-N]
   ```
   The default JES map is
   `jet_calibration/JES_Lookups/JetEnergyScale_lookup_em_only.json`.

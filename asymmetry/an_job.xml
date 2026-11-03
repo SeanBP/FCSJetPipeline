@@ -5,14 +5,15 @@
     EM-only point jets (RecoJets) -> in-job underlying event (UnderlyingEvent)
     -> JES calibration (ApplyCorrections_em_only) -> A_N yield histograms
     (AnHistograms). Only the histograms and a per-stage timing table leave the
-    job; SimpleTrees and jet files are deleted.
+    job; SimpleTrees are deleted, and jet files too unless the job is one
+    of those keeping them (KEEP_JETS).
 
     Each stage runs under /usr/bin/time; timing_<run>_<job>.txt has one row
     per stage call:
       stage file catalog_events input_kB wall_s user_s sys_s maxrss_kB scratch_kB
     (scratch_kB: the job's scratch use after the stage). A fetch that fails or
-    takes over 20 min (timeout) gives a "fetchfail" row and the file is
-    skipped.
+    takes over 5 min (timeout) gives a "fetchretry" row and is tried once
+    more; a second failure gives a "fetchfail" row and the file is skipped.
 
     Configurable per submission (filled in by submit_an_job.sh, see its -h):
       {{LISTFILE}}        MakeRunList.pl-format list, sorted by run and time
@@ -21,6 +22,8 @@
       {{TRIGGER_FILTER}}  FCS trigger names an event must have fired
       {{CALIB_NAME}}      EM-only point-jet JES lookup JSON, a file in
                           asymmetry/jes/ (submit_an_job.sh -c copies it there)
+      {{KEEP_JETS}}       keep the calibrated jet files of every N-th job
+                          (to <outdir>/jets/), 0 = none
       {{OUTDIR}}          absolute output directory
       {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
 
@@ -75,9 +78,16 @@
             set urlprefix = `echo ${FILEURL} | awk -v l="$xrdnchar" '{print substr($0,0,l)}'`
 
             if ( "$xrdname" == "$urlprefix" ) then
-                # a stalled xrootd transfer is cut off after 20 min and the file skipped
-                /usr/bin/time -f "%e %U %S %M" -o stage.time timeout 1200 xrdcp --retry 3 -s ${FILEURL} ${LOCALFILE}
+                # a stalled xrootd transfer (a normal one takes seconds) is cut off
+                # after 5 min and tried once more; a second failure skips the file
+                /usr/bin/time -f "%e %U %S %M" -o stage.time timeout 300 xrdcp --retry 3 -s ${FILEURL} ${LOCALFILE}
                 set FETCHSTATUS = $status
+                if ( ${FETCHSTATUS} != 0 ) then
+                    echo "fetchretry ${LOCALFILE} ${NEVCAT} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+                    rm -f ${LOCALFILE}
+                    /usr/bin/time -f "%e %U %S %M" -o stage.time timeout 300 xrdcp --retry 3 -s ${FILEURL} ${LOCALFILE}
+                    set FETCHSTATUS = $status
+                endif
             else
                 /usr/bin/time -f "%e %U %S %M" -o stage.time cp ${FILEURL} ${LOCALFILE}
                 set FETCHSTATUS = $status
@@ -159,9 +169,17 @@
         echo "output an_hists_${TAG}.root 0 `du -k an_hists_${TAG}.root | cut -f1` 0 0 0 0 0" >> ${TIMING}
         echo "jetfiles all 0 `cat jet_files.list | xargs du -ck | tail -1 | cut -f1` 0 0 0 0 0" >> ${TIMING}
 
-        foreach f ( `cat jet_files.list` )
-            rm -f ${f}
-        end
+        # calibrated jet files: kept for every {{KEEP_JETS}}-th job (0 = none), else deleted
+        set KEEPJ = 0
+        if ( {{KEEP_JETS}} &gt; 0 ) then
+            @ jmod = ${JOBINDEX} % {{KEEP_JETS}}
+            if ( ${jmod} == 0 ) set KEEPJ = 1
+        endif
+        if ( ${KEEPJ} == 0 ) then
+            foreach f ( `cat jet_files.list` )
+                rm -f ${f}
+            end
+        endif
         rm -f my_lines.list simpletree_files.list single_file.list ue_pairs.list jet_files.list stage.time
         cat ${TIMING}
 
@@ -193,5 +211,6 @@
 
     <output fromScratch="an_hists_*.root" toURL="file:{{OUTDIR}}/hists/" />
     <output fromScratch="timing_*.txt" toURL="file:{{OUTDIR}}/timing/" />
+    <output fromScratch="jet_output_*.root" toURL="file:{{OUTDIR}}/jets/" />
 
 </job>

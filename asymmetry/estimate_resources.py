@@ -80,7 +80,7 @@ def main():
 
     rows = [r for j in jobs for r in j]
     fetch = [r for r in rows if r['stage'] == 'fetch']
-    failed = [r for r in rows if r['stage'] == 'fetchfail']
+    failed = [r for r in rows if r['stage'] in ('fetchfail', 'fetchretry')]
     mudst = [r for r in rows if r['stage'] == 'mudst']
     jets = [r for r in rows if r['stage'] == 'jets']
     per_job = {s: [sum(r['wall'] for r in j if r['stage'] == s) for j in jobs] for s in ('ue', 'calib', 'hists')}
@@ -98,7 +98,9 @@ def main():
         statistics.mean(r['wall'] for r in mudst), a0, 1e3 * b0, cpu_frac))
     print('  jet finding     %6.1f s' % jets_per_file)
     if failed:
-        print('  failed fetches  %d of %d (%.0f s lost in all)' % (len(failed), len(failed) + len(fetch), sum(r['wall'] for r in failed)))
+        print('  failed fetches  %d retried, %d skipped, of %d files (%.0f s lost in all)' % (
+            sum(1 for r in failed if r['stage'] == 'fetchretry'), sum(1 for r in failed if r['stage'] == 'fetchfail'),
+            len(fetch) + sum(1 for r in failed if r['stage'] == 'fetchfail'), sum(r['wall'] for r in failed)))
     slow = sorted(r['wall'] for r in fetch)
     print('  fetch wall      median %.0f s, 95%% %.0f s, max %.0f s' % (slow[len(slow) // 2], slow[int(0.95 * (len(slow) - 1))], slow[-1]))
     print('per job (measured n = %.1f files):' % n_meas)
