@@ -2,18 +2,34 @@
 // underlying-event step and ApplyCorrections_em_only), so the jet and
 // SimpleTree files need not be kept.
 //
-// Per event: no FCS LED (fcs_led), the highest EM trigger level (AnConfig.h)
-// and the spin state (Spin_config); events failing any are dropped. Per jet:
-// a valid calibration (reco_E_corr > 0), the physical cut
+// Per event: no FCS LED (fcs_led), at least one EM trigger listed
+// (AnConfig.h) and a spin state (Spin_config); events failing any are
+// dropped. Per jet: a valid calibration (reco_E_corr > 0), the physical cut
 // (pass_physical_jet_cut: E <= sqrt(s)/2, 0 < x_F <= 1), corrected pT =
-// reco_E_corr / cosh(eta) above kJetPtCorrMin and above kTriggerPtFactor
-// times the event's EM threshold. Each passing jet
+// reco_E_corr / cosh(eta) above kJetPtCorrMin, and, as the FMS EM-jet
+// analysis, uncorrected pT (reco_pt: no UE subtraction, no JES, what the
+// hardware trigger sees) above kTriggerPtFactor times the threshold of at
+// least one EM trigger listed in the event. In data the listed triggers are the ones that
+// recorded the event (MuDst nominal trigger ids: condition fired and the
+// prescale accepted it); a trigger whose condition fired but was prescaled
+// away is not listed and admits no jet. The jet's EM level is the lowest
+// listed level whose threshold it passes. Each passing jet
 // fills x_F (reco_x_F_corr) in
 //   h_xF_<EM level>_<photon class>_<side>_<spin state>
-// e.g. h_xF_EM1_np2_xpos_BuYd. Also written:
+// e.g. h_xF_EM1_np2_xpos_BuYd, and with weight |cos phi| (phi = atan2(reco_y,
+// reco_x), the jet's azimuth; the same for both beams, whose left is +x or -x)
+//   h_abscos_<EM level>_<photon class>
+// summed over sides and spin states: divided by the summed yields it is the
+// bin's mean |cos phi|, which a left-right asymmetry is diluted by
+// (AnAsymmetry.cpp); likewise, with weight x_F,
+//   h_xfsum_<EM level>_<photon class>
+// for the bin's mean corrected x_F, where its A_N point is placed. Also written:
 //   h_cutflow                    jets (and events) at each cut
-//   h_events_<EM level>          events per spin state, all EM-level events
-//   h_ptcorr_<EM level>          corrected pT before the threshold cut
+//   h_events_<EM level>          events per spin state, by highest listed level
+//   h_ptcorr_<EM level>          corrected pT before the threshold cut, by
+//                                highest listed level
+//   h_ptraw_<EM level>           uncorrected pT before the threshold cut, the
+//                                same jets
 //   runs                         TNamed, the run numbers of the input (from
 //                                the file names, jet_output_<run>_<file>.root)
 // Output files of one run, or of a fill, add with hadd.
@@ -67,9 +83,9 @@ int main(int argc, char **argv)
     if (t.GetNtrees() == 0) { std::cerr << "ERROR: no files in " << argv[1] << std::endl; return 1; }
     if (!t.GetBranch("reco_E_corr")) { std::cerr << "ERROR: no reco_E_corr; run ApplyCorrections_em_only first" << std::endl; return 1; }
 
-    Int_t spin_config = -1, led = 0, em[kNEmLevels] = {0};
+    Int_t spin_config = -1, led = 0, em[kNEmLevels] = {0}, em_tpc[kNEmLevels] = {0};
     Double_t sqrt_s = 0;
-    std::vector<float> *eta = 0, *x = 0, *e_corr = 0, *xf_corr = 0;
+    std::vector<float> *eta = 0, *x = 0, *y = 0, *pt_raw = 0, *e_corr = 0, *xf_corr = 0;
     std::vector<int> *nphotons = 0;
     t.SetBranchAddress("Spin_config", &spin_config);
     t.SetBranchAddress("fcs_led", &led);
@@ -77,15 +93,24 @@ int main(int argc, char **argv)
     t.SetBranchAddress("fcsEM0", &em[0]);
     t.SetBranchAddress("fcsEM1", &em[1]);
     t.SetBranchAddress("fcsEM2", &em[2]);
+    // the _tpc copies: the same EM conditions under their own trigger ids
+    for (int l = 0; l < kNEmLevels; l++)
+    {
+        const TString b = TString::Format("fcsEM%d_tpc", l);
+        if (t.GetBranch(b)) t.SetBranchAddress(b, &em_tpc[l]);
+    }
     t.SetBranchAddress("reco_eta", &eta);
     t.SetBranchAddress("reco_x", &x);
+    t.SetBranchAddress("reco_y", &y);
+    t.SetBranchAddress("reco_pt", &pt_raw);
     t.SetBranchAddress("reco_E_corr", &e_corr);
     t.SetBranchAddress("reco_x_F_corr", &xf_corr);
     t.SetBranchAddress("reco_nphotons", &nphotons);
 
     TFile out(argv[2], "RECREATE");
     TH1D *h[kNEmLevels][kNPhotonClasses][kNSides][kNSpinStates];
-    TH1D *h_events[kNEmLevels], *h_pt[kNEmLevels];
+    TH1D *h_cos[kNEmLevels][kNPhotonClasses], *h_xfs[kNEmLevels][kNPhotonClasses];
+    TH1D *h_events[kNEmLevels], *h_pt[kNEmLevels], *h_ptraw[kNEmLevels];
     for (int l = 0; l < kNEmLevels; l++)
     {
         for (int k = 0; k < kNPhotonClasses; k++)
@@ -95,9 +120,17 @@ int main(int argc, char **argv)
                     TString name = TString::Format("h_xF_%s_%s_%s_%s", kEmLevelName[l], PhotonClassName(k), kSideName[s], kSpinStateName[p]);
                     h[l][k][s][p] = new TH1D(name, name + ";x_{F};jets", kNXfBins, kXfMin, kXfMax);
                 }
+        for (int k = 0; k < kNPhotonClasses; k++)
+        {
+            TString name = TString::Format("h_abscos_%s_%s", kEmLevelName[l], PhotonClassName(k));
+            h_cos[l][k] = new TH1D(name, name + ";x_{F};sum of |cos #phi|", kNXfBins, kXfMin, kXfMax);
+            name = TString::Format("h_xfsum_%s_%s", kEmLevelName[l], PhotonClassName(k));
+            h_xfs[l][k] = new TH1D(name, name + ";x_{F};sum of x_{F}", kNXfBins, kXfMin, kXfMax);
+        }
         h_events[l] = new TH1D(TString::Format("h_events_%s", kEmLevelName[l]), ";spin state;events", kNSpinStates, 0, kNSpinStates);
         for (int p = 0; p < kNSpinStates; p++) h_events[l]->GetXaxis()->SetBinLabel(p + 1, kSpinStateName[p]);
         h_pt[l] = new TH1D(TString::Format("h_ptcorr_%s", kEmLevelName[l]), ";corrected jet p_{T} (GeV);jets", 100, 0, 20);
+        h_ptraw[l] = new TH1D(TString::Format("h_ptraw_%s", kEmLevelName[l]), ";uncorrected jet p_{T} (GeV);jets", 100, 0, 20);
     }
     TH1D *h_cut = new TH1D("h_cutflow", ";;jets", kNCuts + 1, 0, kNCuts + 1);
     for (int c = 0; c < kNCuts; c++) h_cut->GetXaxis()->SetBinLabel(c + 1, kCutName[c]);
@@ -115,7 +148,9 @@ int main(int argc, char **argv)
             runs.insert(RunFromFileName(t.GetFile()->GetName()));
         }
         h_cut->Fill(kNCuts);
-        const int level = em[2] ? 2 : em[1] ? 1 : em[0] ? 0 : -1;
+        bool listed[kNEmLevels];
+        for (int l = 0; l < kNEmLevels; l++) listed[l] = em[l] || em_tpc[l];
+        const int level = listed[2] ? 2 : listed[1] ? 1 : listed[0] ? 0 : -1;
         const int spin = SpinState(spin_config);
         const size_t nj = eta->size();
         h_cut->Fill(kAllJets, nj);
@@ -126,7 +161,6 @@ int main(int argc, char **argv)
         if (spin < 0) continue;
         h_cut->Fill(kSpin, nj);
         h_events[level]->Fill(spin);
-        const double pt_min = kTriggerPtFactor * kEmThresholdGeV[level];
         for (size_t j = 0; j < nj; j++)
         {
             const double E = (*e_corr)[j];
@@ -138,10 +172,18 @@ int main(int argc, char **argv)
             if (pt <= kJetPtCorrMin) continue;
             h_cut->Fill(kPtMin);
             h_pt[level]->Fill(pt);
-            if (pt <= pt_min) continue;
+            h_ptraw[level]->Fill((*pt_raw)[j]);
+            // the lowest listed EM level whose threshold the jet's uncorrected pT passes (FMS: any listed trigger)
+            int jl = -1;
+            for (int l = 0; l < kNEmLevels && jl < 0; l++)
+                if (listed[l] && (*pt_raw)[j] > kTriggerPtFactor * kEmThresholdGeV[l]) jl = l;
+            if (jl < 0) continue;
             h_cut->Fill(kTriggerPt);
             const int side = computeSide((*x)[j]) > 0 ? 1 : 0;
-            h[level][PhotonClass((*nphotons)[j])][side][spin]->Fill((*xf_corr)[j]);
+            const int cls = PhotonClass((*nphotons)[j]);
+            h[jl][cls][side][spin]->Fill((*xf_corr)[j]);
+            h_xfs[jl][cls]->Fill((*xf_corr)[j], (*xf_corr)[j]);
+            h_cos[jl][cls]->Fill((*xf_corr)[j], std::fabs((*x)[j]) / std::hypot((*x)[j], (*y)[j]));
         }
     }
 

@@ -6,23 +6,34 @@
 #include <cmath>
 
 // ------------------ EM trigger levels ------------------
-// Highest EM trigger fired, as UnderlyingEventPlayground/in_event/
-// in_event_util.h ProxyEmLevel: fcsEM2 > fcsEM1 > fcsEM0. With
-// prescales a lower flag can be missing, so the highest flag present counts.
-// fcsEM3 (runs 23101059-23108024 only) and the fcsEM*_tpc copies are not
-// used; no event of run 23007048 fired only a _tpc copy.
+// A jet counts if its corrected pT passes kTriggerPtFactor x the threshold
+// of any EM trigger listed in its event (the FMS EM-jet rule); its level is
+// the lowest such. Listed = recorded the event (data: nominal trigger ids, so
+// after prescale); fcsEMk_tpc counts as fcsEMk (same condition, own id; run
+// 23007048: 187 events list fcsEM2_tpc without fcsEM2, of 155506). fcsEM3
+// (runs 23101059-23108024 only) is not used. Trigger emulation cannot stand
+// in for the list: at run 23007048's settings it fires for only 86/71/47% of
+// the events listing EM0/1/2.
 static const int kNEmLevels = 3;
 static const char *const kEmLevelName[kNEmLevels] = {"EM0", "EM1", "EM2"};
 
-// EM trigger thresholds, GeV of jet pT. PLACEHOLDER, to be confirmed: the
-// Run 22 stage-2 thresholds are 63/111/158 counts (TriggerPlayground/
-// stage_params.txt), and the leading uncalibrated point-jet pT of run
-// 23007048 turns on near 2.6 GeV for EM1 and 3.7 GeV for EM2, about 0.023
-// GeV per count; EM0 is scaled from those.
-static const double kEmThresholdGeV[kNEmLevels] = {1.5, 2.6, 3.7};
+// EM trigger thresholds, GeV, compared with uncorrected jet pT (reco_pt: the
+// hardware trigger sees raw energy). The nominal online values, taken as
+// given for now (Sean, 2026-11-03); to be checked against measured turn-ons
+// (TriggerPlayground/turn_on.cpp). Online (A. Ogawa's Run 22 FCS trigger
+// pages): each EM bit is a stage-2 ECal 4x4 + nearest HCal 4x4 E_T sum above
+// EMTHR with ECal 4x4 > 0.25 x HCal 4x4, ORed north/south at stage 3; 0.0316
+// GeV E_T per count, EM0/1/2 = 64/112/160 counts = 2.0/3.5/5.0 GeV from run
+// 22359013 (63/111/158 before; stage_params.txt still has those). The online
+// E_T scale moved with the ET gain files (new at 23027047, removing an old
+// 0.7 factor) and the ECal electronics gain (halved at 23066056), so the
+// offline turn-ons can differ between those periods. Earlier rough estimate
+// on run 23007048: uncorrected point-jet pT turns on near 2.6 (EM1) and 3.7
+// GeV (EM2), about 0.74 of the nominal 3.5 and 5.0.
+static const double kEmThresholdGeV[kNEmLevels] = {2.0, 3.5, 5.0};
 
-// A jet counts only if its corrected pT is above this fraction of its
-// event's highest EM trigger threshold (above the trigger turn-on); 1.15 as
+// A jet counts only if its uncorrected pT is above this factor times the
+// threshold of an EM trigger listed in its event (above the turn-on); 1.15 as
 // the FMS EM-jet analysis (UnderlyingEventPlayground/fms_emjet_reference.txt)
 static const double kTriggerPtFactor = 1.15;
 
@@ -61,7 +72,8 @@ inline int SpinState(int spin_config)
 
 // ------------------ Detector side ------------------
 // computeSide() (JetParameters.h) on reco_x: -1 for x <= 0, +1 for x > 0.
-// Left/right relative to each beam is assigned when A_N is formed.
+// Left/right relative to each beam is assigned when A_N is formed
+// (AnAsymmetry.cpp): blue left = xpos, yellow left = xneg.
 static const int kNSides = 2;
 static const char *const kSideName[kNSides] = {"xneg", "xpos"};
 

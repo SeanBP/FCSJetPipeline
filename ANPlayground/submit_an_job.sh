@@ -17,7 +17,8 @@
 #       (copied into ANPlayground/jes/ for the SandBox). It must be a
 #       "logcubic" map
 #   -t  FCS trigger names an event must have fired, default
-#       fcsEM0,fcsEM1,fcsEM2 (the EM levels the UE step and the histograms use)
+#       fcsEM0,fcsEM1,fcsEM2 and their _tpc copies (the EM triggers AnHistograms
+#       counts; an event listing only a _tpc copy is a valid EM event)
 #   -l  label for the generated XML, default "an"
 #   -k  1 = save stdout/stderr under <outdir>/log/, default 0
 #   -N  write the XML and job layout, do not submit
@@ -28,7 +29,7 @@ LISTFILE=""
 OUTDIR=""
 FILES_PER_JOB=40
 CALIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../jet_calibration/JES_Lookups" && pwd)/JetEnergyScale_lookup_em_only.json"
-TRIGGER_FILTER="fcsEM0,fcsEM1,fcsEM2"
+TRIGGER_FILTER="fcsEM0,fcsEM1,fcsEM2,fcsEM0_tpc,fcsEM1_tpc,fcsEM2_tpc"
 LABEL="an"
 KEEPLOGS=0
 DRYRUN=0
