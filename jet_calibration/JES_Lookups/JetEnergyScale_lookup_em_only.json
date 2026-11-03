@@ -1,5 +1,9 @@
 {
   "model": "logcubic",
+  "sample": "jes_pixring_v1",
+  "k": "0.947",
+  "tune": "pythia6 PyTune 370, FMS tune",
+  "commit": "b784c3452d87e99844cd87eeb961a8fab2aad541",
   "C": 0.025095023255322355,
   "D": -0.0030182696442741502,
   "Emin": 1.2869186306213896,

@@ -26,12 +26,14 @@
 // 1% at the ends of the energy range (D is small only because ln^3 E is large:
 // the D term is -0.295 at 100 GeV).
 //
-// The JSON carries "model": "logcubic", the global "C", "D", "Emin" and
-// "Emax", and bins {i, j, A, B} (read by jet_calibration/ApplyCorrections_em_only.cpp
+// The JSON carries "model": "logcubic", where it came from ("sample", "k", "tune",
+// "commit": the pipeline commit it was built with), the global "C", "D", "Emin"
+// and "Emax", and bins {i, j, A, B} (read by jet_calibration/ApplyCorrections_em_only.cpp
 // and jet_scale/jes_closure.cpp). It also writes <out>.chi2.csv and
 // <out>.direct_fits.csv (the unsmoothed per-position fits).
 //
-// Usage: ./CalibrationMap_em_only <bins.root> <out.json>
+// Usage: ./CalibrationMap_em_only <bins.root> <out.json> [sample] [k] [tune] [commit]
+//        (filled in by submit_jet_scale_em_only.sh; "unknown" if left out)
 // Build: g++ -m64 -O2 CalibrationMap_em_only.cpp -o CalibrationMap_em_only `root-config --cflags --libs` -std=c++11
 
 #include <TFile.h>
@@ -55,6 +57,10 @@
 
 std::string ROOT_FILE = "jet_calibration_grid_test.root";
 std::string OUTPUT_JSON = "JetEnergyScale_lookup_GridTest.json";
+
+// Provenance written to the JSON, from the command line
+const char *const MAP_INFO_KEY[4] = {"sample", "k", "tune", "commit"};
+std::string map_info[4] = {"unknown", "unknown", "unknown", "unknown"};
 
 // Sanity cuts dropping the noise tail of low-statistics bins
 const double RESPONSE_SANITY_FACTOR = 1.5;
@@ -581,6 +587,8 @@ void write_calibration_json(
     out << "{\n";
     // Evaluators refuse a map without this tag (earlier forms)
     out << "  \"model\": \"logcubic\",\n";
+    for (int i = 0; i < 4; i++)
+        out << "  \"" << MAP_INFO_KEY[i] << "\": \"" << map_info[i] << "\",\n";
     out << "  \"C\": ";
     write_double(out, C);
     out << ",\n  \"D\": ";
@@ -669,6 +677,8 @@ int main(int argc, char **argv)
         input_file = argv[1];
     if (argc > 2)
         output_file = argv[2];
+    for (int i = 0; i < 4 && i + 3 < argc; i++)
+        map_info[i] = argv[i + 3];
 
     std::cout << "Loading " << input_file << " ..." << std::endl;
     std::vector<BinRow> rows = load_bins(input_file);

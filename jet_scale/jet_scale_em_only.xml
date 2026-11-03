@@ -15,6 +15,7 @@
       {{OUTDIR}}                 absolute output directory
       {{JSON_NAME}}              output lookup table filename
       {{SAVE_CALIBRATION_ROOT}}  1 = keep intermediate jet_calibration.root, 0 = discard
+      {{MAP_SAMPLE}}, {{MAP_K}}, {{MAP_TUNE}}, {{MAP_COMMIT}}  provenance for the JSON
       {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
 
     star-submit must run from the pipeline root, since the SandBox
@@ -72,7 +73,7 @@
             `root-config --cflags --libs` -std=c++11
 
         echo "Running CalibrationMap_em_only..."
-        ./CalibrationMap_em_only jet_calibration.root {{JSON_NAME}}
+        ./CalibrationMap_em_only jet_calibration.root {{JSON_NAME}} "{{MAP_SAMPLE}}" "{{MAP_K}}" "{{MAP_TUNE}}" "{{MAP_COMMIT}}"
 
         # Closure on the same UE-subtracted jets (Gaussian core or kernel peak of
         # E_corr / E_truth, and the map against the points it was fitted to)

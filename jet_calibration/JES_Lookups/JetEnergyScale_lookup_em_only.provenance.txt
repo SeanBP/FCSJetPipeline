@@ -1,0 +1,202 @@
+PROVENANCE OF THE EM-ONLY JES MAP jesmap_pixring_v1
+====================================================
+(Tracked copy of /star/data01/pwg/seanp/jes_points/jesmap_pixring_v1/
+PROVENANCE.txt. "This folder" and provenance/ below mean that folder.)
+Written 2026-11-03 from the production's own records (run_params file,
+generated job XMLs, job logs, the output files) and the git history of
+FCSJetPipeline. Copies of the job files are in provenance/ beside this file.
+
+Map file:   JetEnergyScale_lookup_em_only.json (this folder)
+Tracked copy (the standard): FCSJetPipeline/jet_calibration/JES_Lookups/
+            JetEnergyScale_lookup_em_only.json, identical to this one
+Sample:     /star/data01/pwg/seanp/jes_points/jes_pixring_v1
+
+
+1. CODE VERSIONS (git, FCSJetPipeline)
+--------------------------------------
+Simulation, jet finding and UE (sim_to_jet job):
+  commit fdd03771d71cf477e7de2abafc51db2003b61f42 (2026-10-30 17:17 EDT),
+  submitted 2026-10-30 21:35 UTC (17:35 EDT), request
+  70DBF1799029DFC1C65CE63A1C7CC743.
+  Checked 2026-11-03: no commit after fdd0377 changes sim_to_jet/, shared/,
+  underlying_event/ or StRoot/, and no file there changed between the commit
+  and the submission except the generated job XML. So the job ran the
+  fdd0377 code. (Whether the tree had other uncommitted edits at that moment
+  is not recorded; nothing on disk suggests it did.)
+  Library cache .sl73_x8664_gcc485 last built 2026-10-29 from StRoot/
+  (local StarGenerator/FILT, StFcsFastSimulatorMaker with setEcalScale,
+  StSpinPool).
+  The UE code has since been renamed (PixelRingUE.h -> WeightedWedgeUE.h,
+  2026-11-02, names only). Its output was checked identical on one file.
+
+Map, points and closure (jet_scale job):
+  Ran 2026-11-02 16:29-17:07 EST (request F12007320940BDEFE822000E05D7DA40)
+  from an uncommitted working tree between 0f8dc5c and b784c34.
+  Reproduced 2026-11-03 from a clean checkout of commit
+  b784c3452d87e99844cd87eeb961a8fab2aad541 (request
+  AA8CC4FC03B7162F05305C0B2DCF2267, output in repro_b784c34/): the JSON's
+  1798 bins, C, D, Emin, Emax, both CSV files and jes_closure.txt are
+  identical. b784c34 is therefore the map's code version, as the JSON's
+  "commit" field says.
+  The JSON here also carries four metadata keys (sample, k, tune, commit)
+  added by hand 2026-11-02. They change no numbers.
+
+Software (both jobs): container
+  /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif, STAR library "stardev"
+  (DEV; its build on 2026-10-30 is not recorded), gcc 4.8.5,
+  ROOT 5.34.38, fastjet 3.3.4, Pythia 6.4.28 (libPythia6_4_28.so).
+
+
+2. SIMULATION
+-------------
+Command (provenance/run_params_*.txt):
+  submit_sim_to_jet.sh with label jes_pixring_v1, pythia6, PyTune 370,
+  -M 1 (FMS tune), -w pthat_distribution_nofilt_em_only.json, 5000 jobs
+  x 2000 events, -s 10 (SimpleTree of every 10th job kept), -e 0 (no
+  generator filter), -E 1 (EM-only), -F 1 (jets from FCS points),
+  -C 1 (calibration sample: no jet pT minimums), -K 0.947, no trigger
+  filter, calib_run 0, random seeds (seed_base 0), MuDsts not kept.
+
+Generator (sim_to_jet/starsim_pythia6_filter.C):
+  Pythia 6.4.28, pp at sqrt(s) = 508.4 GeV (CMS frame), MSEL = 1 (hard QCD).
+  "FMS tune", as the STAR FMS EM-jet analysis: PyTune 370 (Perugia 2012,
+  PDF CTEQ6L1 through LHAPDF set 10042), then PARP(90) = 0.213,
+  PARP(91) = 1.
+  ptHat window per job from the allocation table below (CKIN(3), CKIN(4)).
+  Particles passed to GEANT: 1 < eta < 5, all phi, all pT.
+  Vertex: Gaussian, centre (0, 0, 0), widths 0.1, 0.1, 30 cm.
+  FcsJetFilter added with threshold 0 GeV: no event is rejected.
+  Geometry y2023 (starsim and BFC).
+  Per-job random seed from /dev/urandom (mod 100000).
+
+Reconstruction (sim_to_jet/runSimBfc.C, readMudst.C):
+  BFC chain "y2023,AgML,USExgeom,fzin,geant,FieldOn,logger,MakeEvent,
+  fcsSim,fcsWFF,fcsCluster,fcsPoint,cmudst", trigger version 202207.
+  ECal deposited energy scaled by k = 0.947 before digitization
+  (StFcsFastSimulatorMaker::setEcalScale).
+  FCS gains: conditions DB at BFC's nominal date (calib_run 0).
+  MuDst clusters seeded at 1 GeV ECal and HCal (as P24ia).
+  readMudst.C (trgSelect 202209) reclusters as data: ECal towers
+  >= 0.4 GeV, HCal 0.01 GeV, seeds 1 GeV; SimpleTree from the reclustered
+  clusters and points. Trigger simulation from stage_params.txt (not used
+  as a filter).
+
+Jet finding (sim_to_jet/JetMatcher.cpp, "JetMatcher list '' 1 1 0"):
+  anti-kT, R = 0.7, active areas (ghost area 0.04, |ghost y| < 5).
+  Reco: FCS ECal points (det 0, 1) with 1 GeV < E <= sqrt(s)/2
+  (sqrt(s) = 508.426 GeV); no jet pT minimum (calibration sample); jet
+  axis at z = 721.5402 cm inside the ECal rectangle
+  x 20.536-137.595 cm, y -96.724-86.256 cm, with a 20 cm inner buffer.
+  Truth: photons made within 0.01 cm of the primary vertex (GEANT id 1),
+  in the eta band of the reco fiducial region +- 1.5R; jets with pz > 0
+  whose axis is within R/2 (eta-phi) of the reco fiducial region; no pT
+  minimum.
+  Matching: reco-truth pairs by increasing dR, one to one, dR < R/2.
+
+Underlying event (underlying_event/, in the same job, per file):
+  eta-weighted side wedges: the jet's eta band |deta| < R, from 2R off the
+  jet axis to |dphi| = 150 deg, other jets kept, whole ECal, weighted per
+  point so the area-per-eta matches the jet cone's (eta bins 0.05; bins
+  covered below 10% of the jet's area get no weight); reco areas from 3 cm
+  tiles with 3 x 3 sub-tiles. UE = density x jet cone area (live area at
+  reco, pi R^2 at truth). Truth from the same truth photons, full azimuth.
+
+
+3. EVENTS AND THE pT-HAT DISTRIBUTION
+-------------------------------------
+Allocation (provenance/pthat_distribution_nofilt_em_only.json):
+optimized by JetStatisticsOptimizer for the cross-section-weighted
+effective count (target n_eff 20 per (E, x, y) point, E <= 100 GeV) on the
+neff_scan_nofilt sample, for 5000 jobs of 2000 events.
+
+5000 jobs ran. 71 output files have no cross section (N_job = -1, the unset
+value) and fewer than 2000 events (371-1925): most likely the generator
+step ended early, before writing its cross-section file. Unweightable, so
+they were left out of the map's input folder (jes_pixring_v1/flat, links to
+the 4929 good files). List: provenance/excluded_files_no_xsec.txt.
+
+Used: 4929 files, 9,858,000 events (every used file has 2000 events).
+
+  ptHat (GeV)  jobs  used files  events used  excluded  sigma (mb)    relative weight
+    0-5         958     953      1,906,000       5     31.499        1
+    5-10       2241    2211      4,422,000      30     1.06317       0.134387
+   10-15        678     665      1,330,000      13     0.043253      0.0196383
+   15-20        386     381        762,000       5     0.00527423    0.0030057
+   20-25        221     217        434,000       4     0.00104969    0.0012842
+   25-30        100      98        196,000       2     0.000278746   0.000762612
+   30-35         94      90        180,000       4     8.90746e-05   0.000230947
+   35-40        100      97        194,000       3     3.23643e-05   6.78343e-05
+   40-45         10       8         16,000       2     1.30965e-05   0.000307851
+   45-50        100      98        196,000       2     5.63984e-06   9.65548e-06
+   50-55         10      10         20,000       0     2.57597e-06   4.14004e-05
+   55-60         10      10         20,000       0     1.24369e-06   1.70408e-05
+   60-65         12      12         24,000       0     6.18732e-07   7.20981e-06
+   65-70         10      10         20,000       0     3.18852e-07   3.96107e-06
+   70-75         10       9         18,000       1     1.68984e-07   1.99714e-06
+   75-80         10      10         20,000       0     9.06281e-08   8.93448e-07
+   80-85         10      10         20,000       0     4.95793e-08   4.72598e-07
+   85-90         10      10         20,000       0     2.73955e-08   2.43425e-07
+   90-95         10      10         20,000       0     1.55186e-08   1.28052e-07
+   95-100        10      10         20,000       0     8.70103e-09   7.09004e-08
+  100-          10      10         20,000       0     1.14276e-08   1.66786e-07
+  (sigma and weights from the jet_scale job log: w_bin = sigma_bin /
+  sum over the bin's files of N_job, relative to 0-5 GeV; N_job is the
+  generator's trial count.)
+
+
+4. JES POINTS (jet_scale/JetEnergyScaleFineGrid_em_only.cpp)
+------------------------------------------------------------
+Command: JetEnergyScaleFineGrid_em_only jes_pixring_v1/flat/ "" "" "" "" "" "" 50
+Jets: all matched pairs of the 4929 files, 5,948,113, none dropped for a
+missing UE estimate. Both energies UE subtracted:
+  scale = (reco_E - reco_ue_E) / (truth_E - truth_ue_E),
+binned in subtracted truth energy; each jet cross-section weighted.
+Truth-energy bins: 20, 3-100 GeV, power-law edges (curvature 1.5); jets
+outside dropped.
+Position: reco jet |x|, y (north and south folded), grid points every
+2.5 cm inside the ECal rectangle with the 20 cm buffer; a point pools jets
+within 5 cm, 10 cm for bins from 37 GeV. At least 5 entries per point.
+Estimator per point: Gaussian core (jet_scale/GaussCore.h, default
+window) where n_eff >= 50 and the fit converges with chi2/ndf < 3 and
+sigma/mean < 0.35; otherwise the kernel-density peak.
+Result: core for 15178 points (of 18253 with n_eff >= 50), kernel peak for
+18308; rejected core fits (scale and response counted separately): not
+converged 326, chi2/ndf >= 3 779, sigma/mean >= 0.35 2431.
+Output: jet_calibration.root (this folder).
+
+
+5. MAP FIT (jet_scale/CalibrationMap_em_only.cpp)
+-------------------------------------------------
+Command: CalibrationMap_em_only jet_calibration.root JetEnergyScale_lookup_em_only.json
+Model: scale(E) = A + B lnE + C ln^2 E + D ln^3 E, E the reco (response)
+energy; C, D global, A, B per position. The order follows ATLAS
+(arXiv:1112.6426, Eq. 9); removing D worsens chi2 by 956.
+Points used: n_eff >= 3, response <= 1.5x and scale <= 1.5 sanity cuts,
+at least 4 energy bins per position.
+Global fit: 1798 positions, 33256 points, chi2/ndf = 65749.2/29658,
+  C = 0.025095 +- 0.001136, D = -0.003018 +- 0.000145 (errors x 1.49),
+  corr(C, D) = -0.993.
+A, B smoothed as the scale at 3 and 30 GeV (6 iterations, radius 2),
+masked to the buffered ECal fiducial region: 1798 of 3478 cells saved.
+Evaluators clamp E to the fitted response range 1.29-96.78 GeV.
+Applied as E_corr = E / scale(E) at the jet's |x|, y (bilinear in A, B).
+
+
+6. CLOSURE (jet_scale/jes_closure.cpp)
+--------------------------------------
+Command: jes_closure closure_files.list JetEnergyScale_lookup_em_only.json ue jes_closure jet_calibration.root
+Same 4929 files and UE-subtracted pairs, jets inside the map's fiducial
+region. Central value of E_corr / E_truth per truth-energy bin: Gaussian core
+where the bin's n_eff >= 250, otherwise kernel peak; bootstrap errors.
+Output: jes_closure.txt / .root / .png (this folder).
+
+
+7. FILES IN provenance/
+-----------------------
+  run_params_jes_pixring_v1_70DBF1799029DFC1C65CE63A1C7CC743.txt
+      sim_to_jet parameters as submitted
+  sim_to_jet_jes_pixring_v1.xml      the generated simulation job
+  jet_scale_em_only_jesmap_pixring_v1.xml   the generated map job
+  pthat_distribution_nofilt_em_only.json    the ptHat allocation
+  excluded_files_no_xsec.txt         the 71 files without a cross section
+Logs of the map job: log/ (original) and repro_b784c34/log/ (rebuild).

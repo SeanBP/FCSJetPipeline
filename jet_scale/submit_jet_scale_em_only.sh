@@ -74,12 +74,27 @@ else
     STDERR_URL="file:/dev/null"
 fi
 
+# Provenance for the JSON: the sample's sim_to_jet run parameters (in the input
+# folder or its parent), and this checkout's commit
+RUNPARAMS=$(ls "${JETTREES_DIR}"/run_params_*.txt "${JETTREES_DIR}"/../run_params_*.txt 2>/dev/null | head -1)
+param() { [ -z "$RUNPARAMS" ] || sed -n "s/^$1=//p" "$RUNPARAMS" | head -1; }
+MAP_SAMPLE=$(param label); MAP_K=$(param ecal_scale)
+MAP_TUNE="$(param generator) PyTune $(param tune_param)"
+[ "$(param fms_tune)" = "1" ] && MAP_TUNE="${MAP_TUNE}, FMS tune"
+[ -n "$RUNPARAMS" ] || MAP_TUNE=unknown
+MAP_COMMIT=$(git -C "${PIPELINE_ROOT}" rev-parse HEAD 2>/dev/null || echo unknown)
+git -C "${PIPELINE_ROOT}" diff --quiet HEAD -- jet_scale shared 2>/dev/null || MAP_COMMIT="${MAP_COMMIT}-dirty"
+
 sed -e "s#{{JETTREES_DIR}}#${JETTREES_DIR}#g" \
     -e "s#{{OUTDIR}}#${OUTDIR}#g" \
     -e "s/{{JSON_NAME}}/${JSON_NAME}/g" \
     -e "s/{{SAVE_CALIBRATION_ROOT}}/${SAVE_CALIBRATION_ROOT}/g" \
     -e "s#{{STDOUT_URL}}#${STDOUT_URL}#g" \
     -e "s#{{STDERR_URL}}#${STDERR_URL}#g" \
+    -e "s#{{MAP_SAMPLE}}#${MAP_SAMPLE:-unknown}#g" \
+    -e "s#{{MAP_K}}#${MAP_K:-unknown}#g" \
+    -e "s#{{MAP_TUNE}}#${MAP_TUNE}#g" \
+    -e "s#{{MAP_COMMIT}}#${MAP_COMMIT}#g" \
     "${SCRIPT_DIR}/jet_scale_em_only.xml" > "${OUTXML}"
 
 echo "Generated ${OUTXML}"
