@@ -11,7 +11,7 @@ the A_N yield histograms, so no SimpleTrees or jet trees are stored.
 |---|---|---|
 | 1. MuDst → SimpleTree | `data_to_jet/runMudst.C` | events that fired fcsEM0, fcsEM1 or fcsEM2 only |
 | 2. Jet finding | `data_to_jet/RecoJets` (`1 1`) | EM-only jets from FCS points, with areas |
-| 3. UE subtraction | `underlying_event/UnderlyingEvent` | proxy events from the job's own files (one run) |
+| 3. UE subtraction | `underlying_event/UnderlyingEvent` | in-event eta-weighted side wedges: each jet's own event, its eta band from 2R out to 150° in azimuth |
 | 4. JES calibration | `jet_calibration/ApplyCorrections_em_only` | calibrates the UE-subtracted energy: `reco_E_corr = (reco_E - reco_ue_E) / scale` |
 | 5. A_N histograms | `AnHistograms` | yields vs x_F (`reco_x_F_corr`) |
 
@@ -52,8 +52,8 @@ SimpleTrees are deleted after step 3, and jet files after step 5.
   - `list <out> <runs...> [-l N]` writes a MuDst list.
 - **`estimate_resources.py <outdir>/timing`**: fits the per-file costs from
   the benchmark (MuDst step = a + b·events, fetch per GB, jet finding per
-  file) and the per-job costs (UE scaled as files², calibration and
-  histograms linear in files). It applies them to every run in the catalog
+  file) and the per-job costs (UE, calibration and histograms linear in
+  files; compiles fixed). It applies them to every run in the catalog
   and prints:
   - number of jobs and the job wall-time distribution
   - total core-hours and campaign length for a given number of slots

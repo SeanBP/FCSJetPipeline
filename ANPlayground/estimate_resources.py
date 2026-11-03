@@ -14,11 +14,10 @@ bad-run filter is not applied, so the totals are an upper bound.
 Model, per job of n files of one run:
   per file   fetch (wall, per GB) + MuDst -> SimpleTree (wall = a + b * events,
              fitted) + jet finding (mean per file)
-  per job    compiles + calibration + histograms (mean)
-             + UE: measured per-job time scaled as (n / n_measured)^2, since
-             every jet searches the job's whole proxy pool
-  memory     largest peak RSS of any stage; scratch: largest scratch use,
-             scaled by n / n_measured for the SimpleTree part
+  per job    compiles (mean, fixed) + UE + calibration + histograms (mean,
+             each scaled as n / n_measured: UE is in-event (weighted wedges), so
+             each file is independent)
+  memory     largest peak RSS of any stage; scratch: one MuDst + n SimpleTrees
 """
 
 import argparse
@@ -47,7 +46,7 @@ def read_timing(path):
 def fit_line(x, y):
     n = len(x)
     if n < 2:
-        return 0.0, (y[0] if y else 0.0)
+        return (y[0] if y else 0.0), 0.0
     mx, my = sum(x) / n, sum(y) / n
     sxx = sum((a - mx) ** 2 for a in x)
     if sxx == 0:
@@ -129,9 +128,8 @@ def main():
         evf, gbf = ev / nf, size / nf / 1e9
         for k in range(c):
             m = nf // c + (1 if k < nf % c else 0)
-            w = m * (fetch_per_gb * gbf + a0 + b0 * evf + jets_per_file) \
-                + statistics.mean(per_job['compile']) + statistics.mean(per_job['calib']) * m / n_meas \
-                + statistics.mean(per_job['hists']) * m / n_meas + statistics.mean(per_job['ue']) * (m / n_meas) ** 2
+            w = m * (fetch_per_gb * gbf + a0 + b0 * evf + jets_per_file) + statistics.mean(per_job['compile']) \
+                + (statistics.mean(per_job['ue']) + statistics.mean(per_job['calib']) + statistics.mean(per_job['hists'])) * m / n_meas
             total_s += w
             job_walls.append(w)
     job_walls.sort()
