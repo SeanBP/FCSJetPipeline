@@ -137,6 +137,22 @@ class StSimpleReaderMaker : public StMaker
   // Per-run sqrt(s), GeV (computeSqrtSForRun() in JetParameters.h)
   Double_t event_sqrt_s_gev = -1;
 
+  // Run and event number of the MuDst event (to match other per-event data)
+  Int_t event_run = 0;
+  Int_t event_id = -1;
+
+  // FCS stage-3 output bits as the trigger control unit saw them: before
+  // prescale, so a condition that fired but did not record the event is
+  // still set (the Trig_flag[] list holds only triggers that recorded it).
+  // Data: lastDSM(2) + (lastDSM(5) << 16) of the event's trigger data, as
+  // StFcsTrgQaMaker; simulation (SetTriggerSim()): fcs_trg_base's emulated
+  // output, the same layout. Bits 0-2 HAD0-2, 3-5 EM0-2, 6 JP2, 7-9
+  // JPA1/JPBC1/JPDE1, 10-12 JPA0/JPBC0/JPDE0, 13 DiJP, 14 DiJPAsy, 15 DiELEA,
+  // 16-23 north ELE0-2/EM3/EHT/HHT/ETOT/HTOT, 24-31 the same south.
+  // fcs_tcu_source: 0 none, 1 hardware (data), 2 emulated (simulation).
+  UInt_t fcs_tcu_bits = 0;
+  Int_t fcs_tcu_source = 0;
+
   // Simulation only, constant per job (SetMCJobStats()): PYTHIA's cross
   // section (mb) and number of trials. -1 if unset (data).
   Double_t sigma_job = -1;

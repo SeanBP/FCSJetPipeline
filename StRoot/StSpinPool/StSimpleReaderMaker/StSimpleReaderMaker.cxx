@@ -14,6 +14,7 @@
 #include "StMuDSTMaker/COMMON/StMuFwdTrack.h"
 #include "StMuDSTMaker/COMMON/StMuFcsPoint.h"
 #include "StEvent/StEvent.h"
+#include "StEvent/StTriggerData.h"
 #include "StEvent/StFcsCollection.h"
 #include "StEvent/StFcsCluster.h"
 #include "StEvent/StFcsPoint.h"
@@ -194,6 +195,10 @@ Int_t StSimpleReaderMaker::Init( )
   }
 
   out_tree->Branch("Spin_config", &Spin_config, "Spin_config/I");
+  out_tree->Branch("event_run", &event_run, "event_run/I");
+  out_tree->Branch("event_id", &event_id, "event_id/I");
+  out_tree->Branch("fcs_tcu_bits", &fcs_tcu_bits, "fcs_tcu_bits/i");
+  out_tree->Branch("fcs_tcu_source", &fcs_tcu_source, "fcs_tcu_source/I");
   out_tree->Branch("event_vertex_z", &event_vertex_z, "event_vertex_z/F");
   out_tree->Branch("event_vertex_source", &event_vertex_source, "event_vertex_source/I");
   out_tree->Branch("event_sqrt_s_gev", &event_sqrt_s_gev, "event_sqrt_s_gev/D");
@@ -256,6 +261,7 @@ Int_t StSimpleReaderMaker::Make( )
   Cal_nhits = 0; Cal_nclus = 0; Cal_npts = 0; mcpart_num = 0;
   for (int i = 0; i < kNTrigFlags; i++) Trig_flag[i] = 0;
   Spin_config = -1; // "no data" until proven otherwise below
+  event_run = 0; event_id = -1; fcs_tcu_bits = 0; fcs_tcu_source = 0;
   event_vertex_z = -9999;
   event_vertex_source = 0;
   event_sqrt_s_gev = -1;
@@ -263,6 +269,10 @@ Int_t StSimpleReaderMaker::Make( )
   // -----------
   // Get 'event' data
   StMuEvent* muEvent = mMuDstMaker->muDst()->event() ;
+  if ( muEvent ){
+    event_run = muEvent->runNumber();
+    event_id = muEvent->eventId();
+  }
 
   // -----------
   // Fired triggers to named flags: from (trigger id, run number) in data, or
@@ -304,6 +314,7 @@ Int_t StSimpleReaderMaker::Make( )
     }
 
     unsigned int dsm_out = (unsigned int)mTrgBase->end_event();
+    fcs_tcu_bits = dsm_out; fcs_tcu_source = 2;
     bool simTrg[kNSimTrg];
     DecodeSimTrg(dsm_out, simTrg);
     for (int i = 0; i < kNSimTrg; i++){
@@ -312,6 +323,11 @@ Int_t StSimpleReaderMaker::Make( )
 
   } else if ( muEvent ){
     int runNumber = muEvent->runNumber();
+    const StTriggerData* trgData = muEvent->triggerData();
+    if ( trgData ){
+      fcs_tcu_bits = (unsigned int)trgData->lastDSM(2) + ((unsigned int)trgData->lastDSM(5) << 16);
+      fcs_tcu_source = 1;
+    }
     const StTriggerId& nominalTrig = muEvent->triggerIdCollection().nominal();
     std::vector<unsigned int> firedIds = nominalTrig.triggerIds();
 
