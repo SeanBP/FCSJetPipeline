@@ -8,7 +8,7 @@ with `-h` for its options) and its sources.
 |---|---|
 | `sim_to_jet/` | PYTHIA + starsim -> BFC/MuDst -> SimpleTree -> matched truth/reco jets (+ in-job underlying event) |
 | `data_to_jet/` | official MuDst -> SimpleTree -> reco jets (+ in-job underlying event) |
-| `underlying_event/` | underlying-event (UE) estimate per jet (in-event pixel ring); runs inside the two jobs above |
+| `underlying_event/` | underlying-event (UE) estimate per jet (in-event eta-weighted side wedges); runs inside the two jobs above |
 | `jet_scale/` | simulated JetTrees -> jet-energy-scale (JES) lookup JSON and its closure test |
 | `jet_calibration/` | applies a JES JSON to JetTrees, in place |
 | `pico_analysis/` | PicoDst diagnostics, not part of the jet chain |
@@ -133,34 +133,34 @@ together and rebuild StRoot), `Spin_config` (spin DB, covers 2021-12-14 to
 
 ## underlying_event
 
-The UE of a jet comes from its own event, by the pixel ring
-(`PixelRingUE.h`): the jet's eta band |eta - eta_jet| < R from 2R off the
+The UE of a jet comes from its own event, by eta-weighted side
+wedges (`WeightedWedgeUE.h`): the jet's eta band |eta - eta_jet| < R from 2R off the
 jet axis out to 150 deg in azimuth (the 30 deg around 180, the recoil side,
 are left out), other jets kept, over the whole ECal (the fiducial region is
-only for jets). The ring is weighted so that its area-per-eta matches the jet
-cone's: in eta bins of 0.05, a point weighs h_jet(b) / h_ring(b), the ratio
-of the jet cone's to the ring's (live) area in its bin; bins the ring covers
+only for jets). The wedges are weighted so that their area-per-eta matches the
+jet cone's: in eta bins of 0.05, a point weighs h_jet(b) / h_wedge(b), the ratio
+of the jet cone's to the wedges' (live) area in its bin; bins the wedges cover
 under 10% of the jet's area carry no weight. The density is
-sum(E r) / sum(r h_ring), so empty parts of the ring count as area, and the
+sum(E r) / sum(r h_wedge), so empty parts of the wedges count as area, and the
 UE is the density times the jet cone's area: its live area on the ECal at
-reco level (3 cm pixels, 3 x 3 sub-pixels for the areas), pi R^2 at truth
+reco level (3 cm tiles, 3 x 3 sub-tiles for the areas), pi R^2 at truth
 level (EM-only truth photons, full azimuth, exact areas).
 
 `UnderlyingEvent` runs inside the sim_to_jet and data_to_jet jobs, one file
 at a time (no pooling of events, no trigger requirement), and rewrites each
 jet file with, per jet: `reco_ue_rho`, `reco_ue_area`, `reco_ue_E` (= rho x
 area, the UE to subtract), `reco_ue_pt`, `reco_ue_cov` (share of the jet's
-live area in eta bins the ring reaches) and, in simulation, `truth_ue_rho`,
-`truth_ue_E`, `truth_ue_pt`. The energies are -1 where the ring reaches none
+live area in eta bins the wedges reach) and, in simulation, `truth_ue_rho`,
+`truth_ue_E`, `truth_ue_pt`. The energies are -1 where the wedges reach none
 of the jet's eta bins; such jets have no UE estimate and are dropped by the
 JES and calibration steps.
 
 The method and its numbers (2026-10, `UnderlyingEventPlayground/in_event/`):
 azimuthal scans on FMS Run 15 data and FCS simulation put the end of the
 jet's own energy at about 2R and the start of the recoil rise at about
-120-130 deg; on the FMS, the ring on FCS-like geometry is within about 10% of
+120-130 deg; on the FMS, the wedges on FCS-like geometry are within about 10% of
 the FMS two-cone (+-90 deg) estimate (full FMS 4%), which is taken as the UE
-systematic. Weighting per point and per pixel agree within 0.5% on Run 22.
+systematic. Weighting per point and per tile agree within 0.5% on Run 22.
 
 ## jet_scale
 

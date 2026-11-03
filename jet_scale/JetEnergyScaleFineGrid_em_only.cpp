@@ -5,7 +5,7 @@
 // The underlying event is subtracted at both levels by default:
 // scale = (reco_E - reco_ue_E) / (truth_E - truth_ue_E), binned in subtracted
 // truth energy, using pairs where both jets have an estimate. Input should be
-// a calibration sample (sim_to_jet -C 1, with its in-job pixel-ring UE). A file
+// a calibration sample (sim_to_jet -C 1, with its in-job weighted-wedge UE). A file
 // without the UE branches is an error unless "noue" is given.
 //
 // Estimator: points whose n_eff is at least gauss_min_neff (argv[8], default 50)

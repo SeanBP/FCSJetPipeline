@@ -3,9 +3,9 @@
 // (FMSJetPipeline/compare/ue_subtracted.cpp -c -n).
 //   FMS two cones  the two cones at the jet's eta and phi +- 90 deg: mean of
 //                  their truth-photon energies, a full cone being pi R^2
-//   pixel ring     truth_ue_E of the jet tree: the pipeline's truth ring
-//                  (TruthPixelRing, |dphi| <= 150 deg, other jets kept)
-// Photons as the truth ring: IsEmTruthParticle, InTruthParticleEtaRange, no
+//   weighted wedges  truth_ue_E of the jet tree: the pipeline's truth wedges
+//                  (TruthWeightedWedges, |dphi| <= 150 deg, other jets kept)
+// Photons as the truth wedges: IsEmTruthParticle, InTruthParticleEtaRange, no
 // energy cut. Full azimuth at truth, so the FMS plot's full and FCS-like
 // rings are one here. Jets as truth_scan: truth pT >= reco_jet_pt_min_em, E
 // 10-120 GeV, position inside the reco fiducial region. Weight sigma / N of the
@@ -51,7 +51,7 @@ static int Plot(const char *in, const char *png, bool frac)
     Float_t cone, ring, w, jet_E;
     t->SetBranchAddress("cone_dE", &cone); t->SetBranchAddress("ring_dE", &ring); t->SetBranchAddress("weight", &w); t->SetBranchAddress("jet_E", &jet_E);
     const int kNM = 2;
-    const char *name[kNM] = {"FMS two cones #pm90#circ (per #piR^{2})", "pixel ring (#leq150#circ, jets kept)"};
+    const char *name[kNM] = {"FMS two cones #pm90#circ (per #piR^{2})", "eta-weighted wedges (#leq150#circ, jets kept)"};
     const int col[kNM] = {TColor::GetColor("#222222"), TColor::GetColor("#1c4f8a")};
     const double xmax = frac ? 0.25 : 8.0;
     const char *unit = frac ? "" : " GeV";
@@ -102,10 +102,11 @@ static int Plot(const char *in, const char *png, bool frac)
         }
         for (int k = 0; k < kNM; k++)
         {
-            h[k]->SetLineColor(col[k]); h[k]->SetLineWidth(3); h[k]->SetMarkerColor(col[k]);
+            h[k]->SetLineColor(col[k]); h[k]->SetLineWidth(2); h[k]->SetMarkerColor(col[k]); h[k]->SetMarkerSize(0);
             h[k]->SetMaximum(p == 0 ? 1.15 * ymax : 3 * ymax); h[k]->SetMinimum(p == 0 ? 0 : 1e-5);
             h[k]->GetYaxis()->SetTitleOffset(1.3);
             h[k]->DrawCopy(k == 0 ? "HIST" : "HIST SAME");
+            h[k]->DrawCopy("E0 X0 SAME");
             if (p == 1) continue;
             TLegendEntry *le = lg->AddEntry(h[k], frac ? Form("%s: mean %.3f, RMS %.3f, zero %.0f%%", name[k], m[k], r[k], 100 * nz[k] / sw[k])
                                                        : Form("%s: mean %.2f%s, RMS %.2f, zero %.0f%%", name[k], m[k], unit, r[k], 100 * nz[k] / sw[k]), "l");

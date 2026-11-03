@@ -1,5 +1,5 @@
 // Underlying-event (UE) estimate for every jet of a set of files, by the
-// in-event pixel ring (PixelRingUE.h): the jet's own event, its eta band from
+// in-event eta-weighted side wedges (WeightedWedgeUE.h): the jet's own event, its eta band from
 // 2R out to 150 deg in azimuth, over the whole ECal (not only the jets'
 // fiducial region), weighted to the jet cone's eta distribution. Runs inside
 // sim_to_jet and data_to_jet jobs; each file is independent.
@@ -13,10 +13,10 @@
 //   reco_ue_area   the jet cone's live eta-phi area on the ECal
 //   reco_ue_E      reco_ue_rho x reco_ue_area: the UE to subtract
 //   reco_ue_pt     the same in pT
-//   reco_ue_cov    share of the jet's live area in eta bins the ring reaches
+//   reco_ue_cov    share of the jet's live area in eta bins the wedges reach
 // and in simulation, per truth jet (EM-only truth photons, full azimuth):
 //   truth_ue_rho, truth_ue_E (= truth_ue_rho x pi R^2), truth_ue_pt
-// The energies and densities are -1 where the ring reaches none of the jet's
+// The energies and densities are -1 where the wedges reach none of the jet's
 // eta bins (no estimate; the jet must be dropped where a UE is needed).
 // Earlier reco_ue_* / truth_ue_* branches are replaced.
 //
@@ -42,7 +42,7 @@
 #include <vector>
 
 #include "JetParameters.h"
-#include "PixelRingUE.h"
+#include "WeightedWedgeUE.h"
 
 // One level's output branches, one value per jet
 struct UeBranches
@@ -89,7 +89,7 @@ int main(int argc, char **argv)
 
     UeGeometry geo;
     geo.Build();
-    const TruthPixelRing truth_ring;
+    const TruthWeightedWedges truth_wedges;
     const int MAX_MC = 10000; // matches JetMatcher.cpp's mcpart_* array size
     const int MAX_PTS = 200;  // matches StSimpleReaderMaker.h's Cal_pt_* array size
     std::vector<Int_t> mc_geid(MAX_MC), mc_idVtx(MAX_MC);
@@ -164,7 +164,7 @@ int main(int argc, char **argv)
         if (has_truth) truth_br.Attach(out, "truth", false);
 
         std::vector<float> p_eta, p_phi, p_E;
-        std::vector<int> p_pix;
+        std::vector<int> p_tile;
         const Long64_t n = jt->GetEntries();
         for (Long64_t ev = 0; ev < n; ev++)
         {
@@ -175,18 +175,18 @@ int main(int argc, char **argv)
             if ((nr > 0 || nt > 0) && st->GetEntry(has_entry ? simpletree_entry : ev) > 0)
             {
                 // reco: ECal points, as the reco jets' own inputs (RecoJets.cpp / JetMatcher.cpp, use_points)
-                p_eta.clear(); p_phi.clear(); p_E.clear(); p_pix.clear();
+                p_eta.clear(); p_phi.clear(); p_E.clear(); p_tile.clear();
                 for (int i = 0; i < std::min((int)Cal_npts, MAX_PTS) && nr > 0; i++)
                 {
                     if (Cal_pt_detid[i] != 0 && Cal_pt_detid[i] != 1) continue;
                     if (!pass_point_energy_cut(Cal_pt_energy[i], event_sqrt_s_gev)) continue;
                     const double rho = std::sqrt((double)Cal_pt_x[i] * Cal_pt_x[i] + (double)Cal_pt_y[i] * Cal_pt_y[i]);
                     p_eta.push_back(std::asinh(Cal_pt_z[i] / rho)); p_phi.push_back(std::atan2(Cal_pt_y[i], Cal_pt_x[i]));
-                    p_E.push_back(Cal_pt_energy[i]); p_pix.push_back(geo.PixelOf(Cal_pt_x[i], Cal_pt_y[i]));
+                    p_E.push_back(Cal_pt_energy[i]); p_tile.push_back(geo.TileOf(Cal_pt_x[i], Cal_pt_y[i]));
                 }
                 for (size_t j = 0; j < nr; j++)
                 {
-                    const UeResult r = RecoPixelRing(geo, reco_eta->at(j), reco_phi->at(j), p_eta, p_phi, p_E, p_pix);
+                    const UeResult r = RecoWeightedWedges(geo, reco_eta->at(j), reco_phi->at(j), p_eta, p_phi, p_E, p_tile);
                     reco_br.Set(j, r);
                     n_reco++;
                     if (r.rho < 0) n_reco_none++; else sum_reco += r.E();
@@ -209,7 +209,7 @@ int main(int argc, char **argv)
                         }
                     for (size_t j = 0; j < nt; j++)
                     {
-                        const UeResult r = truth_ring.Estimate(truth_eta->at(j), truth_phi->at(j), p_eta, p_phi, p_E);
+                        const UeResult r = truth_wedges.Estimate(truth_eta->at(j), truth_phi->at(j), p_eta, p_phi, p_E);
                         truth_br.Set(j, r);
                         n_truth++;
                         if (r.rho < 0) n_truth_none++; else sum_truth += r.E();
@@ -228,9 +228,9 @@ int main(int argc, char **argv)
     }
 
     std::cout << "UnderlyingEvent: " << files.size() << " file pairs (" << n_bad << " unusable); " << n_reco << " reco jets, "
-              << n_reco_none << " without a ring, mean UE " << sum_reco / std::max(1L, n_reco - n_reco_none) << " GeV";
+              << n_reco_none << " without wedges, mean UE " << sum_reco / std::max(1L, n_reco - n_reco_none) << " GeV";
     if (n_truth > 0)
-        std::cout << "; " << n_truth << " truth jets, " << n_truth_none << " without a ring, mean UE "
+        std::cout << "; " << n_truth << " truth jets, " << n_truth_none << " without wedges, mean UE "
                   << sum_truth / std::max(1L, n_truth - n_truth_none) << " GeV";
     std::cout << std::endl;
     return 0;

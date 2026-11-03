@@ -453,7 +453,7 @@ int main(int argc, char** argv)
         {
             if (!tree->GetBranch("reco_ue_E") || !tree->GetBranch("reco_ue_rho"))
             {
-                std::cerr << "ERROR: no reco_ue_E/reco_ue_rho branches (the pixel-ring UE); run underlying_event/UnderlyingEvent"
+                std::cerr << "ERROR: no reco_ue_E/reco_ue_rho branches (the eta-weighted wedge UE); run underlying_event/UnderlyingEvent"
                           << " first, or pass noue for a map built without UE subtraction" << std::endl;
                 return 1;
             }

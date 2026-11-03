@@ -156,7 +156,7 @@
         mv jet_output.root jet_output_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
 
         # In-job underlying event (reco_ue_* and truth_ue_* branches: the
-        # in-event pixel ring); must run before the SimpleTree is renamed
+        # in-event eta-weighted wedges); must run before the SimpleTree is renamed
         echo "Compiling UnderlyingEvent..."
         g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent \
             `root-config --cflags --libs` -std=c++11

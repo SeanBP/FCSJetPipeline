@@ -285,6 +285,7 @@ int main(int argc, char **argv)
                 {
                     double y, ey; Value(d[v][s][kNear][b], d[v][s][kFar][b], norm, y, ey);
                     if (std::isfinite(y)) ymax = std::max(ymax, y);
+                    if (!norm && std::isfinite(d[v][s][kFar][b].Val())) ymax = std::max(ymax, d[v][s][kFar][b].Val());
                 }
             fr->SetMinimum(row == 0 ? 0 : (norm ? 0.6 : 0.3)); fr->SetMaximum(row == 0 ? 1.35 * ymax : (norm ? 2.2 : 1.6));
             fr->GetXaxis()->SetLabelSize(row == 0 ? 0 : 0.09); fr->GetXaxis()->SetTitleSize(0.10); fr->GetXaxis()->SetTitleOffset(1.0);

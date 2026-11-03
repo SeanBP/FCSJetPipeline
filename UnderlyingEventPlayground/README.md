@@ -1,9 +1,10 @@
 # UnderlyingEventPlayground
 
 Studies behind the underlying-event (UE) subtraction in `../underlying_event/`
-(the in-event pixel ring, `PixelRingUE.h`, `UnderlyingEvent.cpp`); nothing
-here is used by the pipeline. Each source has its build and run line at the
-top.
+(the in-event eta-weighted side wedges, `WeightedWedgeUE.h`,
+`UnderlyingEvent.cpp`); nothing here is used by the pipeline. Each source has
+its build and run line at the top. The studies in `in_event/` predate that
+name: their "pixel ring" is the weighted wedges and their "pixels" the tiles.
 
 The earlier methods (the near off-axis proxy-event search of
 `underlying_event/ProxySelection.h` and `ProxySearch.h`, the separation and
@@ -19,14 +20,14 @@ least 2R from the jet axis and within 150 deg of it in azimuth, other jets not
 excluded, weighted per point so that its area-per-eta matches the jet cone's.
 The UE density times the jet's live cone area (reco) or pi R^2 (truth) is
 subtracted in energy, per jet, at both levels, before the JES calibration.
-Details in `../underlying_event/PixelRingUE.h` and the top-level README.
+Details in `../underlying_event/WeightedWedgeUE.h` and the top-level README.
 
 ## Studies
 
 - `fms_emjet_reference.txt`: the STAR FMS EM-jet analysis (BrightSTAR
   `emjet-gpc`) and how this pipeline compares.
-- `in_event/`: the in-event estimate, from same-event cones to the pixel
-  ring. `in_event_ue.cpp` (condor: `submit_in_event.sh`) writes per-jet
+- `in_event/`: the in-event estimate, from same-event cones to the weighted
+  wedges. `in_event_ue.cpp` (condor: `submit_in_event.sh`) writes per-jet
   estimates for every variant; `in_event_geo.h` holds the geometry (FCS ECal
   pixels, the ring variants, the area matching) and `in_event_util.h` small
   helpers. Then:
@@ -55,9 +56,9 @@ Details in `../underlying_event/PixelRingUE.h` and the top-level README.
 
 The method and its numbers (2026-10): azimuthal scans on FMS Run 15 data
 and FCS simulation put the end of the jet's own energy at about 2R and the
-start of the recoil rise at about 120-130 deg. On the FMS the ring on FCS-like
-geometry is within about 10% of the FMS two-cone (+-90 deg) estimate (full
-FMS 4%), taken as the UE systematic; at truth level the ring is within 2% of
+start of the recoil rise at about 120-130 deg. On the FMS the wedges on FCS-like
+geometry are within about 10% of the FMS two-cone (+-90 deg) estimate (full
+FMS 4%), taken as the UE systematic; at truth level the wedges are within 2% of
 the two cones. A 120 deg cap loses eta coverage (32% of FCS data jets below
-0.9) without lowering the density, so 150 deg is kept. Per-point and per-pixel
+0.9) without lowering the density, so 150 deg is kept. Per-point and per-tile
 weights agree within 0.5% on Run 22.
