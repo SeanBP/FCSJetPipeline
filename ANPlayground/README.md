@@ -1,8 +1,10 @@
 # ANPlayground
 
-Sizing study for a full Run 22 A_N(x_F) pass over the data. It measures wall time,
-memory, scratch and output per job and extrapolates them to the full sample.
-Unfolding is not included.
+The Run 22 EM-jet A_N(x_F) analysis: the condor job that turns MuDsts into
+per-run yield histograms, the A_N step (bad runs, per-run polarization,
+statistical errors, final plot), and the sizing study that extrapolates the
+job's wall time, memory, scratch and output to the full sample. Unfolding is
+not included.
 
 Each job runs the whole chain on up to 40 MuDsts of one run. It keeps only
 the A_N yield histograms, so no SimpleTrees or jet trees are stored.
@@ -14,8 +16,10 @@ the A_N yield histograms, so no SimpleTrees or jet trees are stored.
 | 3. UE subtraction | `underlying_event/UnderlyingEvent` | in-event eta-weighted side wedges: each jet's own event, its eta band from 2R out to 150° in azimuth |
 | 4. JES calibration | `jet_calibration/ApplyCorrections_em_only` | calibrates the UE-subtracted energy: `reco_E_corr = (reco_E - reco_ue_E) / scale` |
 | 5. A_N histograms | `AnHistograms` | yields vs x_F (`reco_x_F_corr`) |
+| 6. A_N (offline) | `AnAsymmetry -r`, `plot_an.C` | per-run yield files: bad runs dropped (D. Kapukchyan's list), per-run polarization, A_N with statistical errors |
 
-SimpleTrees are deleted after step 3, and jet files after step 5.
+SimpleTrees are deleted after step 3, and jet files after step 5. Step 6 runs
+on the job outputs, not in the job.
 
 ## Files
 
@@ -120,7 +124,9 @@ P24ia st_fwd of production_pp500_2022, on disk:
 
 - Files per run: median 337, 90% below 470, maximum 902.
 - Average file: about 9,000 events, 1.22 GB.
-- The RunLog bad-run filter is not applied, so these totals are an upper bound.
+- These catalog totals apply neither the RunLog shift-crew flags nor the pi0
+  bad-run list (both remove runs later: MakeRunList.pl and `AnAsymmetry -r`),
+  so they are an upper bound.
 - The spin DB covers runs up to 2022-04-18 (run 23108), with between-fill
   gaps of about 2%.
 

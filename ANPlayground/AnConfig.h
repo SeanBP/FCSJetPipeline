@@ -6,9 +6,10 @@
 #include <cmath>
 
 // ------------------ EM trigger levels ------------------
-// A jet counts if its corrected pT passes kTriggerPtFactor x the threshold
+// A jet counts if its uncorrected pT (reco_pt: no UE subtraction, no JES, the
+// energy the hardware trigger sees) passes kTriggerPtFactor x the threshold
 // of any EM trigger listed in its event (the FMS EM-jet rule); its level is
-// the lowest such. Listed = recorded the event (data: nominal trigger ids, so
+// the lowest such. The 2 GeV minimum (kJetPtCorrMin) is on corrected pT. Listed = recorded the event (data: nominal trigger ids, so
 // after prescale); fcsEMk_tpc counts as fcsEMk (same condition, own id; run
 // 23007048: 187 events list fcsEM2_tpc without fcsEM2, of 155506). fcsEM3
 // (runs 23101059-23108024 only) is not used. Trigger emulation cannot stand

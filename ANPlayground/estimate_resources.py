@@ -8,8 +8,9 @@ Usage:
 
 Inputs: the timing_<run>_<job>.txt tables of benchmark jobs (an_job.xml) and
 the per-run catalog counts (catalog_query.sh counts). Runs are those in
-[--run-min, --run-max] minus MakeRunList.pl's excluded ranges; its RunLog
-bad-run filter is not applied, so the totals are an upper bound.
+[--run-min, --run-max] minus MakeRunList.pl's excluded ranges. The RunLog
+shift-crew flags and the pi0 bad-run list (applied later, by MakeRunList.pl
+and AnAsymmetry -r) are not taken off here, so the totals are an upper bound.
 
 Model, per job of n files of one run:
   per file   fetch (wall, per GB) + MuDst -> SimpleTree (wall = a + b * events,
