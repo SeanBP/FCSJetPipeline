@@ -180,6 +180,10 @@ A, B smoothed as the scale at 3 and 30 GeV (6 iterations, radius 2),
 masked to the buffered ECal fiducial region: 1798 of 3478 cells saved.
 Evaluators clamp E to the fitted response range 1.29-96.78 GeV.
 Applied as E_corr = E / scale(E) at the jet's |x|, y (bilinear in A, B).
+JetEnergyScale_lookup_em_only.json.chi2_smoothed.csv (each position's points
+against the smoothed map) was added 2026-11-03 by rerunning the map step with
+CalibrationMap_em_only after b784c34 on the same jet_calibration.root; the
+JSON and .chi2.csv it wrote are byte-identical to the ones here.
 
 
 6. CLOSURE (jet_scale/jes_closure.cpp)

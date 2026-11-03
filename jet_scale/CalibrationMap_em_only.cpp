@@ -29,8 +29,9 @@
 // The JSON carries "model": "logcubic", where it came from ("sample", "k", "tune",
 // "commit": the pipeline commit it was built with), the global "C", "D", "Emin"
 // and "Emax", and bins {i, j, A, B} (read by jet_calibration/ApplyCorrections_em_only.cpp
-// and jet_scale/jes_closure.cpp). It also writes <out>.chi2.csv and
-// <out>.direct_fits.csv (the unsmoothed per-position fits).
+// and jet_scale/jes_closure.cpp). It also writes <out>.chi2.csv (chi2/ndof of
+// the direct fits), <out>.chi2_smoothed.csv (the same points against the
+// smoothed map) and <out>.direct_fits.csv (the unsmoothed per-position fits).
 //
 // Usage: ./CalibrationMap_em_only <bins.root> <out.json> [sample] [k] [tune] [commit]
 //        (filled in by submit_jet_scale_em_only.sh; "unknown" if left out)
@@ -527,7 +528,8 @@ void write_calibration_json(
     double Emin, double Emax,
     const std::vector<double> &xs,
     const std::vector<double> &ys,
-    const std::string &save_file)
+    const std::string &save_file,
+    Grid2D &As_out, Grid2D &Bs_out)
 {
     const size_t nx = xs.size(), ny = ys.size();
     const double l0 = std::log(ANCHOR_E[0]), l1 = std::log(ANCHOR_E[1]);
@@ -548,12 +550,16 @@ void write_calibration_json(
     long n_unfit = 0, n_filled = 0, n_outside_fiducial = 0;
     struct SavedBin { int i, j; double A, B; };
     std::vector<SavedBin> bins_out;
+    As_out = make_nan_grid((int)nx, (int)ny);
+    Bs_out = make_nan_grid((int)nx, (int)ny);
     for (size_t i = 0; i < nx; i++)
         for (size_t j = 0; j < ny; j++)
         {
             const double Bs = (a1[i][j] - a0[i][j]) / (l1 - l0);
             const double As = a0[i][j] - Bs * l0;
             const bool defined = std::isfinite(As) && std::isfinite(Bs);
+            As_out[i][j] = As;
+            Bs_out[i][j] = Bs;
             if (!std::isfinite(A[i][j]))
             {
                 n_unfit++;
@@ -653,6 +659,39 @@ void write_chi2_csv(const std::vector<FitRow> &fits, const std::string &save_fil
     std::cout << "chi2/ndof CSV saved to " << save_file << std::endl;
 }
 
+// Side CSV of each fitted position's chi2 against the smoothed map (the A, B
+// of the JSON at that grid point), over the same points as the direct fit.
+// No parameter is fitted to the position's points there, so ndof = points.
+void write_chi2_smoothed_csv(const std::vector<Cell> &cells, double C, double D,
+                             const Grid2D &As, const Grid2D &Bs, const std::vector<double> &xs,
+                             const std::vector<double> &ys, const std::string &save_file)
+{
+    std::map<double, int> ix, iy;
+    for (size_t i = 0; i < xs.size(); i++)
+        ix[xs[i]] = (int)i;
+    for (size_t j = 0; j < ys.size(); j++)
+        iy[ys[j]] = (int)j;
+    std::ofstream out(save_file.c_str());
+    out << "x,y,chi2,ndof,n_params,reduced_chi2\n";
+    for (const Cell &c : cells)
+    {
+        const double A = As[ix.at(c.x_center)][iy.at(c.y_center)], B = Bs[ix.at(c.x_center)][iy.at(c.y_center)];
+        if (!std::isfinite(A) || !std::isfinite(B))
+            continue;
+        double chi2 = 0.0;
+        for (size_t i = 0; i < c.l.size(); i++)
+        {
+            const double l = c.l[i];
+            const double d = c.y[i] - (A + l * (B + l * (C + l * D)));
+            chi2 += c.w[i] * d * d;
+        }
+        const int ndof = (int)c.l.size();
+        out << c.x_center << "," << c.y_center << "," << chi2 << "," << ndof << ",0," << (chi2 / ndof) << "\n";
+    }
+    out.close();
+    std::cout << "Smoothed-map chi2/ndof CSV saved to " << save_file << std::endl;
+}
+
 // Side CSV of the direct (pre-smoothing) per-position fits (diagnostics only)
 void write_direct_fits_csv(const std::vector<FitRow> &fits, double C, double D,
                            const std::string &save_file)
@@ -706,8 +745,10 @@ int main(int argc, char **argv)
     std::vector<double> xs(xs_set.begin(), xs_set.end());
     std::vector<double> ys(ys_set.begin(), ys_set.end());
 
-    write_calibration_json(fits, C, D, Emin, Emax, xs, ys, output_file);
+    Grid2D As, Bs;
+    write_calibration_json(fits, C, D, Emin, Emax, xs, ys, output_file, As, Bs);
     write_chi2_csv(fits, output_file + ".chi2.csv");
+    write_chi2_smoothed_csv(cells, C, D, As, Bs, xs, ys, output_file + ".chi2_smoothed.csv");
     write_direct_fits_csv(fits, C, D, output_file + ".direct_fits.csv");
 
     return 0;

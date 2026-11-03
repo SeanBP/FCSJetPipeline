@@ -117,6 +117,7 @@
     <output fromScratch="{{JSON_NAME}}" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="{{JSON_NAME}}.direct_fits.csv" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="{{JSON_NAME}}.chi2.csv" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="{{JSON_NAME}}.chi2_smoothed.csv" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="jes_closure.txt" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="jes_closure.root" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="jes_closure.png" toURL="file:{{OUTDIR}}/" />
