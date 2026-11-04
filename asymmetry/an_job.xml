@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <!--
-    A_N job: MuDst -> SimpleTree (runMudst.C, EM-triggered events only) ->
-    EM-only point jets (RecoJets) -> in-job underlying event (UnderlyingEvent)
-    -> JES calibration (ApplyCorrections_em_only) -> A_N yield histograms
-    (AnHistograms). Only the histograms and a per-stage timing table leave the
+    A_N job: per MuDst file, MuDst -> SimpleTree (runMudst.C, EM-triggered
+    events only) -> EM-only point jets (RecoJets) -> in-event underlying event
+    (UnderlyingEvent), the MuDst and SimpleTree deleted as soon as they are
+    used, so scratch holds one MuDst or one SimpleTree at a time whatever the
+    files per job; then, over the job's jet files, JES calibration
+    (ApplyCorrections_em_only) -> A_N yield histograms (AnHistograms).
+    The programs are compiled first in a subshell with the fastjet/ROOT
+    modules (this shell keeps stardev for root4star) and run with the
+    modules' LD_LIBRARY_PATH. Only the histograms and a per-stage timing table leave the
     job; SimpleTrees are deleted, and jet files too unless the job is one
     of those keeping them (KEEP_JETS).
 
@@ -12,7 +17,7 @@
     per stage call:
       stage file catalog_events input_kB wall_s user_s sys_s maxrss_kB scratch_kB
     (scratch_kB: the job's scratch use after the stage). A fetch that fails or
-    takes over 5 min (timeout) gives a "fetchretry" row and is tried once
+    takes over 3 min (timeout) gives a "fetchretry" row and is tried once
     more; a second failure gives a "fetchfail" row and the file is skipped.
 
     Configurable per submission (filled in by submit_an_job.sh, see its -h):
@@ -63,10 +68,23 @@
         echo "# stage file catalog_events input_kB wall_s user_s sys_s maxrss_kB scratch_kB" > ${TIMING}
         echo "# node `hostname` cpu `grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' '_'`" >> ${TIMING}
 
+        # Compile in a subshell with the fastjet/ROOT modules, so this shell keeps
+        # the STAR (stardev) environment root4star needs: a module purge here
+        # cannot be undone (stardev fails after it). The programs then run
+        # with the modules' library path (MOD_LD).
+        /usr/bin/time -f "%e %U %S %M" -o stage.time tcsh -c 'module purge; module load fastjet-3.3.4; module load root-5.34.38; printenv LD_LIBRARY_PATH &gt;! modules_ld.txt; g++ -m64 -O2 RecoJets.cpp VectorDict.cxx -o RecoJets `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11 &amp;&amp; g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent `root-config --cflags --libs` -std=c++11 &amp;&amp; g++ -m64 -O2 ApplyCorrections_em_only.cpp VectorDict.cxx -o ApplyCorrections_em_only `root-config --cflags --libs` -std=c++11 &amp;&amp; g++ -m64 -O2 AnHistograms.cpp VectorDict.cxx -o AnHistograms `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11'
+        set COMPILESTATUS = $status
+        echo "compile all 0 0 `tail -1 stage.time` 0" &gt;&gt; ${TIMING}
+        if ( ${COMPILESTATUS} != 0 || ! -x RecoJets || ! -x UnderlyingEvent || ! -x ApplyCorrections_em_only || ! -x AnHistograms ) then
+            echo "ERROR: compilation failed"
+            exit 1
+        endif
+        set MOD_LD = `cat modules_ld.txt`
+
         set xrdname = "root://xrdstar.rcf.bnl.gov:1095"
         set xrdnchar = `echo $xrdname | awk '{print length($0)}'`
-        rm -f simpletree_files.list
-        touch simpletree_files.list
+        rm -f simpletree_files.list ue_pairs.list jet_files.list
+        touch simpletree_files.list jet_files.list
         set nonomatch
 
         set i = 1
@@ -79,13 +97,13 @@
 
             if ( "$xrdname" == "$urlprefix" ) then
                 # a stalled xrootd transfer (a normal one takes seconds) is cut off
-                # after 5 min and tried once more; a second failure skips the file
-                /usr/bin/time -f "%e %U %S %M" -o stage.time timeout 300 xrdcp --retry 3 -s ${FILEURL} ${LOCALFILE}
+                # after 3 min and tried once more; a second failure skips the file
+                /usr/bin/time -f "%e %U %S %M" -o stage.time timeout 180 xrdcp --retry 3 -s ${FILEURL} ${LOCALFILE}
                 set FETCHSTATUS = $status
                 if ( ${FETCHSTATUS} != 0 ) then
                     echo "fetchretry ${LOCALFILE} ${NEVCAT} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
                     rm -f ${LOCALFILE}
-                    /usr/bin/time -f "%e %U %S %M" -o stage.time timeout 300 xrdcp --retry 3 -s ${FILEURL} ${LOCALFILE}
+                    /usr/bin/time -f "%e %U %S %M" -o stage.time timeout 180 xrdcp --retry 3 -s ${FILEURL} ${LOCALFILE}
                     set FETCHSTATUS = $status
                 endif
             else
@@ -114,57 +132,55 @@
                 @ i++
                 continue
             endif
-            ls -t SimpleTree_mudst_*.root | head -1 >> simpletree_files.list
-            @ i++
-        end
+            set STFILE = `ls -t SimpleTree_mudst_*.root | head -1`
+            echo ${STFILE} >> simpletree_files.list
 
-        set NPRODUCED = `wc -l &lt; simpletree_files.list`
-        echo "Produced ${NPRODUCED}/${mycount} SimpleTree files"
-        if ( ${NPRODUCED} == 0 ) then
-            echo "ERROR: no SimpleTree files produced"
-            exit 1
-        endif
-
-        module purge
-        module load fastjet-3.3.4
-        module load root-5.34.38
-
-        /usr/bin/time -f "%e %U %S %M" -o stage.time g++ -m64 -O2 RecoJets.cpp VectorDict.cxx -o RecoJets `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11
-        echo "compile RecoJets 0 0 `tail -1 stage.time` 0" >> ${TIMING}
-        /usr/bin/time -f "%e %U %S %M" -o stage.time g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent `root-config --cflags --libs` -std=c++11
-        echo "compile UnderlyingEvent 0 0 `tail -1 stage.time` 0" >> ${TIMING}
-        /usr/bin/time -f "%e %U %S %M" -o stage.time g++ -m64 -O2 ApplyCorrections_em_only.cpp VectorDict.cxx -o ApplyCorrections_em_only `root-config --cflags --libs` -std=c++11
-        echo "compile ApplyCorrections 0 0 `tail -1 stage.time` 0" >> ${TIMING}
-        /usr/bin/time -f "%e %U %S %M" -o stage.time g++ -m64 -O2 AnHistograms.cpp VectorDict.cxx -o AnHistograms `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11
-        echo "compile AnHistograms 0 0 `tail -1 stage.time` 0" >> ${TIMING}
-
-        # 1. Jet finding: EM-only jets from FCS points, one call per SimpleTree
-        rm -f ue_pairs.list jet_files.list
-        touch ue_pairs.list jet_files.list
-        foreach STFILE ( `cat simpletree_files.list` )
+            # jet finding and the UE (in-event, each file independent) on this
+            # SimpleTree now, then delete it: scratch holds one MuDst or one
+            # SimpleTree at a time, plus the small jet files
             set SUFFIX = `echo ${STFILE} | sed -e 's/^SimpleTree_mudst_//' -e 's/\.root$//'`
             echo "${STFILE}" &gt;! single_file.list
             set INKB = `du -k ${STFILE} | cut -f1`
-            /usr/bin/time -f "%e %U %S %M" -o stage.time ./RecoJets single_file.list "{{TRIGGER_FILTER}}" 1 1 &gt;&amp;! recojets.log
+            /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./RecoJets single_file.list "{{TRIGGER_FILTER}}" 1 1 &gt;&amp;! recojets.log
+            set JETSTATUS = $status
             echo "jets ${STFILE} 0 ${INKB} `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+            if ( ${JETSTATUS} != 0 || ! -f jet_output.root ) then
+                echo "ERROR: RecoJets failed on ${STFILE}, skipping"
+                tail -20 recojets.log
+                rm -f ${STFILE} jet_output.root
+                @ i++
+                continue
+            endif
             mv jet_output.root jet_output_${SUFFIX}.root
-            echo "jet_output_${SUFFIX}.root ${STFILE}" >> ue_pairs.list
+            echo "jet_output_${SUFFIX}.root ${STFILE}" &gt;! ue_pairs.list
+            /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./UnderlyingEvent ue_pairs.list &gt;&amp;! ue.log
+            set UESTATUS = $status
+            echo "ue ${STFILE} 0 ${INKB} `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+            rm -f ${STFILE}
+            if ( ${UESTATUS} != 0 ) then
+                echo "ERROR: UnderlyingEvent failed on ${STFILE}, skipping"
+                tail -20 ue.log
+                rm -f jet_output_${SUFFIX}.root
+                @ i++
+                continue
+            endif
             echo "jet_output_${SUFFIX}.root" >> jet_files.list
+            @ i++
         end
 
-        # 2. Underlying event, proxies from this job's files (one run)
-        /usr/bin/time -f "%e %U %S %M" -o stage.time ./UnderlyingEvent ue_pairs.list
-        echo "ue all ${NPRODUCED} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
-        foreach f ( `cat simpletree_files.list` )
-            rm -f ${f}
-        end
+        set NPRODUCED = `wc -l &lt; jet_files.list`
+        echo "Produced ${NPRODUCED}/${mycount} jet files (`wc -l &lt; simpletree_files.list` SimpleTrees)"
+        if ( ${NPRODUCED} == 0 ) then
+            echo "ERROR: no jet files produced"
+            exit 1
+        endif
 
-        # 3. JES calibration of the UE-subtracted energy, in place
-        /usr/bin/time -f "%e %U %S %M" -o stage.time ./ApplyCorrections_em_only jet_files.list calib.json
+        # JES calibration of the UE-subtracted energy, in place
+        /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./ApplyCorrections_em_only jet_files.list calib.json
         echo "calib all ${NPRODUCED} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
 
-        # 4. A_N yield histograms
-        /usr/bin/time -f "%e %U %S %M" -o stage.time ./AnHistograms jet_files.list an_hists_${TAG}.root
+        # A_N yield histograms
+        /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./AnHistograms jet_files.list an_hists_${TAG}.root
         echo "hists all ${NPRODUCED} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
         echo "output an_hists_${TAG}.root 0 `du -k an_hists_${TAG}.root | cut -f1` 0 0 0 0 0" >> ${TIMING}
         echo "jetfiles all 0 `cat jet_files.list | xargs du -ck | tail -1 | cut -f1` 0 0 0 0 0" >> ${TIMING}
@@ -180,7 +196,7 @@
                 rm -f ${f}
             end
         endif
-        rm -f my_lines.list simpletree_files.list single_file.list ue_pairs.list jet_files.list stage.time
+        rm -f my_lines.list simpletree_files.list single_file.list ue_pairs.list jet_files.list stage.time modules_ld.txt
         cat ${TIMING}
 
     </command>

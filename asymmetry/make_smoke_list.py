@@ -19,11 +19,12 @@ Usage:
   ./make_smoke_list.py <out prefix> [--runs 60] [--files 40]
       [--catalog catalog_runs_local.txt] [--pol run22_polarization.txt]
       [--bad /star/u/dkap7827/Fcs2019/FcsAsymRun22/BadRuns.txt]
-      [--min-files 20]
+      [--min-files 20] [--exclude <earlier>_runs.txt]
 Writes <prefix>_good_runs.txt (run events files bytes, every good run),
 <prefix>_runs.txt (the chosen runs) and <prefix>.list (MakeRunList.pl format,
 for submit_an_job.sh -f). --min-files leaves out runs with fewer files than
-this from the choice (short runs), not from the good-run list.
+this from the choice (short runs), not from the good-run list; --exclude
+leaves out the runs of an earlier sample, so samples can be added together.
 """
 
 import argparse
@@ -60,6 +61,7 @@ def main():
     ap.add_argument("--pol", default=os.path.join(HERE, "run22_polarization.txt"))
     ap.add_argument("--bad", default="/star/u/dkap7827/Fcs2019/FcsAsymRun22/BadRuns.txt")
     ap.add_argument("--min-files", type=int, default=20)
+    ap.add_argument("--exclude", default=None, help="runs to leave out of the choice (first column), e.g. an earlier sample's _runs.txt")
     a = ap.parse_args()
 
     cat = {}
@@ -100,7 +102,10 @@ def main():
     print("catalog analysis runs %d: %d RunLog-flagged, %d flagged in the pi0 bad-run list, %d no polarization -> %d good runs, "
           "%d files, %.3g events" % (len(cat), n_rl, n_bad, n_pol, len(good), sum(cat[r][1] for r in good), ev))
 
-    cand = [r for r in good if cat[r][1] >= a.min_files]
+    skip = set()
+    if a.exclude:
+        skip = set(int(l.split()[0]) for l in open(a.exclude) if l.strip() and not l.startswith("#"))
+    cand = [r for r in good if cat[r][1] >= a.min_files and r not in skip]
     n = min(a.runs, len(cand))
     chosen = sorted(set(cand[int((i + 0.5) * len(cand) / n)] for i in range(n)))
     with open(a.prefix + "_runs.txt", "w") as f:

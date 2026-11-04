@@ -1,0 +1,3 @@
+# DD nodes whose xrootd does not serve data; their files are left out of job lists.
+# Empty this file (keep the comments) once the node is fixed. See catalog_query.sh.
+qgp017.rcf.bnl.gov

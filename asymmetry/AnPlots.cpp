@@ -50,18 +50,32 @@ static TCanvas *gPdfCanvas = 0;
 
 static void AddFile(TFile &f)
 {
+    // files without spin_convention used the old Spin_config mapping: the
+    // yields of state p belong to physical state 3 - p (AnConfig.h)
+    const bool old_labels = !f.Get("spin_convention");
     TIter next(f.GetListOfKeys());
     while (TObject *k = next())
     {
         TObject *o = f.Get(k->GetName());
         if (!o || !o->InheritsFrom(TH1::Class())) continue;
-        std::map<std::string, TH1 *>::iterator it = gSum.find(k->GetName());
+        std::string name = k->GetName();
+        if (old_labels && name.compare(0, 5, "h_xF_") == 0)
+            for (int p = 0; p < kNSpinStates; p++)
+            {
+                const std::string from = std::string("_") + kSpinStateName[p];
+                if (name.size() > from.size() && name.compare(name.size() - from.size(), from.size(), from) == 0)
+                {
+                    name = name.substr(0, name.size() - from.size()) + "_" + kSpinStateName[kNSpinStates - 1 - p];
+                    break;
+                }
+            }
+        std::map<std::string, TH1 *>::iterator it = gSum.find(name);
         if (it != gSum.end()) it->second->Add((TH1 *)o);
         else
         {
-            TH1 *c = (TH1 *)o->Clone();
+            TH1 *c = (TH1 *)o->Clone(name.c_str());
             c->SetDirectory(0);
-            gSum[k->GetName()] = c;
+            gSum[name] = c;
         }
     }
 }
@@ -120,7 +134,13 @@ int main(int argc, char **argv)
         {
             TH1 *he = (TH1 *)f.Get(TString::Format("h_events_%s", kEmLevelName[l]));
             if (!he) continue;
-            for (int p = 0; p < kNSpinStates; p++) { r.spin[p] += he->GetBinContent(p + 1); r.ev_pass += he->GetBinContent(p + 1); }
+            // files without spin_convention used the old mapping: state p is physical 3 - p
+            const bool old_labels = !f.Get("spin_convention");
+            for (int p = 0; p < kNSpinStates; p++)
+            {
+                r.spin[old_labels ? kNSpinStates - 1 - p : p] += he->GetBinContent(p + 1);
+                r.ev_pass += he->GetBinContent(p + 1);
+            }
             for (int k = 0; k < kNPhotonClasses; k++)
                 for (int s = 0; s < kNSides; s++)
                     for (int p = 0; p < kNSpinStates; p++)
@@ -172,6 +192,52 @@ int main(int argc, char **argv)
                 lg->SetBorderSize(0); lg->SetFillStyle(0);
             }
             lg->Draw();
+            // uncorrected pT: the A_N trigger cut of each EM level
+            if (std::string(v[i]) == "pt")
+            {
+                gPad->Update();
+                const double y0 = std::pow(10, gPad->GetUymin()), y1 = std::pow(10, gPad->GetUymax() - 0.25 * (gPad->GetUymax() - gPad->GetUymin()));
+                const int lc[kNEmLevels] = {kGreen + 2, kMagenta + 1, kRed + 1};
+                for (int l = 0; l < kNEmLevels; l++)
+                {
+                    const double xc = kTriggerPtFactor * kEmThresholdGeV[l];
+                    TLine *ln = new TLine(xc, y0, xc, y1);
+                    ln->SetLineStyle(2); ln->SetLineWidth(2); ln->SetLineColor(lc[l]); ln->Draw();
+                    TLatex tl; tl.SetTextSize(0.045); tl.SetTextColor(lc[l]); tl.SetTextAlign(11);
+                    tl.DrawLatex(xc + 0.15, 3 * std::pow(10.0, l) * y0, kEmLevelName[l]);
+                }
+            }
+        }
+        // the two stages' cuts, in the free pads (A_N values from AnConfig.h; the
+        // jet-finding ones are JetParameters.h's R, point_energy_min,
+        // reco_jet_pt_min_em and reco_fiducial_buffer_ecal)
+        {
+            TLatex l; l.SetNDC(); l.SetTextFont(42); l.SetTextSize(0.050);
+            const double dy = 0.068;
+            c->cd(11);
+            double y = 0.92;
+            l.SetTextColor(kBlue + 1); l.DrawLatex(0.02, y, "#bf{Event cuts} (blue: every jet of these events)"); y -= dy; l.SetTextColor(kBlack);
+            l.DrawLatex(0.04, y, "#bullet no FCS LED (fcs_led = 0)"); y -= dy;
+            l.DrawLatex(0.04, y, "#bullet an EM trigger recorded the event: fcsEM0/1/2"); y -= dy;
+            l.DrawLatex(0.08, y, "(or its _tpc id) listed, i.e. after prescale"); y -= dy;
+            l.DrawLatex(0.04, y, "#bullet a spin state: Spin_config 5, 6, 9 or 10"); y -= dy;
+            l.DrawLatex(0.04, y, "#bullet run not flagged bad (sample drawn from good runs)"); y -= dy;
+            y -= 0.03;
+            l.DrawLatex(0.02, y, "#bf{Jet finding} (both curves)"); y -= dy;
+            l.DrawLatex(0.04, y, "#bullet anti-k_{T}, R = 0.7, FCS ECal points with E > 1 GeV"); y -= dy;
+            l.DrawLatex(0.04, y, "#bullet uncorrected p_{T} #geq 2 GeV"); y -= dy;
+            l.DrawLatex(0.04, y, "#bullet axis inside the ECal, 20 cm from its edges"); y -= dy;
+            c->cd(12);
+            y = 0.92;
+            l.SetTextColor(kOrange + 7); l.DrawLatex(0.02, y, "#bf{A_{N} yield cuts} (orange), per jet, in addition"); y -= dy; l.SetTextColor(kBlack);
+            l.DrawLatex(0.04, y, "#bullet calibrated (UE subtracted, JES applied): E_{corr} > 0"); y -= dy;
+            l.DrawLatex(0.04, y, "#bullet E_{corr} #leq #sqrt{s}/2 and 0 < x_{F} #leq 1"); y -= dy;
+            l.DrawLatex(0.04, y, TString::Format("#bullet corrected p_{T} > %.0f GeV", kJetPtCorrMin)); y -= dy;
+            l.DrawLatex(0.04, y, TString::Format("#bullet uncorrected p_{T} > %.2f #times the threshold of an EM", kTriggerPtFactor)); y -= dy;
+            l.DrawLatex(0.08, y, "trigger listed in the event (dashed lines):"); y -= dy;
+            l.DrawLatex(0.08, y, TString::Format("EM0 > %.2f, EM1 > %.2f, EM2 > %.2f GeV",
+                                                 kTriggerPtFactor * kEmThresholdGeV[0], kTriggerPtFactor * kEmThresholdGeV[1],
+                                                 kTriggerPtFactor * kEmThresholdGeV[2])); y -= dy;
         }
         Save(c, "qa_jets");
     }

@@ -32,6 +32,8 @@
 //                                same jets
 //   runs                         TNamed, the run numbers of the input (from
 //                                the file names, jet_output_<run>_<file>.root)
+//   spin_convention              TNamed, the Spin_config -> spin state
+//                                mapping used (AnConfig.h)
 // and sanity distributions, qa_<variable>_<stage>, at two stages: "evt",
 // every jet of the events passing the event cuts (no LED, an EM trigger, a
 // spin state), and "sel", the jets entering the yields: eta, phi, energy
@@ -251,6 +253,7 @@ int main(int argc, char **argv)
     std::ostringstream rs;
     for (std::set<int>::const_iterator r = runs.begin(); r != runs.end(); ++r) rs << (r == runs.begin() ? "" : " ") << *r;
     TNamed("runs", rs.str().c_str()).Write();
+    TNamed("spin_convention", kSpinConventionTag).Write();
     out.Write();
     printf("AnHistograms: %lld events, runs %s\n", n, rs.str().c_str());
     for (int c = 0; c < kNCuts; c++) printf("  %-14s %.0f jets\n", kCutName[c], h_cut->GetBinContent(c + 1));

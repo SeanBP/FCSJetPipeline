@@ -8,6 +8,8 @@
 #   an_vs_xf_projected.png     the points with projected errors, and
 #   an_vs_xf_projected_zero.png the projected errors alone, at A_N = 0
 #   an_vs_xf_<EM level>.png    A_N per EM level
+#   an_vs_xf_np<N>.png         A_N for jets with exactly N = 1, 2 points, and
+#                              np3plus, 3 or more
 #   plots/                     yields and sanity plots, per-run trends (AnPlots)
 #   resources.txt              wall time, memory, scratch per stage and job,
 #                              and the full-pass extrapolation
@@ -43,8 +45,19 @@ grep -A20 "^all, all photon classes" "${REP}/an_asymmetry.log" || true
 
 "${HERE}/project_errors.py" "${OUTDIR}" "${REP}/an.txt" "${GOOD}" | tee "${REP}/projection.log"
 SCALE=$(grep '^scale=' "${REP}/projection.log" | cut -d= -f2)
-
+# what the plots show: "<test runs> of <good runs> good runs, <events> events = <percent> of the Run 22 good-run events"
+SAMPLE=$(awk '/^test:/ { gsub(/[;,]/, ""); printf "%s of %s good runs (up to 40 files each), %.2g events = %.1f%% of the Run 22 good-run events", $2, $9, $6, 100 * $15 }' "${REP}/projection.log")
 cat > "${REP}/plot_an.csh" <<PLOTS
+root -b -q -l 'build/plot_an.C("an.root","an_vs_xf.png","all","all",1,0,10,"${SAMPLE}")' || exit 1
+root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_projected.png","all","all",${SCALE},0,10,"${SAMPLE}")' || exit 1
+root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_projected_zero.png","all","all",${SCALE},1,10,"${SAMPLE}")' || exit 1
+root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_EM0.png","EM0","all",1,0,10,"${SAMPLE}")' || exit 1
+root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_EM1.png","EM1","all",1,0,10,"${SAMPLE}")' || exit 1
+root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_EM2.png","EM2","all",1,0,10,"${SAMPLE}")' || exit 1
+root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_np1.png","all","np1",1,0,10,"${SAMPLE}")' || exit 1
+root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_np2.png","all","np2",1,0,10,"${SAMPLE}")' || exit 1
+root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_np3plus.png","all","np3plus",1,0,10,"${SAMPLE}")' || exit 1
+PLOTS
 root -b -q -l 'build/plot_an.C("an.root","an_vs_xf.png")' || exit 1
 root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_projected.png","all","all",${SCALE},0)' || exit 1
 root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_projected_zero.png","all","all",${SCALE},1)' || exit 1
@@ -65,7 +78,7 @@ if [ -n "$REQ" ]; then
         condor_history seanp -constraint "regexp(\"${REQ}\", Arguments)" \
             -af:h ProcId RemoteWallClockTime RemoteUserCpu MemoryUsage DiskUsage ExitCode 2>/dev/null | sort -n
     } > "${REP}/condor_jobs.txt"
-    awk 'NR > 2 && $2 > 0 { n++; w += $2; if ($2 > wm) wm = $2; if ($4 > mm) mm = $4 }
+    awk '$1 ~ /^[0-9]+$/ && $2 > 0 { n++; w += $2; if ($2 > wm) wm = $2; if ($4 > mm) mm = $4 }
          END { if (n) printf "condor: %d jobs, mean wall %.0f min, max %.0f min, max memory %d MB\n", n, w / n / 60, wm / 60, mm }' "${REP}/condor_jobs.txt"
 fi
 echo "report in ${REP}"

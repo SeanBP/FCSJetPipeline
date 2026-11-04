@@ -43,9 +43,14 @@ calibrated jet files (about 0.3 MB per MuDst) only for every N-th job with
 | 5. A_N histograms | `AnHistograms` | yields vs x_F (`reco_x_F_corr`) and sanity distributions |
 | 6. A_N (offline) | `AnAsymmetry -r`, `plot_an.C`, `AnPlots`, `project_errors.py` | per-run yield files: flagged bad runs dropped (D. Kapukchyan's list), per-run polarization, A_N with statistical errors; yield and sanity plots; projected errors |
 
-SimpleTrees are deleted after step 3, and jet files after step 5 unless
-the job keeps them (`-J`). Step 6 runs
-on the job outputs, not in the job.
+Steps 1-3 run file by file: each MuDst is deleted once its SimpleTree is
+made, and each SimpleTree once its jets and UE are done, so a job's scratch
+holds one MuDst and its SimpleTree at a time (median 1.2 GB, max ~4.4 GB)
+plus the small jet files, whatever the files per job. Steps 4-5 run once
+over the job's jet files, which are then deleted unless the job keeps them
+(`-J`). The programs are compiled first in a subshell with the fastjet/ROOT
+modules, so the job shell keeps the STAR environment root4star needs.
+Step 6 runs on the job outputs, not in the job.
 
 ## Files
 
@@ -134,7 +139,7 @@ on the job outputs, not in the job.
   (0.05 bins: chi2 37.4 / 40 on 2e7 jets; two runs with different P through
   `-r`: 33.7 / 40).
 - **`an_job.xml`, `submit_an_job.sh`**: the condor job. Each stage runs
-  under `/usr/bin/time`. An xrootd fetch that fails or takes over 5 min
+  under `/usr/bin/time`. An xrootd fetch that fails or takes over 3 min
   is cut off and tried once more (`fetchretry` row); a second failure is
   recorded as `fetchfail` and the file skipped. Normal fetches take seconds;
   stalls of over an hour were seen on 2026-11-03. Every job writes
@@ -148,7 +153,14 @@ on the job outputs, not in the job.
 - **`catalog_query.sh`**:
   - `counts <out>` writes per-run events, files and bytes. The P24ia st_fwd
     copy of 2026-10-20 is `catalog_runs_local.txt`.
-  - `list <out> <runs...> [-l N]` writes a MuDst list.
+  - `list <out> <runs...> [-l N]` writes a MuDst list, leaving out files
+    on the nodes in `bad_nodes.txt`.
+  - `filter <in.list> <out.list>` removes those files from an existing list.
+  - `bad_nodes.txt` lists distributed-disk nodes whose xrootd does not serve
+    data. Since 2026-11-04 it holds qgp017: reads hang with 0 bytes while
+    locate and stat work, and its 86,167 files (~9% of the P24ia st_fwd
+    copies, no other disk copy) are skipped. Empty it once the node is
+    fixed, and process the skipped files then.
 - **`estimate_resources.py <outdir>/timing [--runs good_runs.txt]`**: fits the per-file costs from
   the benchmark (MuDst step = a + b·events, fetch per GB, jet finding per
   file) and the per-job costs (UE, calibration and histograms linear in

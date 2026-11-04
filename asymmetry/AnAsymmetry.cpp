@@ -60,6 +60,11 @@
 // error bars of every graph and the "stat" column of the table are these
 // statistical errors only.
 //
+// Spin convention. Yield files carry TNamed "spin_convention" (AnConfig.h);
+// files made before 2026-11-04 do not and used the old Spin_config mapping,
+// which inverted both beams' spins: their states are relabelled p -> 3 - p
+// (BuYu <-> BdYd, BuYd <-> BdYu) when summed.
+//
 // EM levels. A jet counts in one level only (the lowest listed one it passes),
 // so the levels add up: "all" is their sum and gives the final result.
 //
@@ -74,7 +79,7 @@
 //   rebin 2 gives x_F bins of 0.05, as the FMS EM-jet analysis
 //   Prints, for each EM level and all levels, A_N per x_F bin of both beams
 //   with all photon classes summed; writes graphs
-//   gr_AN_<beam>_<EM level|all>_<photon class|all> (x_F > 0 blue, x_F < 0
+//   gr_AN_<beam>_<EM level|all>_<photon class|all|np3plus|np12> (x_F > 0 blue, x_F < 0
 //   yellow) and gr_AN_<EM level|all>_<class|all> with both beams.
 // Build: g++ -m64 -O2 AnAsymmetry.cpp -o AnAsymmetry `root-config --cflags --libs` -std=c++11
 
@@ -133,9 +138,14 @@ struct Sums
 {
     std::map<std::string, TH1D *> h;
     TH1D *pw[2][kNEmLevels][kNPhotonClasses] = {};
+    int n_old_labels = 0;
     // adds one file's histograms, its jets weighted by pol[beam]; false if any is missing
     bool Add(TFile &f, const double pol[2])
     {
+        // files without "spin_convention" were filled with the old Spin_config
+        // mapping (AnConfig.h), whose state p is the physical state 3 - p
+        const bool old_labels = !f.Get("spin_convention");
+        if (old_labels) n_old_labels++;
         std::vector<std::string> names;
         for (int l = 0; l < kNEmLevels; l++)
             for (int k = 0; k < kNPhotonClasses; k++)
@@ -160,9 +170,22 @@ struct Sums
         }
         for (size_t i = 0; i < names.size(); i++)
         {
+            // the summed histogram this one adds to: for old files, the yield
+            // of state p goes to physical state 3 - p
+            std::string target = names[i];
+            if (old_labels && target.compare(0, 5, "h_xF_") == 0)
+                for (int p = 0; p < kNSpinStates; p++)
+                {
+                    const std::string from = std::string("_") + kSpinStateName[p];
+                    if (target.size() > from.size() && target.compare(target.size() - from.size(), from.size(), from) == 0)
+                    {
+                        target = target.substr(0, target.size() - from.size()) + "_" + kSpinStateName[kNSpinStates - 1 - p];
+                        break;
+                    }
+                }
             TH1D *in = (TH1D *)f.Get(names[i].c_str());
-            if (h.count(names[i])) h[names[i]]->Add(in);
-            else { h[names[i]] = (TH1D *)in->Clone((names[i] + "_sum").c_str()); h[names[i]]->SetDirectory(0); }
+            if (h.count(target)) h[target]->Add(in);
+            else { h[target] = (TH1D *)in->Clone((target + "_sum").c_str()); h[target]->SetDirectory(0); }
         }
         for (int l = 0; l < kNEmLevels; l++)
             for (int k = 0; k < kNPhotonClasses; k++)
@@ -306,6 +329,8 @@ int main(int argc, char **argv)
         pol_note = std::string("per-run P from ") + argv[3];
     }
 
+    if (sums.n_old_labels > 0)
+        std::printf("AnAsymmetry: %d yield file(s) without spin_convention (old Spin_config mapping): spin states relabelled p -> 3 - p\n", sums.n_old_labels);
     TFile out(argv[per_run ? 4 : 2], "RECREATE");
     if (per_run) TNamed("bad_runs", bad_note.c_str()).Write();
     const std::string table_name = std::string(argv[per_run ? 4 : 2]).substr(0, std::string(argv[per_run ? 4 : 2]).rfind(".root")) + ".txt";
@@ -319,12 +344,16 @@ int main(int argc, char **argv)
         const int l0 = L < kNEmLevels ? L : 0, l1 = L < kNEmLevels ? L + 1 : kNEmLevels;
         const char *lname = L < kNEmLevels ? kEmLevelName[L] : "all";
         const int l = L;
-        // [photon class or kNPhotonClasses = all]: yields [side][spin state], and per bin the jets
+        // [photon class, kNPhotonClasses = all, kNPhotonClasses + 1 = np3plus (3 or
+        // more points: np3 + np4 + np5plus), kNPhotonClasses + 2 = np12 (1 or 2
+        // points: np1 + np2)]: yields [side][spin state], and per bin the jets
         // summed over sides and spin states, sum of |cos phi|, sum of x_F, sum of P x jets per beam
-        TH1D *y[kNPhotonClasses + 1][kNSides][kNSpinStates], *n[kNPhotonClasses + 1], *mcos[kNPhotonClasses + 1], *mxf[kNPhotonClasses + 1], *mpol[2][kNPhotonClasses + 1];
-        for (int k = 0; k <= kNPhotonClasses; k++)
+        const int nK = kNPhotonClasses + 3;
+        TH1D *y[nK][kNSides][kNSpinStates], *n[nK], *mcos[nK], *mxf[nK], *mpol[2][nK];
+        for (int k = 0; k < nK; k++)
         {
-            const int k0 = k < kNPhotonClasses ? k : 0, k1 = k < kNPhotonClasses ? k + 1 : kNPhotonClasses;
+            const int k0 = k < kNPhotonClasses ? k : (k == kNPhotonClasses ? 0 : k == kNPhotonClasses + 1 ? 3 : 1);
+            const int k1 = k < kNPhotonClasses ? k + 1 : (k == kNPhotonClasses + 2 ? 3 : kNPhotonClasses);
             const TString tag = TString::Format("%d_%d", l, k);
             bool first = true;
             for (int ll = l0; ll < l1; ll++)
@@ -362,9 +391,9 @@ int main(int argc, char **argv)
         }
         const int nb = y[0][0][0]->GetNbinsX();
 
-        for (int k = 0; k <= kNPhotonClasses; k++)
+        for (int k = 0; k < nK; k++)
         {
-            const char *cname = k < kNPhotonClasses ? PhotonClassName(k) : "all";
+            const char *cname = k < kNPhotonClasses ? PhotonClassName(k) : (k == kNPhotonClasses ? "all" : k == kNPhotonClasses + 1 ? "np3plus" : "np12");
             TGraphAsymmErrors *g[2], *gboth = new TGraphAsymmErrors();
             gboth->SetName(TString::Format("gr_AN_%s_%s", lname, cname));
             gboth->SetTitle(TString::Format("%s, %s;x_{F};A_{N}", lname, cname));

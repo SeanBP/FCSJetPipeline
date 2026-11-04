@@ -20,13 +20,24 @@ Model, per job of n files of one run:
   per job    compiles (mean, fixed) + UE + calibration + histograms (mean,
              each scaled as n / n_measured: UE is in-event (weighted wedges), so
              each file is independent)
-  memory     largest peak RSS of any stage; scratch: one MuDst + n SimpleTrees
+  failures   failed fetches (retried and skipped) cost their measured wall
+             time per processed file, reported separately and with the total
+  memory     largest peak RSS of any stage
+  scratch    an_job.xml deletes each MuDst once its SimpleTree is made and
+             each SimpleTree once its jets and UE are done, so the peak is
+             one MuDst + its SimpleTree (paired by run and file sequence) +
+             the job's jet files (~n x the mean jet file) + the sandbox.
+             Reported as percentiles over the benchmark's files and as a
+             disk request (1.25 x the largest, rounded up to 1 GB). Benchmarks
+             from the older layout (all SimpleTrees kept to the end) give the
+             same per-file sizes; only their measured peak differs
 """
 
 import argparse
 import glob
 import math
 import os
+import re
 import statistics
 import sys
 
@@ -97,6 +108,20 @@ def main():
     print('  MuDst->Simple   %6.1f s  (fit %.1f s + %.2f ms/event; CPU/wall %.2f)' % (
         statistics.mean(r['wall'] for r in mudst), a0, 1e3 * b0, cpu_frac))
     print('  jet finding     %6.1f s' % jets_per_file)
+    fail_s_per_file = sum(r['wall'] for r in failed) / max(1, len(fetch))
+    # per-file scratch peak: the MuDst + its SimpleTree, paired by (run, file sequence)
+    def key(name):
+        m = re.search(r'_(\d{8})_(?:raw_)?(\d{7})', name)
+        return (m.group(1), m.group(2)) if m else None
+    st_by_key = {}
+    for r in jets:
+        if key(r['file']):
+            st_by_key[key(r['file'])] = r['in_kb']
+    pair_gb = sorted((r['in_kb'] + st_by_key[key(r['file'])]) / 1e6 for r in fetch if key(r['file']) in st_by_key)
+    jf_kb = [r['in_kb'] / max(1, sum(1 for x in j if x['stage'] == 'jets')) for j in jobs for r in j if r['stage'] == 'jetfiles']
+    jf_mb = (statistics.mean(jf_kb) / 1e3) if jf_kb else 0.3
+    jf_max_mb = (max(jf_kb) / 1e3) if jf_kb else 3.0
+    sandbox_gb = 0.05
     if failed:
         print('  failed fetches  %d retried, %d skipped, of %d files (%.0f s lost in all)' % (
             sum(1 for r in failed if r['stage'] == 'fetchretry'), sum(1 for r in failed if r['stage'] == 'fetchfail'),
@@ -114,7 +139,12 @@ def main():
     walls = [sum(r['wall'] for r in j) for j in jobs]
     print('  job wall        %6.1f min (min %.1f, max %.1f)' % (statistics.mean(walls) / 60, min(walls) / 60, max(walls) / 60))
     print('  peak RSS        %6.0f MB (%s)' % (rss, rss_stage))
-    print('  peak scratch    %6.2f GB; SimpleTree %.0f MB/file' % (scratch, st_mb))
+    print('  peak scratch    %6.2f GB as measured (this benchmark\'s job layout); SimpleTree %.0f MB/file (max %.0f)' % (
+        scratch, st_mb, max(r['in_kb'] for r in jets) / 1024.))
+    if pair_gb:
+        q = lambda f: pair_gb[min(len(pair_gb) - 1, int(f * (len(pair_gb) - 1)))]
+        print('  MuDst + its SimpleTree per file: median %.2f GB, 99%% %.2f GB, max %.2f GB (%d files)' % (q(0.5), q(0.99), pair_gb[-1], len(pair_gb)))
+    print('  jet files       %.2f MB per MuDst (max %.1f)' % (jf_mb, jf_max_mb))
     print('  output          %6.0f kB histograms per job' % out_kb)
 
     keep = None
@@ -138,6 +168,8 @@ def main():
     njobs = 0
     total_s = 0.0
     job_walls = []
+    job_walls_f = []
+    fail_total_s = 0.0
     for r, ev, nf, size in runs:
         c = int(math.ceil(nf / float(n)))
         njobs += c
@@ -148,18 +180,29 @@ def main():
                 + (statistics.mean(per_job['ue']) + statistics.mean(per_job['calib']) + statistics.mean(per_job['hists'])) * m / n_meas
             total_s += w
             job_walls.append(w)
+            fail_total_s += m * fail_s_per_file
+            job_walls_f.append(w + m * fail_s_per_file)
     job_walls.sort()
+    job_walls_f.sort()
     print('\nfull pass%s: runs %d-%d, %d runs, %d files, %.2e events, %.0f TB read' % (
         ' (runs in ' + a.runs + ')' if a.runs else '', a.run_min, a.run_max, len(runs), tot_files, tot_ev, tot_gb / 1e3))
     print('  jobs            %d of <= %d files' % (njobs, n))
     print('  job wall        median %.0f min, 99%% %.0f min, max %.0f min' % (
         job_walls[len(job_walls) // 2] / 60, job_walls[int(0.99 * (len(job_walls) - 1))] / 60, job_walls[-1] / 60))
-    print('  total           %.0f core-hours (%.0f core-days)' % (total_s / 3600, total_s / 86400))
+    print('  job wall with failed fetches: median %.0f min, 99%% %.0f min, max %.0f min (%.0f s lost per processed file)' % (
+        job_walls_f[len(job_walls_f) // 2] / 60, job_walls_f[int(0.99 * (len(job_walls_f) - 1))] / 60, job_walls_f[-1] / 60, fail_s_per_file))
+    print('  total           %.0f core-hours (%.0f core-days); with failed fetches %.0f slot-hours' % (
+        total_s / 3600, total_s / 86400, (total_s + fail_total_s) / 3600))
     for s in [int(x) for x in a.slots.split(',')]:
-        print('  on %5d slots   %.1f days' % (s, total_s / 3600 / s / 24))
+        print('  on %5d slots   %.1f days (%.1f with failed fetches)' % (s, total_s / 3600 / s / 24, (total_s + fail_total_s) / 3600 / s / 24))
     print('  memory request  %.0f MB (1.5 x peak RSS, rounded up to 500 MB)' % (500 * math.ceil(1.5 * rss / 500)))
-    print('  scratch         %.1f GB per job (one MuDst + %d SimpleTrees)' % (
-        statistics.mean(r['in_kb'] for r in fetch) / 1e6 + n * st_mb / 1024., n))
+    if pair_gb:
+        q = lambda f: pair_gb[min(len(pair_gb) - 1, int(f * (len(pair_gb) - 1)))]
+        typ = q(0.5) + n * jf_mb / 1e3 + sandbox_gb
+        worst = pair_gb[-1] + n * jf_max_mb / 1e3 + sandbox_gb
+        print('  scratch         typical %.1f GB, 99%% %.1f GB, worst %.1f GB per job (one MuDst + its SimpleTree + %d jet files + sandbox)' % (
+            typ, q(0.99) + n * jf_mb / 1e3 + sandbox_gb, worst, n))
+        print('  disk request    %d GB (1.25 x worst, rounded up)' % int(math.ceil(1.25 * worst)))
     print('  output          %.1f GB of histograms (%d files; %.0f MB after hadd per run)' % (
         njobs * out_kb / 1e6, njobs, len(runs) * out_kb / 1e3))
 

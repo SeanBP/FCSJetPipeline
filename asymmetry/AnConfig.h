@@ -54,22 +54,34 @@ inline const char *PhotonClassName(int k)
 }
 
 // ------------------ Spin states ------------------
-// Spin_config is StSpinDbMaker::spin4usingBX7(): blue up = {4,5,6}, blue
-// down = {8,9,10}, yellow up = {1,5,9}, yellow down = {2,6,10}. Only the four
-// both-polarized states enter; -1 (no spin DB entry) and the rest are dropped.
+// Spin_config is StSpinDbMaker::spin4usingBX7(). Its bits carry CAD's "+" and
+// "-", and CAD "+" is spin DOWN at STAR, for both beams (STAR spin-pattern
+// note, drupal.star.bnl.gov/STAR/blog/oleg/spin-patterns-and-polarization-direction;
+// used by the Run 15/17 FMS EM-jet A_N code, BrightSTAR, and D. Kapukchyan's
+// Run 22 FCS pi0 A_N, StFwdDataEvent::BlueSpin/YellowSpin):
+//   10 = blue up, yellow up     9 = blue up, yellow down
+//    6 = blue down, yellow up   5 = blue down, yellow down
+// Only these four enter; -1 (no spin DB entry) and the rest are dropped.
+// Until 2026-11-04 this mapping took StSpinDbMaker's labels at face value
+// (5 = blue up, yellow up), which flips both beams and so the sign of both
+// A_N; yield files written then have no "spin_convention" entry and
+// AnAsymmetry relabels them (kSpinConventionTag).
 static const int kNSpinStates = 4;
 static const char *const kSpinStateName[kNSpinStates] = {"BuYu", "BuYd", "BdYu", "BdYd"};
 inline int SpinState(int spin_config)
 {
     switch (spin_config)
     {
-        case 5: return 0;
-        case 6: return 1;
-        case 9: return 2;
-        case 10: return 3;
+        case 10: return 0;
+        case 9: return 1;
+        case 6: return 2;
+        case 5: return 3;
         default: return -1;
     }
 }
+// Written by AnHistograms as TNamed "spin_convention"; a yield file without
+// it used the old mapping, whose state p is the physical state 3 - p
+static const char *const kSpinConventionTag = "physical: Spin_config 10 = BuYu, 9 = BuYd, 6 = BdYu, 5 = BdYd (CAD + = down)";
 
 // ------------------ Detector side ------------------
 // computeSide() (JetParameters.h) on reco_x: -1 for x <= 0, +1 for x > 0.

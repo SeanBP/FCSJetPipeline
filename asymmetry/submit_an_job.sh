@@ -9,9 +9,10 @@
 #   -o  output directory; histograms go to <outdir>/hists/, timing tables
 #       to <outdir>/timing/
 #   -n  files per job, default 40: each run is cut into jobs of at most this
-#       many consecutive files (the underlying-event step draws proxies from
-#       its own job's files of one run). Also sets the job's scratch use,
-#       ~0.1 GB per file of SimpleTree plus one MuDst (~1.2 GB).
+#       many consecutive files (a job's yields are one run's, for the per-run
+#       polarization). Scratch does not grow with it: each MuDst and SimpleTree
+#       is deleted once used (one MuDst + its SimpleTree at a time, up to
+#       ~4.5 GB for the largest MuDsts), plus ~0.3 MB of jet file per MuDst.
 #   -c  EM-only point-jet JES lookup JSON, default
 #       jet_calibration/JES_Lookups/JetEnergyScale_lookup_em_only.json
 #       (copied into asymmetry/jes/ for the SandBox). It must be a
