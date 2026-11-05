@@ -1,7 +1,12 @@
 #!/bin/bash
 # Offline A_N steps on a finished an_job pass (step 6 and the checks), into
 # <outdir>/report/:
-#   an.root, an.txt            AnAsymmetry -r (bad runs, per-run polarization)
+#   an.root, an.txt            AnAsymmetry -r (bad runs, per-run polarization;
+#                              "all" = EM levels, "allJP" = JP levels)
+#   an_union.root, .txt        the same with -J: "all" = EM + JP union, each
+#                              jet once
+#   an_vs_xf_union.png         the union A_N vs x_F
+#   an_vs_xf_<JP level>.png    A_N per JP level and allJP
 #   an_vs_xf.png               final A_N vs x_F, statistical errors
 #   an_projected.txt           the table with errors projected to the full
 #                              good-run sample (project_errors.py)
@@ -17,9 +22,13 @@
 #   condor_jobs.txt            condor's own record per job: wall clock,
 #                              memory, disk, exit code (condor_history)
 #
-# Usage: ./smoke_report.sh <outdir> <good_runs.txt>
+# Usage: ./smoke_report.sh <outdir> <good_runs.txt> [report name = report]
 #   <good_runs.txt>: make_smoke_list.py's <prefix>_good_runs.txt, the
 #   full sample the errors and resources are projected to
+#   [report name]: subdirectory of <outdir>, e.g. report_2026-11-10, so
+#   reports on a pass still running (whatever jobs have finished; yield files
+#   written in the last 10 minutes are left out, in case condor is still
+#   copying them) do not overwrite each other
 # Compiles in the container; run it from the host (condor_history).
 
 set -e
@@ -27,11 +36,13 @@ OUTDIR="$(cd "$1" && pwd)"
 GOOD="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
 [ -d "${OUTDIR}/hists" ] && [ -f "$GOOD" ] || { sed -n '2,24p' "$0"; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REP="${OUTDIR}/report"
+REP="${OUTDIR}/${3:-report}"
 mkdir -p "${REP}/build"
 cp "${HERE}"/{AnAsymmetry.cpp,AnPlots.cpp,AnConfig.h,plot_an.C} "${REP}/build/"
-ls "${OUTDIR}"/hists/an_hists_*.root > "${REP}/yields.list"
-echo "$(wc -l < "${REP}/yields.list") yield files"
+find "${OUTDIR}/hists" -maxdepth 1 -name 'an_hists_*.root' -mmin +10 | sort > "${REP}/yields.list"
+# jobs submitted so far, over all batches of the pass
+NJOBS=$(cat "${OUTDIR}"/run_params_*.txt 2>/dev/null | awk -F= '$1 == "nProcesses" && $2 > 0 { n += $2 } END { if (n) print n }')
+echo "$(wc -l < "${REP}/yields.list") yield files${NJOBS:+ of ${NJOBS} jobs} ($(date))" | tee "${REP}/completed.txt"
 
 container() {
     singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 \
@@ -42,6 +53,7 @@ container() {
 container "g++ -m64 -O2 build/AnAsymmetry.cpp -o build/AnAsymmetry \`root-config --cflags --libs\` -std=c++11 && g++ -m64 -O2 build/AnPlots.cpp -o build/AnPlots \`root-config --cflags --libs\` -std=c++11"
 container "./build/AnAsymmetry -r yields.list ${HERE}/run22_polarization.txt an.root" > "${REP}/an_asymmetry.log"
 grep -A20 "^all, all photon classes" "${REP}/an_asymmetry.log" || true
+container "./build/AnAsymmetry -J -r yields.list ${HERE}/run22_polarization.txt an_union.root" > "${REP}/an_asymmetry_union.log"
 
 "${HERE}/project_errors.py" "${OUTDIR}" "${REP}/an.txt" "${GOOD}" | tee "${REP}/projection.log"
 SCALE=$(grep '^scale=' "${REP}/projection.log" | cut -d= -f2)
@@ -57,13 +69,11 @@ root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_EM2.png","EM2","all",1,0,10,"
 root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_np1.png","all","np1",1,0,10,"${SAMPLE}")' || exit 1
 root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_np2.png","all","np2",1,0,10,"${SAMPLE}")' || exit 1
 root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_np3plus.png","all","np3plus",1,0,10,"${SAMPLE}")' || exit 1
-PLOTS
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf.png")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_projected.png","all","all",${SCALE},0)' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_projected_zero.png","all","all",${SCALE},1)' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_EM0.png","EM0","all")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_EM1.png","EM1","all")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_EM2.png","EM2","all")' || exit 1
+root -b -q -l 'build/plot_an.C("an_union.root","an_vs_xf_union.png","all","all",1,0,10,"${SAMPLE}")' || exit 1
+root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_allJP.png","allJP","all",1,0,10,"${SAMPLE}")' || exit 1
+root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_JP0.png","JP0","all",1,0,10,"${SAMPLE}")' || exit 1
+root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_JP1.png","JP1","all",1,0,10,"${SAMPLE}")' || exit 1
+root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_JP2.png","JP2","all",1,0,10,"${SAMPLE}")' || exit 1
 PLOTS
 container "tcsh plot_an.csh" > "${REP}/plot_an.log" 2>&1 || { tail "${REP}/plot_an.log"; exit 1; }
 container "./build/AnPlots yields.list plots" > "${REP}/anplots.log" 2>&1 || { tail "${REP}/anplots.log"; exit 1; }

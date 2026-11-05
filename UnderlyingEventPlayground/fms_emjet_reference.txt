@@ -133,8 +133,12 @@ Bunch crossing            abort gaps removed: bx7 in (30,40) or (110,120)
 Spin                      both beams polarized (spin4 = 5, 6, 9, 10)
 x_F                       0 <= |x_F| <= 1
 Jet energy                E < sqrt(s)/2
-Photon multiplicity       number of points in the jet, must be >= 1; results
-                          are binned in it (1-2, 3, >= N; or 1..5, 6+)
+Photon multiplicity       number of points in the jet, i.e. its constituents:
+                          nPhotons = jet->GetNumberOfTowers(), the jet's
+                          "towers" being FMS points (EjCreateBinnedHist.cxx,
+                          EjCreateBinnedHistExtended.cxx, EjMakeAnalysisTree.cxx);
+                          must be >= 1; results are binned in it (1-2, 3, >= N;
+                          or 1..5, 6+)
 Energy bins               20 GeV wide, 0-100 GeV
 pT bins                   2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0, 10.0
 Excluded fill             18764 (wrong spin pattern)
@@ -273,9 +277,12 @@ Same as FMS:
   - LED events vetoed; both beams polarized (spin4 = 5, 6, 9, 10), which also
     removes abort-gap and single-beam bunches (run 23007048: 8 of 51411 events
     have spin4 1, 4 or 8, none other).
-  - At least one photon per jet: reco_nphotons (points > 1 GeV within R of the
-    axis) is never 0 for a found jet (run 23007048, 40 files: none); classes
-    1, 2, 3, 4, >= 5 kept separately, to be grouped as FMS (1-2, 3, ...).
+  - Photons per jet: the jet's point constituents (points > 1 GeV), as FMS
+    (since 2026-11-05; AnHistograms reads reco_nconst, and RecoJets/JetMatcher
+    now fill reco_nphotons with it for point jets; before, reco_nphotons was
+    the points within R of the axis, ~2.5% of jets different). Never 0 for a
+    found jet; classes 1, 2, 3, 4, >= 5 kept separately, to be grouped as FMS
+    (1-2, 3, ...).
   - A_N reported for blue at x_F > 0 and yellow at x_F < 0, |x_F| from the
     corrected energy, polarization weighted per run by the jets.
   - PYTHIA 6.4.28, PyTune 370, PARP(90) = 0.213, PARP(91) = 1, CTEQ6L1, MSEL 1

@@ -35,7 +35,8 @@ static const float mip_threshold = 0.1;
 
 // FCS points (-F 1): minimum point energy, GeV, as the FMS EM-jet analysis
 // (kFmsEngMin, UnderlyingEventPlayground/fms_emjet_reference.txt). Also the
-// energy floor of reco_nphotons. Applied via pass_point_energy_cut().
+// energy floor of the points counted as photons. Applied via
+// pass_point_energy_cut().
 static const float point_energy_min = 1.0f;
 
 // ------------------ Geometry cut (symmetric two-window detector) ------------------

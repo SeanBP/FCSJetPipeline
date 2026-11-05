@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <!--
-    A_N job: per MuDst file, MuDst -> SimpleTree (runMudst.C, EM-triggered
-    events only) -> EM-only point jets (RecoJets) -> in-event underlying event
+    A_N job: per MuDst file, MuDst -> SimpleTree (runMudst.C, EM- or
+    JP-triggered events only) -> EM-only point jets (RecoJets) -> in-event underlying event
     (UnderlyingEvent), the MuDst and SimpleTree deleted as soon as they are
     used, so scratch holds one MuDst or one SimpleTree at a time whatever the
     files per job; then, over the job's jet files, JES calibration
@@ -11,7 +11,8 @@
     modules (this shell keeps stardev for root4star) and run with the
     modules' LD_LIBRARY_PATH. Only the histograms and a per-stage timing table leave the
     job; SimpleTrees are deleted, and jet files too unless the job is one
-    of those keeping them (KEEP_JETS).
+    of those keeping them (KEEP_JETS), which merges them into one
+    jets_<run>_<job>.root (hadd on the job's scratch).
 
     Each stage runs under /usr/bin/time; timing_<run>_<job>.txt has one row
     per stage call:
@@ -27,8 +28,8 @@
       {{TRIGGER_FILTER}}  FCS trigger names an event must have fired
       {{CALIB_NAME}}      EM-only point-jet JES lookup JSON, a file in
                           asymmetry/jes/ (submit_an_job.sh -c copies it there)
-      {{KEEP_JETS}}       keep the calibrated jet files of every N-th job
-                          (to <outdir>/jets/), 0 = none
+      {{KEEP_JETS}}       keep the calibrated jet files of every N-th job,
+                          merged per job (to <outdir>/jets/), 0 = none
       {{OUTDIR}}          absolute output directory
       {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
 
@@ -36,6 +37,9 @@
 -->
 
 <job nProcesses="{{NPROCESSES}}">
+
+    <!-- peak 772 MB (root4star on a corrupt MuDst; median ~265 MB), smoke_v2 -->
+    <ResourceUsage><Memory><MinMemory>1000</MinMemory></Memory></ResourceUsage>
 
     <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
 
@@ -191,11 +195,20 @@
             @ jmod = ${JOBINDEX} % {{KEEP_JETS}}
             if ( ${jmod} == 0 ) set KEEPJ = 1
         endif
-        if ( ${KEEPJ} == 0 ) then
-            foreach f ( `cat jet_files.list` )
-                rm -f ${f}
-            end
+        if ( ${KEEPJ} == 1 ) then
+            # one merged file per job (a directory of ~4,400 files, not ~176,000)
+            /usr/bin/time -f "%e %U %S %M" -o stage.time tcsh -c 'module purge; module load fastjet-3.3.4; module load root-5.34.38; hadd -f jets_'${TAG}'.root `cat jet_files.list`' &gt;&amp;! hadd.log
+            set HADDSTATUS = $status
+            echo "merge all ${NPRODUCED} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+            if ( ${HADDSTATUS} != 0 || ! -f jets_${TAG}.root ) then
+                echo "ERROR: hadd of the jet files failed; jets not kept"
+                tail -20 hadd.log
+                rm -f jets_${TAG}.root
+            endif
         endif
+        foreach f ( `cat jet_files.list` )
+            rm -f ${f}
+        end
         rm -f my_lines.list simpletree_files.list single_file.list ue_pairs.list jet_files.list stage.time modules_ld.txt
         cat ${TIMING}
 
@@ -212,6 +225,7 @@
             <File>file:./shared/VectorDictClass.h</File>
             <File>file:./shared/VectorDictLinkDef.h</File>
             <File>file:./shared/JetParameters.h</File>
+            <File>file:./shared/FcsTrigSums.h</File>
             <File>file:./.sl73_x8664_gcc485</File>
             <File>file:./StRoot</File>
             <File>file:./underlying_event</File>
@@ -227,6 +241,6 @@
 
     <output fromScratch="an_hists_*.root" toURL="file:{{OUTDIR}}/hists/" />
     <output fromScratch="timing_*.txt" toURL="file:{{OUTDIR}}/timing/" />
-    <output fromScratch="jet_output_*.root" toURL="file:{{OUTDIR}}/jets/" />
+    <output fromScratch="jets_*.root" toURL="file:{{OUTDIR}}/jets/" />
 
 </job>

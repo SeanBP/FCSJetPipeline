@@ -55,39 +55,90 @@ Step 6 runs on the job outputs, not in the job.
 ## Files
 
 - **`AnConfig.h`**: selection and binning.
-  - EM levels and thresholds. `kEmThresholdGeV` = 2.0 / 3.5 / 5.0 GeV, the
-    nominal online values (64 / 112 / 160 counts at 0.0316 GeV), compared
-    with uncorrected jet pT; taken as given until the turn-ons are measured.
-  - The 1.15 × threshold factor (as the FMS EM-jet analysis) and the 2 GeV corrected pT minimum.
+  - Trigger levels EM0–2 and JP0–2 with A. Ogawa's nominal thresholds
+    (`kTrgThresholdGeV` = 2.0 / 3.5 / 5.0 and 4.0 / 6.0 / 8.0 GeV), the
+    default cut factors `kEmCutFactor` = 1.15 and `kJpCutFactor` = 1.3, the EM HCal-veto margin 1.15
+    and the yield slices (1.15, 1.3, 1.45, 1.6 × threshold). Until 2026-11-05
+    the EM levels cut uncorrected jet pT at 1.15 × threshold.
+  - The 2 GeV corrected pT minimum.
   - Point-multiplicity classes, spin states and x_F bins.
-- **`AnHistograms.cpp`**: fills, per jet, `h_xF_<EM level>_<np class>_<side>_<spin>`.
-  - EM level: the lowest listed EM trigger (fcsEM0/1/2, `_tpc` copies
-    included) whose threshold the jet passes. fcsEM3 is not used.
-  - np class: `reco_nphotons`, in classes 0–4 and ≥ 5.
+- **`AnHistograms.cpp`**: fills, per jet, `h_xF_<level>_<np class>_<side>_<spin><sample>`.
+  - Level: the trigger level the jet fired, from the jet's rebuilt trigger
+    value (RecoJets `reco_trg_*`, `shared/FcsTrigSums.h`: what the Run 22
+    trigger compared with its threshold, from offline hit E_T). EM0–2:
+    largest ECal 4x4 window in the jet, and the HCal veto with a margin
+    (`em_hmax <= em_et / (4 x 1.15)`); JP0–2: largest JP patch with the jet,
+    for JP0/JP1 in a listed region (fcsJPA*, fcsJPBC*, fcsJPDE*). EM before
+    JP, the lowest listed level within each; listed = recorded the event
+    (`fcsEMk`, `fcsEMk_tpc`, `fcsJP*`). fcsEM3 and the DiJP triggers are not used.
+  - Sample suffix: `_t115`, `_t130`, `_t145`, `_t160` (trigger value /
+    threshold slice); `_veto` (EM above threshold failing only the veto
+    margin); `_comp` (companions); then `_hiE` above sqrt(s)/2. The default
+    yields are the slices at >= 1.3 x threshold for EM and JP levels
+    (`AnAsymmetry -fe` / `-fj` choose others): one cut for every run and for
+    simulation. Run 22 scan (125 runs, `TriggerPlayground/trg_eff_scan.cpp`):
+    EM above 1.15 fires 0.90–0.98 of the time; JP0/JP1 in the 1.15–1.3 slice
+    only 0.80–0.95 between 23027047 and 23066055, ≥ 0.99 above 1.3.
+  - np class: the jet's point constituents (`reco_nconst`; point jets only,
+    `reco_from_points = 1`), in classes 0–4 and ≥ 5. This is the FMS
+    definition (BrightSTAR counts the jet's FMS points); until 2026-11-05 it
+    was `reco_nphotons`, points within R of the axis, which differs on ~2.5%
+    of jets.
   - Side: the sign of x.
   - Spin: `Spin_config` 5/6/9/10; events with other values are dropped.
-  - Cuts: calibrated (`reco_E_corr > 0`), `pass_physical_jet_cut`, and
-    corrected pT = `reco_E_corr / cosh(eta)` > 2 GeV and, as FMS, uncorrected
-    pT (`reco_pt`) > 1.15 × the threshold of any EM trigger listed in the event
-    (`fcsEMk` or `fcsEMk_tpc`); events with `fcs_led` set are dropped.
-  - Listed triggers are those that recorded the event (after prescale); the
-    jet's EM level is the lowest listed level whose threshold it passes.
+  - Cuts: calibrated (`reco_E_corr > 0`), x_F > 0, corrected pT =
+    `reco_E_corr / cosh(eta)` > 2 GeV, and a trigger level fired; events
+    with `fcs_led` set, or no EM or JP trigger listed, are dropped.
   - `h_abscos_*`, `h_xfsum_*`: x_F weighted by |cos phi| and by x_F, for each
     bin's mean |cos phi| and mean corrected x_F.
+  - Jets with corrected E above sqrt(s)/2 (the FMS cut) are not dropped:
+    they fill the same histograms with the suffix `_hiE`, and the default
+    ones hold only E ≤ sqrt(s)/2. `AnAsymmetry -E` adds them in. The x_F
+    bins (0.025) run to 1.5, since every jet with x_F > 1 is above sqrt(s)/2.
+    Yield files from before 2026-11-04 (40 bins to x_F = 1, no `_hiE`) cannot
+    be summed with newer ones.
+  - Companion jets: jets passing every cut but the trigger threshold, in an
+    event where another jet passes it, fill the same histograms with the
+    suffix `_comp` (`_comp_hiE` above sqrt(s)/2), at the highest level among
+    the event's passing jets. Left out of A_N by default; `AnAsymmetry -C`
+    uses them alone, `-A` adds them to the triggering jets (yield files from
+    2026-11-05 on).
+  - Two-photon jets (two point constituents): the
+    pair's invariant mass and its orientation on the ECal face (angle of the
+    line joining the points, [0, 180) degrees, 0 = along x, 90 = along y),
+    from the stored constituents. QA `qa_mgg_*`, `qa_pairang_*`, `qa_mggE_*`
+    (mass vs corrected E), `qa_mggang_*`; yields `h_xFm_<level>_<side>_<spin>`
+    (x_F vs mass, with `_comp` and `_hiE` variants) for a pi0 mass window
+    chosen after the jobs. The mass uses the point energy scale and the
+    nominal vertex.
   - Also written: a cut flow, events per spin state per EM level, corrected
     pT before the threshold cut, and the run numbers.
   - Sanity distributions `qa_<variable>_evt` (every jet of the events
     passing the event cuts) and `qa_<variable>_sel` (the jets in the
     yields): eta, phi, uncorrected, UE and corrected energy, pT, x_F, points,
     jets per event, and the x-y map (`qa_xy_*`, also per side); per event the
-    vertex z and source, the listed EM triggers and `Spin_config`.
+    vertex z and source, the listed EM triggers, `Spin_config` and sqrt(s).
+    The jet distributions also per EM level, `qa_<variable>_<stage>_EMk`
+    (evt: by the event's highest listed level; sel: by the jet's level);
+    `AnPlots` draws them in `qa_jets_trigger.png` and the `_hiE` yields in
+    `yields_hiE.png`. A third stage, `comp`, holds the companion jets;
+    `companions_pairs.png` compares them with the triggering jets and draws
+    the pair mass and orientation.
   - The classes are kept apart so they can be combined when A_N is formed.
     Files of one run or fill add with `hadd`.
 - **`AnAsymmetry.cpp`**: A_N from the yields (not part of the job):
   ```
-  ./AnAsymmetry <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]
-  ./AnAsymmetry -r <yield file list> run22_polarization.txt <out.root> [rebin = 2] [list | none] [flagged | all]
+  ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]
+  ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] -r <yield file list> run22_polarization.txt <out.root> [rebin = 2] [list | none] [flagged | all]
   ```
+  - `-E`: include the jets above sqrt(s)/2 (default: left out, as FMS).
+  - `-C`: companion jets alone; `-A`: triggering and companion jets together
+    (default: triggering jets alone).
+  - `-f`: trigger cut factor for both families, 1.15 / 1.3 / 1.45 / 1.6;
+    `-fe` / `-fj`: EM or JP alone (both default 1.3). `-J`: JP
+    levels in "all" (the JP jets whose EM slice is below the EM factor) (EM only by default; "allJP" is always written); `-V`:
+    add the EM jets that failed only the veto margin. Yield files made
+    before 2026-11-05 are refused.
   - `-r`: one yield file per run, summed; each bin uses the mean polarization
     of its jets (runs weighted by their jets, as FMS weighted by events).
   - `-r` also drops bad runs: by default the runs with a flag in D.

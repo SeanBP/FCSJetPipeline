@@ -3,13 +3,23 @@
 //   cutflow.png            jets at each cut
 //   qa_jets.png            jet eta, phi, energies, pT, x_F, points: jets of
 //                          the events passing the event cuts and the jets
-//                          entering the yields
+//                          entering the yields (grey lines: sqrt(s)/2 and
+//                          x_F = 1, past which jets are kept apart)
+//   qa_jets_trigger.png    the same per EM level (EM0, EM1, EM2)
+//   yields_hiE.png         yields vs x_F per EM level, E <= sqrt(s)/2 and
+//                          above it (the _hiE histograms)
+//   companions_pairs.png   companion jets (the _comp histograms: below every
+//                          listed threshold, in events with a jet above one)
+//                          beside the triggering jets; two-photon jets' pair
+//                          mass and orientation (grey: the pi0 mass)
 //   qa_xy.png              jet positions (both stages, and the selected jets'
 //                          ratio to all jets)
 //   qa_events.png          jets per event, vertex z and source, listed EM
 //                          triggers, Spin_config
-//   pt_levels.png          uncorrected and corrected pT by highest listed EM
-//                          level, with the 1.15 x threshold cut
+//   pt_levels.png          uncorrected and corrected pT by the event's level
+//   trigger_values.png     per level, the jets' trigger value / nominal
+//                          threshold (slice edges dotted, the default
+//                          factor CutFactor() solid)
 //   yields_xF_<level>.png  yields vs x_F per side and spin state, Poisson
 //                          errors (levels EM0, EM1, EM2 and all)
 //   yields_xF_classes.png  yields vs x_F per photon class and per EM level
@@ -48,6 +58,41 @@ static std::map<std::string, TH1 *> gSum;
 static std::string gOut;
 static TCanvas *gPdfCanvas = 0;
 
+// The default-yield name of a triggering-slice histogram: the slice suffix
+// (and a JP level's EM tag) removed, if the slice is at or above the level's default factor (CutFactor); "" otherwise (or if
+// the name has no slice suffix). AddFile also sums such slices under that
+// name, so the pages below read the default yields by their plain names.
+static std::string DefaultName(const std::string &name)
+{
+    for (int g = 0; g < kNTrgSlices; g++)
+    {
+        const std::string sfx = kTrgSliceSuffix[g];
+        const size_t at = name.find(sfx);
+        if (at == std::string::npos) continue;
+        std::string rest = name.substr(at + sfx.size());
+        // JP levels: the EM tag after the slice (every tag summed)
+        for (int t = 0; t < kNEmTags; t++)
+            if (rest.compare(0, std::string(kEmTagSuffix[t]).size(), kEmTagSuffix[t]) == 0) { rest = rest.substr(std::string(kEmTagSuffix[t]).size()); break; }
+        if (!rest.empty() && rest != kHiESuffix) continue;
+        const bool jp = name.find("_JP") != std::string::npos;
+        if (kTrgSliceEdge[g] < (jp ? kJpCutFactor : kEmCutFactor) - 1e-9) return "";
+        return name.substr(0, at) + rest;
+    }
+    return "";
+}
+
+static void AddTo(const std::string &name, TH1 *o)
+{
+    std::map<std::string, TH1 *>::iterator it = gSum.find(name);
+    if (it != gSum.end()) it->second->Add(o);
+    else
+    {
+        TH1 *c = (TH1 *)o->Clone(name.c_str());
+        c->SetDirectory(0);
+        gSum[name] = c;
+    }
+}
+
 static void AddFile(TFile &f)
 {
     // files without spin_convention used the old Spin_config mapping: the
@@ -69,14 +114,9 @@ static void AddFile(TFile &f)
                     break;
                 }
             }
-        std::map<std::string, TH1 *>::iterator it = gSum.find(name);
-        if (it != gSum.end()) it->second->Add((TH1 *)o);
-        else
-        {
-            TH1 *c = (TH1 *)o->Clone(name.c_str());
-            c->SetDirectory(0);
-            gSum[name] = c;
-        }
+        AddTo(name, (TH1 *)o);
+        const std::string dn = DefaultName(name);
+        if (!dn.empty()) AddTo(dn, (TH1 *)o);
     }
 }
 
@@ -104,6 +144,27 @@ static void Style(TH1 *h, int i, int marker = 20)
     h->SetLineWidth(2);
 }
 
+// sqrt(s)/2 (GeV) from qa_sqrt_s, 0 if the files have none (made before 2026-11-04)
+static double HalfSqrtS()
+{
+    std::map<std::string, TH1 *>::iterator it = gSum.find("qa_sqrt_s");
+    return it != gSum.end() && it->second->GetEntries() > 0 ? 0.5 * it->second->GetMean() : 0;
+}
+
+// on the current pad: a grey line at sqrt(s)/2 on the corrected-energy panel
+// and at x_F = 1 on the x_F panel (jets past them are the _hiE ones)
+static void HalfSqrtSLine(const std::string &var)
+{
+    double xc = 0;
+    if (var == "Ecorr") xc = HalfSqrtS();
+    else if (var == "xF") xc = 1.0;
+    if (!(xc > 0)) return;
+    gPad->Update();
+    const double y0 = std::pow(10, gPad->GetUymin()), y1 = std::pow(10, gPad->GetUymax());
+    TLine *ln = new TLine(xc, y0, xc, y1);
+    ln->SetLineColor(kGray + 1); ln->SetLineWidth(2); ln->Draw();
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) { std::cerr << "Usage: " << argv[0] << " <yield file list> <out dir>" << std::endl; return 1; }
@@ -114,7 +175,7 @@ int main(int argc, char **argv)
     gStyle->SetTitleFontSize(0.05);
 
     // per-run quantities, filled file by file
-    struct RunRow { double ev_read, ev_pass, jets, xpos, xneg, spin[kNSpinStates], lvl[kNEmLevels], esum, en; };
+    struct RunRow { double ev_read, ev_pass, jets, xpos, xneg, spin[kNSpinStates], lvl[kNTrgLevels], esum, en; };
     std::map<int, RunRow> rows;
     std::ifstream list(argv[1]);
     std::string fn;
@@ -130,9 +191,9 @@ int main(int argc, char **argv)
         RunRow &r = rows[run];
         TH1 *cut = (TH1 *)f.Get("h_cutflow");
         if (cut) r.ev_read += cut->GetBinContent(cut->GetNbinsX());
-        for (int l = 0; l < kNEmLevels; l++)
+        for (int l = 0; l < kNTrgLevels; l++)
         {
-            TH1 *he = (TH1 *)f.Get(TString::Format("h_events_%s", kEmLevelName[l]));
+            TH1 *he = (TH1 *)f.Get(TString::Format("h_events_%s", kTrgLevelName[l]));
             if (!he) continue;
             // files without spin_convention used the old mapping: state p is physical 3 - p
             const bool old_labels = !f.Get("spin_convention");
@@ -145,9 +206,19 @@ int main(int argc, char **argv)
                 for (int s = 0; s < kNSides; s++)
                     for (int p = 0; p < kNSpinStates; p++)
                     {
-                        TH1 *hy = (TH1 *)f.Get(TString::Format("h_xF_%s_%s_%s_%s", kEmLevelName[l], PhotonClassName(k), kSideName[s], kSpinStateName[p]));
-                        if (!hy) continue;
-                        const double n = hy->Integral();
+                        double n = 0;
+                        for (int g = 0; g < kNTrgSlices; g++)
+                        {
+                            if (kTrgSliceEdge[g] < CutFactor(l) - 1e-9) continue;
+                            // JP levels: only jets not firing EM at the default factor (each jet once)
+                            for (int tg = 0; tg < (IsJpLevel(l) ? kNEmTags : 1); tg++)
+                            {
+                                if (IsJpLevel(l) && tg > 0 && kTrgSliceEdge[tg - 1] >= kEmCutFactor - 1e-9) continue;
+                                TH1 *hy = (TH1 *)f.Get(TString::Format("h_xF_%s_%s_%s_%s%s%s", kTrgLevelName[l], PhotonClassName(k), kSideName[s], kSpinStateName[p],
+                                                                       kTrgSliceSuffix[g], IsJpLevel(l) ? kEmTagSuffix[tg] : ""));
+                                if (hy) n += hy->Integral();
+                            }
+                        }
                         r.jets += n; r.lvl[l] += n;
                         (s ? r.xpos : r.xneg) += n;
                     }
@@ -192,21 +263,7 @@ int main(int argc, char **argv)
                 lg->SetBorderSize(0); lg->SetFillStyle(0);
             }
             lg->Draw();
-            // uncorrected pT: the A_N trigger cut of each EM level
-            if (std::string(v[i]) == "pt")
-            {
-                gPad->Update();
-                const double y0 = std::pow(10, gPad->GetUymin()), y1 = std::pow(10, gPad->GetUymax() - 0.25 * (gPad->GetUymax() - gPad->GetUymin()));
-                const int lc[kNEmLevels] = {kGreen + 2, kMagenta + 1, kRed + 1};
-                for (int l = 0; l < kNEmLevels; l++)
-                {
-                    const double xc = kTriggerPtFactor * kEmThresholdGeV[l];
-                    TLine *ln = new TLine(xc, y0, xc, y1);
-                    ln->SetLineStyle(2); ln->SetLineWidth(2); ln->SetLineColor(lc[l]); ln->Draw();
-                    TLatex tl; tl.SetTextSize(0.045); tl.SetTextColor(lc[l]); tl.SetTextAlign(11);
-                    tl.DrawLatex(xc + 0.15, 3 * std::pow(10.0, l) * y0, kEmLevelName[l]);
-                }
-            }
+            HalfSqrtSLine(v[i]);
         }
         // the two stages' cuts, in the free pads (A_N values from AnConfig.h; the
         // jet-finding ones are JetParameters.h's R, point_energy_min,
@@ -218,8 +275,8 @@ int main(int argc, char **argv)
             double y = 0.92;
             l.SetTextColor(kBlue + 1); l.DrawLatex(0.02, y, "#bf{Event cuts} (blue: every jet of these events)"); y -= dy; l.SetTextColor(kBlack);
             l.DrawLatex(0.04, y, "#bullet no FCS LED (fcs_led = 0)"); y -= dy;
-            l.DrawLatex(0.04, y, "#bullet an EM trigger recorded the event: fcsEM0/1/2"); y -= dy;
-            l.DrawLatex(0.08, y, "(or its _tpc id) listed, i.e. after prescale"); y -= dy;
+            l.DrawLatex(0.04, y, "#bullet an EM or JP trigger recorded the event (fcsEM0/1/2,"); y -= dy;
+            l.DrawLatex(0.08, y, "_tpc ids, fcsJP*): listed, i.e. after prescale"); y -= dy;
             l.DrawLatex(0.04, y, "#bullet a spin state: Spin_config 5, 6, 9 or 10"); y -= dy;
             l.DrawLatex(0.04, y, "#bullet run not flagged bad (sample drawn from good runs)"); y -= dy;
             y -= 0.03;
@@ -231,15 +288,224 @@ int main(int argc, char **argv)
             y = 0.92;
             l.SetTextColor(kOrange + 7); l.DrawLatex(0.02, y, "#bf{A_{N} yield cuts} (orange), per jet, in addition"); y -= dy; l.SetTextColor(kBlack);
             l.DrawLatex(0.04, y, "#bullet calibrated (UE subtracted, JES applied): E_{corr} > 0"); y -= dy;
-            l.DrawLatex(0.04, y, "#bullet E_{corr} #leq #sqrt{s}/2 and 0 < x_{F} #leq 1"); y -= dy;
+            l.DrawLatex(0.04, y, "#bullet x_{F} > 0; E_{corr} > #sqrt{s}/2 (grey line) kept apart,"); y -= dy;
+            l.DrawLatex(0.08, y, "shown here, in A_{N} only with AnAsymmetry -E"); y -= dy;
             l.DrawLatex(0.04, y, TString::Format("#bullet corrected p_{T} > %.0f GeV", kJetPtCorrMin)); y -= dy;
-            l.DrawLatex(0.04, y, TString::Format("#bullet uncorrected p_{T} > %.2f #times the threshold of an EM", kTriggerPtFactor)); y -= dy;
-            l.DrawLatex(0.08, y, "trigger listed in the event (dashed lines):"); y -= dy;
-            l.DrawLatex(0.08, y, TString::Format("EM0 > %.2f, EM1 > %.2f, EM2 > %.2f GeV",
-                                                 kTriggerPtFactor * kEmThresholdGeV[0], kTriggerPtFactor * kEmThresholdGeV[1],
-                                                 kTriggerPtFactor * kEmThresholdGeV[2])); y -= dy;
+            l.DrawLatex(0.04, y, TString::Format("#bullet a trigger level fired: the jet's trigger value > %.2f (EM) / %.2f (JP) #times", kEmCutFactor, kJpCutFactor)); y -= dy;
+            l.DrawLatex(0.08, y, "the nominal threshold of a listed level (EM: 4x4 window,"); y -= dy;
+            l.DrawLatex(0.08, y, "HCal veto margin; JP: patch, listed region); trigger_values"); y -= dy;
         }
         Save(c, "qa_jets");
+    }
+    // the same jet distributions per EM level: dashed, every jet of the events
+    // whose highest listed trigger is that level; solid, the jets in that
+    // level's yields
+    {
+        const char *v[10] = {"eta", "phi", "E", "ueE", "Ecorr", "pt", "ptcorr", "xF", "np", "njet"};
+        const int lc[kNTrgLevels] = {kGreen + 2, kMagenta + 1, kRed + 1, kCyan + 2, kBlue + 1, kOrange + 7};
+        TCanvas *c = new TCanvas("c_qa_trg", "", 1600, 1000);
+        c->Divide(4, 3);
+        TLegend *lg = new TLegend(0.02, 0.30, 0.98, 0.95);
+        lg->SetTextSize(0.055); lg->SetBorderSize(0); lg->SetFillStyle(0);
+        for (int i = 0; i < 10; i++)
+        {
+            c->cd(i + 1); gPad->SetLogy();
+            double ymax = 0;
+            TH1 *hs[kNTrgLevels][2] = {};
+            for (int l = 0; l < kNTrgLevels; l++)
+                for (int g = 0; g < 2; g++)
+                {
+                    std::map<std::string, TH1 *>::iterator it = gSum.find(std::string("qa_") + v[i] + (g ? "_sel_" : "_evt_") + kTrgLevelName[l]);
+                    hs[l][g] = it == gSum.end() ? 0 : it->second;
+                    if (hs[l][g]) ymax = std::max(ymax, hs[l][g]->GetMaximum());
+                }
+            bool first = true;
+            for (int l = 0; l < kNTrgLevels; l++)
+                for (int g = 0; g < 2; g++)
+                {
+                    TH1 *h = hs[l][g];
+                    if (!h) continue;
+                    h->SetLineColor(lc[l]); h->SetLineWidth(2); h->SetLineStyle(g ? 1 : 2);
+                    h->SetTitle(""); h->SetMinimum(0.5); h->SetMaximum(2 * ymax);
+                    h->Draw(first ? "hist" : "hist same");
+                    first = false;
+                    if (i == 0)
+                        lg->AddEntry(h, g ? TString::Format("%s: jets in the %s yields", kTrgLevelName[l], kTrgLevelName[l]).Data()
+                                          : TString::Format("%s: every jet, highest listed trigger %s", kTrgLevelName[l], kTrgLevelName[l]).Data(), "l");
+                }
+            if (first)
+            {
+                if (i == 0) std::cerr << "WARNING: no per-level QA histograms (yield files made before 2026-11-04); qa_jets_trigger is empty" << std::endl;
+                continue;
+            }
+            HalfSqrtSLine(v[i]);
+        }
+        c->cd(11);
+        lg->Draw();
+        c->cd(12);
+        {
+            TLatex l; l.SetNDC(); l.SetTextFont(42); l.SetTextSize(0.050);
+            double y = 0.92;
+            const double dy = 0.068;
+            l.DrawLatex(0.02, y, "#bf{Per EM trigger level}"); y -= dy;
+            l.DrawLatex(0.04, y, "#bullet dashed: every jet of the events passing the"); y -= dy;
+            l.DrawLatex(0.08, y, "event cuts, by the highest listed EM trigger"); y -= dy;
+            l.DrawLatex(0.04, y, "#bullet solid: jets in the A_{N} yields, by their level (the"); y -= dy;
+            l.DrawLatex(0.08, y, "level the jet fired: EM first, lowest listed)"); y -= dy;
+            l.DrawLatex(0.04, y, "#bullet jets per event: by the highest listed trigger"); y -= dy;
+            l.DrawLatex(0.04, y, "#bullet grey: #sqrt{s}/2, x_{F} = 1"); y -= dy;
+            l.DrawLatex(0.04, y, "#bullet all levels together: qa_jets"); y -= dy;
+        }
+        Save(c, "qa_jets_trigger");
+    }
+    // jets above sqrt(s)/2 (the _hiE yields, left out of A_N unless -E), per
+    // EM level, beside the default yields
+    {
+        TCanvas *c = new TCanvas("c_hie", "", 1000, 700);
+        c->SetLogy();
+        TLegend *lg = new TLegend(0.50, 0.65, 0.88, 0.88);
+        lg->SetBorderSize(0); lg->SetFillStyle(0);
+        bool first = true, any_hie = false;
+        for (int e = 0; e < 2; e++)
+            for (int l = 0; l < kNTrgLevels; l++)
+            {
+                TH1D *y = 0;
+                for (int k = 0; k < kNPhotonClasses; k++)
+                    for (int s = 0; s < kNSides; s++)
+                        for (int p = 0; p < kNSpinStates; p++)
+                        {
+                            std::map<std::string, TH1 *>::iterator it = gSum.find(TString::Format("h_xF_%s_%s_%s_%s%s", kTrgLevelName[l], PhotonClassName(k),
+                                                                                                  kSideName[s], kSpinStateName[p], e ? kHiESuffix : "").Data());
+                            if (it == gSum.end()) continue;
+                            if (!y) { y = (TH1D *)it->second->Clone(TString::Format("yh_%d_%d", e, l)); y->Sumw2(); }
+                            else y->Add(it->second);
+                        }
+                if (!y) continue;
+                if (e) any_hie = true;
+                Style(y, l, e ? 24 : 20);
+                y->SetLineStyle(e ? 2 : 1);
+                y->SetTitle(TString::Format("yields with E_{corr} #leq #sqrt{s}/2 (solid) and above it (dashed, %s);corrected x_{F};jets per bin",
+                                            "left out of A_{N} unless AnAsymmetry -E"));
+                y->SetMinimum(0.5);
+                y->Draw(first ? "e1" : "e1 same");
+                first = false;
+                lg->AddEntry(y, TString::Format("%s, %s", kTrgLevelName[l], e ? "E_{corr} > #sqrt{s}/2" : "E_{corr} #leq #sqrt{s}/2"), "pe");
+            }
+        if (!any_hie) std::cerr << "WARNING: no _hiE yields (yield files made before 2026-11-04); yields_hiE shows the default yields only" << std::endl;
+        lg->Draw();
+        HalfSqrtSLine("xF");
+        Save(c, "yields_hiE");
+    }
+    // companion jets (below every listed threshold, in events with a jet above
+    // one; the _comp histograms) beside the triggering jets, and the two-photon
+    // jets' pair mass and orientation
+    {
+        const bool have_comp = gSum.count("qa_pt_comp") > 0, have_pair = gSum.count("qa_mgg_sel") > 0;
+        if (!have_comp) std::cerr << "WARNING: no companion histograms (yield files made before 2026-11-05); companions_pairs shows what exists" << std::endl;
+        TCanvas *c = new TCanvas("c_comp", "", 1800, 900);
+        c->Divide(4, 2);
+        const int lc[kNTrgLevels] = {kGreen + 2, kMagenta + 1, kRed + 1, kCyan + 2, kBlue + 1, kOrange + 7};
+        // 1: yields vs x_F, triggering (solid) and companion (dashed) jets per level
+        c->cd(1); gPad->SetLogy();
+        {
+            TLegend *lg = new TLegend(0.45, 0.62, 0.89, 0.89);
+            lg->SetBorderSize(0); lg->SetFillStyle(0); lg->SetTextSize(0.035);
+            bool first = true;
+            for (int cmp = 0; cmp < 2; cmp++)
+                for (int l = 0; l < kNTrgLevels; l++)
+                {
+                    TH1D *y = 0;
+                    for (int k = 0; k < kNPhotonClasses; k++)
+                        for (int s = 0; s < kNSides; s++)
+                            for (int p = 0; p < kNSpinStates; p++)
+                            {
+                                std::map<std::string, TH1 *>::iterator it = gSum.find(TString::Format("h_xF_%s_%s_%s_%s%s", kTrgLevelName[l], PhotonClassName(k),
+                                                                                                      kSideName[s], kSpinStateName[p], cmp ? kCompSuffix : "").Data());
+                                if (it == gSum.end()) continue;
+                                if (!y) { y = (TH1D *)it->second->Clone(TString::Format("yc_%d_%d", cmp, l)); y->Sumw2(); }
+                                else y->Add(it->second);
+                            }
+                    if (!y) continue;
+                    y->SetLineColor(lc[l]); y->SetMarkerColor(lc[l]); y->SetLineWidth(2); y->SetLineStyle(cmp ? 2 : 1);
+                    y->SetMarkerStyle(cmp ? 24 : 20); y->SetMarkerSize(0.6);
+                    y->SetTitle("yields, E_{corr} #leq #sqrt{s}/2;corrected x_{F};jets per bin");
+                    y->SetMinimum(0.5);
+                    y->Draw(first ? "e1" : "e1 same");
+                    first = false;
+                    lg->AddEntry(y, TString::Format("%s %s", kTrgLevelName[l], cmp ? "companion" : "triggering"), "pe");
+                }
+            lg->Draw();
+        }
+        // 2-3: uncorrected pT and points, triggering vs companion jets (all levels)
+        const char *v2[2] = {"pt", "np"};
+        for (int i = 0; i < 2; i++)
+        {
+            c->cd(2 + i); gPad->SetLogy();
+            TH1 *a = gSum.count(std::string("qa_") + v2[i] + "_sel") ? gSum[std::string("qa_") + v2[i] + "_sel"] : 0;
+            TH1 *b = gSum.count(std::string("qa_") + v2[i] + "_comp") ? gSum[std::string("qa_") + v2[i] + "_comp"] : 0;
+            if (!a) continue;
+            Style(a, 1); a->SetTitle("triggering (orange) and companion (blue) jets"); a->SetMinimum(0.5);
+            a->Draw("hist");
+            if (b) { Style(b, 0); b->Draw("hist same"); }
+        }
+        // 4-5: pair mass and orientation, three stages
+        const char *v3[2] = {"mgg", "pairang"};
+        const char *st[3] = {"evt", "sel", "comp"};
+        for (int i = 0; i < 2; i++)
+        {
+            c->cd(4 + i);
+            TLegend *lg = new TLegend(0.50, 0.72, 0.89, 0.89);
+            lg->SetBorderSize(0); lg->SetFillStyle(0); lg->SetTextSize(0.035);
+            double ymax = 0;
+            for (int g = 0; g < 3; g++)
+                if (gSum.count(std::string("qa_") + v3[i] + "_" + st[g])) ymax = std::max(ymax, gSum[std::string("qa_") + v3[i] + "_" + st[g]]->GetMaximum());
+            bool first = true;
+            for (int g = 0; g < 3; g++)
+            {
+                const std::string n = std::string("qa_") + v3[i] + "_" + st[g];
+                if (!gSum.count(n)) continue;
+                TH1 *h = gSum[n];
+                Style(h, g == 0 ? 6 : g == 1 ? 1 : 0);
+                h->SetTitle(i ? "two-photon jets: pair orientation (0 = along x, 90 = along y)" : "two-photon jets: M_{#gamma#gamma}");
+                h->SetMinimum(0); h->SetMaximum(1.15 * ymax);
+                h->Draw(first ? "hist" : "hist same");
+                first = false;
+                lg->AddEntry(h, g == 0 ? "every jet (event cuts)" : g == 1 ? "triggering jets" : "companion jets", "l");
+            }
+            if (!first) lg->Draw();
+            if (i == 0 && !first)
+            {
+                gPad->Update();
+                TLine *ln = new TLine(0.135, gPad->GetUymin(), 0.135, gPad->GetUymax());
+                ln->SetLineColor(kGray + 1); ln->SetLineStyle(2); ln->Draw();
+            }
+        }
+        if (!have_pair) std::cerr << "WARNING: no pair histograms (yield files made before 2026-11-05)" << std::endl;
+        // 6: mass per level (triggering jets); 7-8: mass vs E and vs orientation
+        c->cd(6);
+        {
+            bool first = true;
+            TLegend *lg = new TLegend(0.60, 0.72, 0.89, 0.89);
+            lg->SetBorderSize(0); lg->SetFillStyle(0); lg->SetTextSize(0.035);
+            for (int l = 0; l < kNTrgLevels; l++)
+            {
+                const std::string n = std::string("qa_mgg_sel_") + kTrgLevelName[l];
+                if (!gSum.count(n) || gSum[n]->Integral() <= 0) continue;
+                TH1 *h = (TH1 *)gSum[n]->Clone((n + "_norm").c_str());
+                h->Scale(1.0 / h->Integral());
+                h->SetLineColor(lc[l]); h->SetLineWidth(2);
+                h->SetTitle("triggering two-photon jets per level (unit area);M_{#gamma#gamma} (GeV);fraction");
+                h->Draw(first ? "hist" : "hist same");
+                first = false;
+                lg->AddEntry(h, kTrgLevelName[l], "l");
+            }
+            if (!first) lg->Draw();
+        }
+        c->cd(7); gPad->SetLogz();
+        if (gSum.count("qa_mggE_sel")) { gSum["qa_mggE_sel"]->SetTitle("triggering two-photon jets;corrected jet E (GeV);M_{#gamma#gamma} (GeV)"); gSum["qa_mggE_sel"]->Draw("colz"); }
+        c->cd(8); gPad->SetLogz();
+        if (gSum.count("qa_mggang_sel")) { gSum["qa_mggang_sel"]->SetTitle("triggering two-photon jets;pair orientation (deg);M_{#gamma#gamma} (GeV)"); gSum["qa_mggang_sel"]->Draw("colz"); }
+        Save(c, "companions_pairs");
     }
     // positions
     {
@@ -287,29 +553,54 @@ int main(int argc, char **argv)
             c->cd(i + 1); gPad->SetLogy();
             TLegend *lg = new TLegend(0.55, 0.70, 0.88, 0.88);
             lg->SetBorderSize(0); lg->SetFillStyle(0);
-            for (int l = 0; l < kNEmLevels; l++)
+            for (int l = 0; l < kNTrgLevels; l++)
             {
-                TH1 *h = Get(std::string(pre[i]) + kEmLevelName[l]);
+                TH1 *h = Get(std::string(pre[i]) + kTrgLevelName[l]);
                 if (!h) continue;
                 Style(h, l); h->SetTitle(tit[i]); h->SetMinimum(0.5);
                 h->Draw(l ? "hist same" : "hist");
-                lg->AddEntry(h, TString::Format("highest listed %s", kEmLevelName[l]), "l");
-                if (i == 0)
-                {
-                    const double xc = kTriggerPtFactor * kEmThresholdGeV[l];
-                    TLine *ln = new TLine(xc, 0.5, xc, h->GetMaximum());
-                    ln->SetLineColor(kCol[l]); ln->SetLineStyle(2); ln->Draw();
-                }
+                lg->AddEntry(h, TString::Format("highest listed %s", kTrgLevelName[l]), "l");
             }
             lg->Draw();
         }
         Save(c, "pt_levels");
     }
-    // yields vs x_F per side and spin state
-    for (int L = 0; L <= kNEmLevels; L++)
+    // trigger value / nominal threshold per level (h_trgratio_*: triggering
+    // and _veto jets, before the slice cut), slice edges dotted, the default
+    // factor solid
     {
-        const int l0 = L < kNEmLevels ? L : 0, l1 = L < kNEmLevels ? L + 1 : kNEmLevels;
-        const char *lname = L < kNEmLevels ? kEmLevelName[L] : "all";
+        TCanvas *c = new TCanvas("c_trg", "", 1500, 900);
+        c->Divide(3, 2);
+        const int lc[kNTrgLevels] = {kGreen + 2, kMagenta + 1, kRed + 1, kCyan + 2, kBlue + 1, kOrange + 7};
+        bool any = false;
+        for (int l = 0; l < kNTrgLevels; l++)
+        {
+            c->cd(l + 1); gPad->SetLogy();
+            std::map<std::string, TH1 *>::iterator it = gSum.find(std::string("h_trgratio_") + kTrgLevelName[l]);
+            if (it == gSum.end()) continue;
+            any = true;
+            TH1 *h = it->second;
+            h->SetLineColor(lc[l]); h->SetLineWidth(2); h->SetMinimum(0.5);
+            h->SetTitle(TString::Format("%s jets: trigger value / %.1f GeV (%s)", kTrgLevelName[l], kTrgThresholdGeV[l],
+                                        IsJpLevel(l) ? "largest JP patch with the jet" : "largest ECal 4x4 in the jet"));
+            h->Draw("hist");
+            gPad->Update();
+            const double y0 = std::pow(10, gPad->GetUymin()), y1 = std::pow(10, gPad->GetUymax());
+            for (int g = 0; g < kNTrgSlices; g++)
+            {
+                TLine *ln = new TLine(kTrgSliceEdge[g], y0, kTrgSliceEdge[g], y1);
+                const bool d = std::fabs(kTrgSliceEdge[g] - CutFactor(l)) < 1e-9;
+                ln->SetLineColor(d ? kBlack : kGray + 1); ln->SetLineStyle(d ? 1 : 3); ln->SetLineWidth(2); ln->Draw();
+            }
+        }
+        if (!any) std::cerr << "WARNING: no h_trgratio_* (yield files made before 2026-11-05); trigger_values is empty" << std::endl;
+        Save(c, "trigger_values");
+    }
+    // yields vs x_F per side and spin state
+    for (int L = 0; L <= kNTrgLevels; L++)
+    {
+        const int l0 = L < kNTrgLevels ? L : 0, l1 = L < kNTrgLevels ? L + 1 : kNTrgLevels;
+        const char *lname = L < kNTrgLevels ? kTrgLevelName[L] : "all";
         TCanvas *c = new TCanvas(TString::Format("c_y%d", L), "", 1000, 700);
         c->SetLogy();
         TLegend *lg = new TLegend(0.62, 0.55, 0.88, 0.88);
@@ -322,7 +613,7 @@ int main(int argc, char **argv)
                 for (int l = l0; l < l1; l++)
                     for (int k = 0; k < kNPhotonClasses; k++)
                     {
-                        TH1 *h = Get(TString::Format("h_xF_%s_%s_%s_%s", kEmLevelName[l], PhotonClassName(k), kSideName[s], kSpinStateName[p]).Data());
+                        TH1 *h = Get(TString::Format("h_xF_%s_%s_%s_%s", kTrgLevelName[l], PhotonClassName(k), kSideName[s], kSpinStateName[p]).Data());
                         if (!h) continue;
                         if (!y) { y = (TH1D *)h->Clone(TString::Format("y_%d_%d_%d", L, s, p)); y->Sumw2(); }
                         else y->Add(h);
@@ -348,18 +639,18 @@ int main(int argc, char **argv)
             c->cd(mode + 1); gPad->SetLogy();
             TLegend *lg = new TLegend(0.62, 0.6, 0.88, 0.88);
             lg->SetBorderSize(0); lg->SetFillStyle(0);
-            const int nc = mode == 0 ? kNPhotonClasses : kNEmLevels;
+            const int nc = mode == 0 ? kNPhotonClasses : kNTrgLevels;
             for (int i = 0; i < nc; i++)
             {
                 TH1D *y = 0;
-                for (int l = 0; l < kNEmLevels; l++)
+                for (int l = 0; l < kNTrgLevels; l++)
                     for (int k = 0; k < kNPhotonClasses; k++)
                     {
                         if ((mode == 0 && k != i) || (mode == 1 && l != i)) continue;
                         for (int s = 0; s < kNSides; s++)
                             for (int p = 0; p < kNSpinStates; p++)
                             {
-                                TH1 *h = Get(TString::Format("h_xF_%s_%s_%s_%s", kEmLevelName[l], PhotonClassName(k), kSideName[s], kSpinStateName[p]).Data());
+                                TH1 *h = Get(TString::Format("h_xF_%s_%s_%s_%s", kTrgLevelName[l], PhotonClassName(k), kSideName[s], kSpinStateName[p]).Data());
                                 if (!h) continue;
                                 if (!y) { y = (TH1D *)h->Clone(TString::Format("yc_%d_%d", mode, i)); y->Sumw2(); }
                                 else y->Add(h);
@@ -371,7 +662,7 @@ int main(int argc, char **argv)
                 y->SetMinimum(0.5);
                 y->GetXaxis()->SetRangeUser(0, 0.8);
                 y->Draw(i ? "e1 same" : "e1");
-                lg->AddEntry(y, mode == 0 ? PhotonClassName(i) : kEmLevelName[i], "pe");
+                lg->AddEntry(y, mode == 0 ? PhotonClassName(i) : kTrgLevelName[i], "pe");
             }
             lg->Draw();
         }
@@ -387,9 +678,9 @@ int main(int argc, char **argv)
                              "selected jets per passing event", "jets at x > 0 / x < 0",
                              "spin-state fraction of passing events", "mean corrected E of selected jets (GeV)"};
         for (int i = 0; i < 6; i++) { g[i] = new TGraphErrors(); g[i]->SetTitle(TString::Format("%s;run - 23000000", gt[i])); }
-        TGraphErrors *gs[kNSpinStates], *gl[kNEmLevels];
+        TGraphErrors *gs[kNSpinStates], *gl[kNTrgLevels];
         for (int p = 0; p < kNSpinStates; p++) gs[p] = new TGraphErrors();
-        for (int l = 0; l < kNEmLevels; l++) gl[l] = new TGraphErrors();
+        for (int l = 0; l < kNTrgLevels; l++) gl[l] = new TGraphErrors();
         for (std::map<int, RunRow>::const_iterator it = rows.begin(); it != rows.end(); ++it)
         {
             const RunRow &r = it->second;
@@ -404,7 +695,7 @@ int main(int argc, char **argv)
             g[3]->SetPointError(i, 0, r.xpos > 0 && r.xneg > 0 ? lr * std::sqrt(1 / r.xpos + 1 / r.xneg) : 0);
             g[5]->SetPoint(i, x, r.en > 0 ? r.esum / r.en : 0);
             for (int p = 0; p < kNSpinStates; p++) gs[p]->SetPoint(i, x, r.ev_pass > 0 ? r.spin[p] / r.ev_pass : 0);
-            for (int l = 0; l < kNEmLevels; l++) gl[l]->SetPoint(i, x, r.jets > 0 ? r.lvl[l] / r.jets : 0);
+            for (int l = 0; l < kNTrgLevels; l++) gl[l]->SetPoint(i, x, r.jets > 0 ? r.lvl[l] / r.jets : 0);
             std::fprintf(t, "%d %.0f %.0f %.0f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.2f\n", it->first, r.ev_read, r.ev_pass, r.jets,
                          r.ev_pass > 0 ? r.jets / r.ev_pass : 0, lr, r.spin[0] / std::max(1.0, r.ev_pass), r.spin[1] / std::max(1.0, r.ev_pass),
                          r.spin[2] / std::max(1.0, r.ev_pass), r.spin[3] / std::max(1.0, r.ev_pass), r.lvl[0] / std::max(1.0, r.jets),
@@ -440,13 +731,13 @@ int main(int argc, char **argv)
         c2->SetGridy();
         TLegend *lg = new TLegend(0.15, 0.75, 0.6, 0.88);
         lg->SetNColumns(3); lg->SetBorderSize(0); lg->SetFillStyle(0);
-        for (int l = 0; l < kNEmLevels; l++)
+        for (int l = 0; l < kNTrgLevels; l++)
         {
             gl[l]->SetMarkerStyle(20); gl[l]->SetMarkerSize(0.7); gl[l]->SetMarkerColor(kCol[l]); gl[l]->SetLineColor(kCol[l]);
             gl[l]->SetTitle("EM level of the selected jets, fraction per run;run - 23000000;fraction");
             gl[l]->SetMinimum(0); gl[l]->SetMaximum(1);
             gl[l]->Draw(l ? "P same" : "AP");
-            lg->AddEntry(gl[l], kEmLevelName[l], "p");
+            lg->AddEntry(gl[l], kTrgLevelName[l], "p");
         }
         lg->Draw();
         Save(c2, "runs_em_levels");

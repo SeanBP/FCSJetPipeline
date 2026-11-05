@@ -199,6 +199,9 @@ Int_t StSimpleReaderMaker::Init( )
   out_tree->Branch("event_id", &event_id, "event_id/I");
   out_tree->Branch("fcs_tcu_bits", &fcs_tcu_bits, "fcs_tcu_bits/i");
   out_tree->Branch("fcs_tcu_source", &fcs_tcu_source, "fcs_tcu_source/I");
+  // FCS trigger 2x2 E_T sums from offline hit energies (see the header)
+  out_tree->Branch("trg_e2x2", trg_e2x2, "trg_e2x2[2][16][10]/F");
+  out_tree->Branch("trg_h2x2", trg_h2x2, "trg_h2x2[2][10][6]/F");
   out_tree->Branch("event_vertex_z", &event_vertex_z, "event_vertex_z/F");
   out_tree->Branch("event_vertex_source", &event_vertex_source, "event_vertex_source/I");
   out_tree->Branch("event_sqrt_s_gev", &event_sqrt_s_gev, "event_sqrt_s_gev/D");
@@ -407,6 +410,11 @@ Int_t StSimpleReaderMaker::Make( )
   // Get FCS data
   StMuFcsCollection* fcs_coll = mMuDstMaker->muDst()->muFcsCollection();  // Array containing the FCS Hits and Clusters
 
+  // trigger 2x2 sums (geometry built on the first event, once the DB is set)
+  if ( !mTrgGeomDone ) buildTrgGeom();
+  memset(trg_e2x2, 0, sizeof(trg_e2x2));
+  memset(trg_h2x2, 0, sizeof(trg_h2x2));
+
   // Loop over FCS hits
   for(UInt_t ihit = 0 ; ihit < fcs_coll->numberOfHits() ; ihit++){
 
@@ -432,6 +440,21 @@ Int_t StSimpleReaderMaker::Make( )
     			Cal_hit_posx[Cal_nhits] = xyz.x();
     			Cal_hit_posy[Cal_nhits] = xyz.y();
     			Cal_hit_posz[Cal_nhits] = xyz.z();
+
+			// into the trigger 2x2 sums: E_T from the origin, clipped at 0
+			// (DEP and channel from the DB map, as buildTrgGeom())
+			int tr, tc, te, tn, tcrt, tslt, tdep, tch;
+			const int tehp = (det <= kFcsEcalSouthDetId) ? 0 : 1;
+			const int tns = det % 2;
+			mFcsDb->getDepfromId(det, hit->id(), te, tn, tcrt, tslt, tdep, tch);
+			if ( trg2x2Of(tehp, tdep, tch, tr, tc) ){
+			  const double rho = std::sqrt(xyz.x()*xyz.x() + xyz.y()*xyz.y());
+			  const double r3 = std::sqrt(rho*rho + xyz.z()*xyz.z());
+			  double et = Cal_hit_energy[Cal_nhits] * (r3 > 0 ? rho / r3 : 0);
+			  if ( et < 0 ) et = 0;
+			  if ( tehp == 0 ) trg_e2x2[tns][tr][tc] += et;
+			  else             trg_h2x2[tns][tr][tc] += et;
+			}
 		}
 	      	else if(det==kFcsPresNorthDetId || det==kFcsPresSouthDetId){ // EPD as Pres.
 			// Adapted from code StFcsEventDisplay.cxx
@@ -677,6 +700,18 @@ Int_t StSimpleReaderMaker::Make( )
 Int_t StSimpleReaderMaker::Finish( )
 { // Do once at the end the analysis
 
+  // trigger 2x2 centres, one entry
+  if ( !mTrgGeomDone ) buildTrgGeom();
+  out_file->cd();
+  TTree* geo = new TTree("trg_geom", "FCS trigger 2x2 centres (mean tower STAR x, y, z, cm)");
+  geo->Branch("trg_e2x2_x", trg_e2x2_x, "trg_e2x2_x[2][16][10]/F");
+  geo->Branch("trg_e2x2_y", trg_e2x2_y, "trg_e2x2_y[2][16][10]/F");
+  geo->Branch("trg_e2x2_z", trg_e2x2_z, "trg_e2x2_z[2][16][10]/F");
+  geo->Branch("trg_h2x2_x", trg_h2x2_x, "trg_h2x2_x[2][10][6]/F");
+  geo->Branch("trg_h2x2_y", trg_h2x2_y, "trg_h2x2_y[2][10][6]/F");
+  geo->Branch("trg_h2x2_z", trg_h2x2_z, "trg_h2x2_z[2][10][6]/F");
+  geo->Fill();
+
   out_file->Write();
   out_file->Close();
 
@@ -756,4 +791,68 @@ float StSimpleReaderMaker::getHcalRetroCorr(int det, int id){
   mFcsDb->getDepfromId(det, id, ehp, ns, crt, slt, dep, ch);
   if ( ns < 0 || ns >= 2 || dep < 0 || dep >= 24 || ch < 0 || ch >= 32 ) return 1.0;
   return mHcalCorrFactor[ns][dep][ch];
+}
+
+
+// Stage-2 position of a tower in the FCS trigger 2x2 sums, inverting
+// stage_2_202207's maps. Stage 1 sums DEP channels {0,1,4,5}, {2,3,6,7},
+// {8,9,12,13}, ... into output adr = (ch/8)*2 + (ch%4)/2 (stage_1_202201).
+// ECal: ETbTdep[r][c] = c/2 + (r/4)*5, ETbTadr[r][c] = c%2 + (r%4)*2, DEPs
+// 0-19. HCal: HTbTdep = 6 (row 0) or 7 (row 9) with adr = c; else
+// c/2 + ((r-1)/4)*3 with adr c%2 + ((r-1)%4)*2, DEPs 0-5.
+bool StSimpleReaderMaker::trg2x2Of(int ehp, int dep, int ch, int &r, int &c)
+{
+  if ( ch < 0 || ch >= 32 || dep < 0 ) return false;
+  const int adr = (ch / 8) * 2 + (ch % 4) / 2;
+  if ( ehp == 0 ){
+    if ( dep >= 20 ) return false;
+    r = 4 * (dep / 5) + adr / 2;
+    c = 2 * (dep % 5) + adr % 2;
+    return r < 16 && c < 10;
+  }
+  if ( ehp == 1 ){
+    if ( dep == 6 || dep == 7 ){
+      if ( adr >= 6 ) return false;
+      r = dep == 6 ? 0 : 9; c = adr;
+      return true;
+    }
+    if ( dep >= 6 ) return false;
+    r = 1 + 4 * (dep / 3) + adr / 2;
+    c = 2 * (dep % 3) + adr % 2;
+    return r >= 1 && r <= 8 && c < 6;
+  }
+  return false;
+}
+
+// Mean tower position of each trigger 2x2, from the DB's tower positions
+void StSimpleReaderMaker::buildTrgGeom()
+{
+  double ex[2][16][10][3] = {}, hx[2][10][6][3] = {};
+  int en[2][16][10] = {}, hn[2][10][6] = {};
+  for ( int det = 0; det <= kFcsHcalSouthDetId; det++ ){
+    const int ehp = det <= kFcsEcalSouthDetId ? 0 : 1, ns = det % 2;
+    for ( int id = 0; id < mFcsDb->maxId(det); id++ ){
+      int e, n, crt, slt, dep, ch, r, c;
+      mFcsDb->getDepfromId(det, id, e, n, crt, slt, dep, ch);
+      if ( !trg2x2Of(ehp, dep, ch, r, c) ) continue;
+      StThreeVectorD xyz = mFcsDb->getStarXYZ(det, id);
+      if ( ehp == 0 ){ ex[ns][r][c][0] += xyz.x(); ex[ns][r][c][1] += xyz.y(); ex[ns][r][c][2] += xyz.z(); en[ns][r][c]++; }
+      else           { hx[ns][r][c][0] += xyz.x(); hx[ns][r][c][1] += xyz.y(); hx[ns][r][c][2] += xyz.z(); hn[ns][r][c]++; }
+    }
+  }
+  for ( int ns = 0; ns < 2; ns++ ){
+    for ( int r = 0; r < 16; r++ ) for ( int c = 0; c < 10; c++ ){
+      const int n = en[ns][r][c];
+      trg_e2x2_x[ns][r][c] = n ? ex[ns][r][c][0] / n : 0;
+      trg_e2x2_y[ns][r][c] = n ? ex[ns][r][c][1] / n : 0;
+      trg_e2x2_z[ns][r][c] = n ? ex[ns][r][c][2] / n : 0;
+    }
+    for ( int r = 0; r < 10; r++ ) for ( int c = 0; c < 6; c++ ){
+      const int n = hn[ns][r][c];
+      trg_h2x2_x[ns][r][c] = n ? hx[ns][r][c][0] / n : 0;
+      trg_h2x2_y[ns][r][c] = n ? hx[ns][r][c][1] / n : 0;
+      trg_h2x2_z[ns][r][c] = n ? hx[ns][r][c][2] / n : 0;
+    }
+  }
+  mTrgGeomDone = true;
 }

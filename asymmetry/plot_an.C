@@ -6,7 +6,9 @@
 // polarization-scale uncertainty). The plot states the jet selection and the
 // sample, not the error-bar conventions.
 // Usage: root -b -q 'plot_an.C("an.root", "an_vs_xf.png"[, "all"[, "all"[, err_scale[, at_zero[, zoom[, "sample"[, y_lo, y_hi[, x_range]]]]]]]])'
-//   third argument: EM level (EM0, EM1, EM2 or all = their sum, the final result)
+//   third argument: trigger level (EM0-2, JP0-2, all = the EM levels, or the
+//   EM + JP union in a file from AnAsymmetry -J (name containing "union"),
+//   allJP = the JP levels)
 //   fourth argument: photon class (np0 ... np5plus, np3plus = 3 or more,
 //     np12 = 1 or 2, or all)
 //   err_scale: multiplies the errors, for a projection to more data
@@ -22,8 +24,8 @@
 //     runs, 2.3% of the Run 22 good-run events" (smoke_report.sh fills it in)
 // Writes the .png and a .pdf next to it.
 
-// The photon-class requirement in words (AnConfig.h: reco_nphotons, FCS
-// points above 1 GeV within R = 0.7 of the jet axis)
+// The photon-class requirement in words (AnConfig.h: the jet's point
+// constituents, FCS points above 1 GeV, as the FMS)
 TString ClassText(const char *cls)
 {
     TString c = cls;
@@ -87,7 +89,8 @@ void plot_an(const char *in_root, const char *out_png, const char *level = "all"
     if (xr > 1.0) xr = 1.0;
     if (x_range > 0) xr = x_range;
     const char *lname = level;
-    if (TString(level) == "all") lname = "EM0 + EM1 + EM2";
+    if (TString(level) == "all") lname = TString(in_root).Contains("union") ? "EM + JP union" : "EM0 + EM1 + EM2";
+    if (TString(level) == "allJP") lname = "JP0 + JP1 + JP2";
     TH1D *frame = new TH1D("frame_an", Form("Run 22 FCS EM-jet A_{N}, %s;x_{F};A_{N}", lname), 100, -xr, xr);
     // the top 45% of the frame is left for the text
     const double span = ymax - ymin + 1e-6;

@@ -153,6 +153,27 @@ class StSimpleReaderMaker : public StMaker
   UInt_t fcs_tcu_bits = 0;
   Int_t fcs_tcu_source = 0;
 
+  // FCS trigger 2x2 sums from the offline hit energies (data and simulation
+  // alike), in the stage-2 layout of the trigger algorithm
+  // (StRoot/RTS/src/TRG_FCS/stage_2_202207.cxx): trg_e2x2[ns][r][c] is the
+  // ECal 2x2 tower sum at stage-2 row r (0-15), column c (0-9);
+  // trg_h2x2[ns][r][c] the HCal one (rows 0-9, columns 0-5). E_T in GeV
+  // (hit energy x sin theta from the origin, negative energies clipped at 0
+  // as the stage-0 pedestal subtraction), not truncated: the stage-1 count
+  // truncation (0.0316 GeV, saturating at 255) is applied downstream
+  // (RecoJets). Towers outside the trigger (ECal DEP >= 20) are not in it.
+  // The tree "trg_geom" (one entry, written at Finish) has each 2x2's centre:
+  // the mean STAR x, y, z of its towers.
+  Float_t trg_e2x2[2][16][10];
+  Float_t trg_h2x2[2][10][6];
+  Float_t trg_e2x2_x[2][16][10], trg_e2x2_y[2][16][10], trg_e2x2_z[2][16][10];
+  Float_t trg_h2x2_x[2][10][6], trg_h2x2_y[2][10][6], trg_h2x2_z[2][10][6];
+  bool mTrgGeomDone = false;
+  void buildTrgGeom();
+  // stage-2 position of a tower from its DEP board and channel; false if
+  // the tower is not in the stage-2 sums
+  static bool trg2x2Of(int ehp, int dep, int ch, int &r, int &c);
+
   // Simulation only, constant per job (SetMCJobStats()): PYTHIA's cross
   // section (mb) and number of trials. -1 if unset (data).
   Double_t sigma_job = -1;

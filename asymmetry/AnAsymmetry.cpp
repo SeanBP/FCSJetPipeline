@@ -65,22 +65,46 @@
 // which inverted both beams' spins: their states are relabelled p -> 3 - p
 // (BuYu <-> BdYd, BuYd <-> BdYu) when summed.
 //
-// EM levels. A jet counts in one level only (the lowest listed one it passes),
-// so the levels add up: "all" is their sum and gives the final result.
+// Trigger levels (AnConfig.h): EM0-2 and JP0-2, judged independently: a jet
+// firing both is in its EM level and in its JP level, so a level's A_N has
+// every jet that fired it. Within a family a jet is in one level only (the
+// lowest listed), so "all" (the EM levels) and "allJP" (the JP levels) are
+// sums without double counting. With -J, "all" is the EM + JP union: the EM
+// levels plus the JP jets that did not fire EM at the chosen factor (the JP
+// histograms' EM tags, AnConfig.h kEmTagSuffix), each jet once. Yield files keep the triggering jets per slice
+// of trigger value / threshold (_t115, _t130, _t145, _t160); the slices at
+// or above the factor are summed: -fe <f> for the EM levels (default
+// kEmCutFactor = 1.3), -fj <f> for the JP levels (default kJpCutFactor =
+// 1.3), -f <f> both (1.15, 1.3, 1.45 or 1.6). The -J union takes the JP jets
+// whose EM slice is below the EM factor. -V adds the EM jets that failed only the HCal-veto margin
+// (_veto). Yield files made before 2026-11-05 (no "trigger_rule") have
+// neither and are refused.
 //
 // Outputs: <out.root> with the graphs and TNamed "bad_runs" (-r), and
 // <out.root minus .root>.txt, the table of every point (level, photon class,
 // beam, x_F bin, <x_F>, A_N, stat error, jets, <|cos phi|>, <P>).
 // plot_an.C draws the final A_N vs x_F from <out.root>.
 //
-// Usage: ./AnAsymmetry <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]
-//        ./AnAsymmetry -r <yield file list> <run polarization table> <out.root> [rebin = 2]
+// Jets above sqrt(s)/2. The yield files keep the jets with corrected E above
+// sqrt(s)/2 apart (_hiE histograms, AnConfig.h); by default they are left
+// out, as the FMS EM-jet analysis; -E adds them to every yield, |cos phi|
+// and x_F sum. The choice is printed, in the table header and as TNamed
+// "high_E_jets". x_F bins then reach 1.5 (kXfMax).
+//
+// Companion jets. Jets below every listed trigger threshold, in events where
+// another jet passes one, are kept apart too (_comp histograms, AnConfig.h)
+// and left out by default. -C forms the A_N of the companion jets alone (in
+// place of the triggering jets), -A of both together. The choice is printed,
+// in the table header and as TNamed "jet_sample". -E applies to either.
+//
+// Usage: ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]
+//        ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] -r <yield file list> <run polarization table> <out.root> [rebin = 2]
 //                         [bad-run list = kBadRunListDefault | none] [flagged | all]
 //   rebin 2 gives x_F bins of 0.05, as the FMS EM-jet analysis
-//   Prints, for each EM level and all levels, A_N per x_F bin of both beams
+//   Prints, for each level, all and allJP, A_N per x_F bin of both beams
 //   with all photon classes summed; writes graphs
-//   gr_AN_<beam>_<EM level|all>_<photon class|all|np3plus|np12> (x_F > 0 blue, x_F < 0
-//   yellow) and gr_AN_<EM level|all>_<class|all> with both beams.
+//   gr_AN_<beam>_<level|all|allJP>_<photon class|all|np3plus|np12> (x_F > 0 blue, x_F < 0
+//   yellow) and gr_AN_<level|all|allJP>_<class|all> with both beams.
 // Build: g++ -m64 -O2 AnAsymmetry.cpp -o AnAsymmetry `root-config --cflags --libs` -std=c++11
 
 #include <TFile.h>
@@ -129,42 +153,116 @@ static Asym CrossRatio(double Lu, double Ld, double Ru, double Rd)
 
 static TString YieldName(int l, int k, int s, int p)
 {
-    return TString::Format("h_xF_%s_%s_%s_%s", kEmLevelName[l], PhotonClassName(k), kSideName[s], kSpinStateName[p]);
+    return TString::Format("h_xF_%s_%s_%s_%s", kTrgLevelName[l], PhotonClassName(k), kSideName[s], kSpinStateName[p]);
 }
 
 // Histograms summed over the input files, and per (EM level, photon class)
-// the yields summed over sides and spin states weighted by each run's P
+// the yields summed over sides and spin states weighted by each run's P.
+// With hi_e, the jets above sqrt(s)/2 (the _hiE histograms) are added to
+// the default ones; files without them (made before 2026-11-04, when those
+// jets were dropped) are counted in n_no_hie. use_trig / use_comp choose the
+// triggering jets (no suffix) and the companions (_comp); a file without the
+// companion histograms (made before 2026-11-05) is an error when they are used.
 struct Sums
 {
     std::map<std::string, TH1D *> h;
-    TH1D *pw[2][kNEmLevels][kNPhotonClasses] = {};
-    int n_old_labels = 0;
+    TH1D *pw[2][kNTrgLevels][kNPhotonClasses] = {};
+    // JP levels, JP jets not firing EM at the factor (the -J union)
+    TH1D *pwo[2][kNTrgLevels][kNPhotonClasses] = {};
+    int n_old_labels = 0, n_no_hie = 0, nbins = 0;
+    bool hi_e = false, use_trig = true, use_comp = false, use_veto = false;
+    double factor_em = kEmCutFactor, factor_jp = kJpCutFactor;
+    // the suffixes summed for one histogram name: the triggering slices at or
+    // above the factor (JP levels: with every EM tag, or with jp_only the EM
+    // tags below the factor), companions, veto failures (EM levels only)
+    std::vector<std::string> Suffixes(bool jp, bool jp_only) const
+    {
+        std::vector<std::string> v;
+        if (use_trig)
+            for (int g = 0; g < kNTrgSlices; g++)
+            {
+                if (kTrgSliceEdge[g] < (jp ? factor_jp : factor_em) - 1e-9) continue;
+                if (!jp) { v.push_back(kTrgSliceSuffix[g]); continue; }
+                for (int t = 0; t < kNEmTags; t++)
+                    if (!jp_only || t == 0 || kTrgSliceEdge[t - 1] < factor_em - 1e-9)
+                        v.push_back(std::string(kTrgSliceSuffix[g]) + kEmTagSuffix[t]);
+            }
+        if (use_comp) v.push_back(kCompSuffix);
+        if (use_veto && !jp) v.push_back(kVetoSuffix);
+        return v;
+    }
+    static bool IsJpName(const std::string &name) { return name.find("_JP") != std::string::npos; }
+    TH1D *Read(TFile &f, const std::string &name, bool &have_hie, bool jp_only = false)
+    {
+        TH1D *a = 0;
+        const std::vector<std::string> sfx = Suffixes(IsJpName(name), jp_only);
+        for (size_t c = 0; c < sfx.size(); c++)
+        {
+            const std::string base = name + sfx[c];
+            TH1D *b = (TH1D *)f.Get(base.c_str());
+            if (!b) { delete a; return 0; }
+            if (!a) { a = (TH1D *)b->Clone((name + "_rd").c_str()); a->SetDirectory(0); }
+            else a->Add(b);
+            if (hi_e)
+            {
+                TH1D *e = (TH1D *)f.Get((base + kHiESuffix).c_str());
+                if (e) a->Add(e);
+                else have_hie = false;
+            }
+        }
+        return a;
+    }
     // adds one file's histograms, its jets weighted by pol[beam]; false if any is missing
     bool Add(TFile &f, const double pol[2])
     {
         // files without "spin_convention" were filled with the old Spin_config
         // mapping (AnConfig.h), whose state p is the physical state 3 - p
+        if (!f.Get("trigger_rule"))
+        {
+            std::cerr << "ERROR: " << f.GetName() << " has no trigger_rule: a yield file made before 2026-11-05 (pT-based EM levels, no JP); remake it" << std::endl;
+            return false;
+        }
         const bool old_labels = !f.Get("spin_convention");
         if (old_labels) n_old_labels++;
+        bool have_hie = true;
         std::vector<std::string> names;
-        for (int l = 0; l < kNEmLevels; l++)
+        for (int l = 0; l < kNTrgLevels; l++)
             for (int k = 0; k < kNPhotonClasses; k++)
             {
-                names.push_back(TString::Format("h_abscos_%s_%s", kEmLevelName[l], PhotonClassName(k)).Data());
-                names.push_back(TString::Format("h_xfsum_%s_%s", kEmLevelName[l], PhotonClassName(k)).Data());
+                names.push_back(TString::Format("h_abscos_%s_%s", kTrgLevelName[l], PhotonClassName(k)).Data());
+                names.push_back(TString::Format("h_xfsum_%s_%s", kTrgLevelName[l], PhotonClassName(k)).Data());
                 for (int s = 0; s < kNSides; s++)
                     for (int p = 0; p < kNSpinStates; p++) names.push_back(YieldName(l, k, s, p).Data());
             }
+        std::vector<std::string> check;
         for (size_t i = 0; i < names.size(); i++)
         {
-            TH1D *hh = (TH1D *)f.Get(names[i].c_str());
-            if (!hh) { std::cerr << "ERROR: " << f.GetName() << " has no " << names[i] << std::endl; return false; }
+            const std::vector<std::string> sfx = Suffixes(IsJpName(names[i]), false);
+            for (size_t c = 0; c < sfx.size(); c++) check.push_back(names[i] + sfx[c]);
+        }
+        for (size_t i = 0; i < check.size(); i++)
+        {
+            TH1D *hh = (TH1D *)f.Get(check[i].c_str());
+            if (!hh)
+            {
+                std::cerr << "ERROR: " << f.GetName() << " has no " << check[i]
+                          << std::endl;
+                return false;
+            }
+            // every file's x_F binning must agree (files before 2026-11-04: 40 bins to 1; since: 60 to 1.5)
+            if (nbins == 0) nbins = hh->GetNbinsX();
+            if (hh->GetNbinsX() != nbins)
+            {
+                std::cerr << "ERROR: " << f.GetName() << " " << check[i] << " has " << hh->GetNbinsX() << " x_F bins, earlier files "
+                          << nbins << " (yield files from before and after 2026-11-04 cannot be summed)" << std::endl;
+                return false;
+            }
             // yields must be raw counts, so their Poisson errors are sqrt(N)
-            if (names[i].compare(0, 5, "h_xF_") == 0 && hh->GetSumw2N() > 0)
+            if (check[i].compare(0, 5, "h_xF_") == 0 && hh->GetSumw2N() > 0)
                 for (int b = 1; b <= hh->GetNbinsX(); b++)
                     if (std::fabs(hh->GetSumw2()->At(b) - hh->GetBinContent(b)) > 1e-6 * (1 + hh->GetBinContent(b)))
                     {
-                        std::cerr << "ERROR: " << f.GetName() << " " << names[i] << " is weighted; the statistical errors need raw counts" << std::endl;
+                        std::cerr << "ERROR: " << f.GetName() << " " << check[i] << " is weighted; the statistical errors need raw counts" << std::endl;
                         return false;
                     }
         }
@@ -183,25 +281,40 @@ struct Sums
                         break;
                     }
                 }
-            TH1D *in = (TH1D *)f.Get(names[i].c_str());
-            if (h.count(target)) h[target]->Add(in);
-            else { h[target] = (TH1D *)in->Clone((target + "_sum").c_str()); h[target]->SetDirectory(0); }
+            for (int o = 0; o < (IsJpName(names[i]) ? 2 : 1); o++)
+            {
+                TH1D *in = Read(f, names[i], have_hie, o == 1);
+                const std::string key = target + (o ? "#jponly" : "");
+                if (h.count(key)) h[key]->Add(in);
+                else { h[key] = (TH1D *)in->Clone((key + "_sum").c_str()); h[key]->SetDirectory(0); }
+                delete in;
+            }
         }
-        for (int l = 0; l < kNEmLevels; l++)
+        for (int l = 0; l < kNTrgLevels; l++)
             for (int k = 0; k < kNPhotonClasses; k++)
             {
-                TH1D *n = (TH1D *)((TH1D *)f.Get(YieldName(l, k, 0, 0)))->Clone("n_tmp");
-                n->SetDirectory(0);
-                n->Reset();
-                for (int s = 0; s < kNSides; s++)
-                    for (int p = 0; p < kNSpinStates; p++) n->Add((TH1D *)f.Get(YieldName(l, k, s, p)));
-                for (int b = 0; b < 2; b++)
+                for (int o = 0; o < (IsJpLevel(l) ? 2 : 1); o++)
                 {
-                    if (!pw[b][l][k]) { pw[b][l][k] = (TH1D *)n->Clone(TString::Format("pw_%d_%d_%d", b, l, k)); pw[b][l][k]->SetDirectory(0); pw[b][l][k]->Reset(); }
-                    pw[b][l][k]->Add(n, pol[b]);
+                    TH1D *n = Read(f, YieldName(l, k, 0, 0).Data(), have_hie, o == 1);
+                    n->SetName("n_tmp");
+                    n->Reset();
+                    for (int s = 0; s < kNSides; s++)
+                        for (int p = 0; p < kNSpinStates; p++)
+                        {
+                            TH1D *r = Read(f, YieldName(l, k, s, p).Data(), have_hie, o == 1);
+                            n->Add(r);
+                            delete r;
+                        }
+                    TH1D *(&w)[2][kNTrgLevels][kNPhotonClasses] = o ? pwo : pw;
+                    for (int b = 0; b < 2; b++)
+                    {
+                        if (!w[b][l][k]) { w[b][l][k] = (TH1D *)n->Clone(TString::Format("pw%s_%d_%d_%d", o ? "o" : "", b, l, k)); w[b][l][k]->SetDirectory(0); w[b][l][k]->Reset(); }
+                        w[b][l][k]->Add(n, pol[b]);
+                    }
+                    delete n;
                 }
-                delete n;
             }
+        if (hi_e && !have_hie) n_no_hie++;
         return true;
     }
 };
@@ -245,17 +358,71 @@ static int RunOf(TFile &f)
 
 int main(int argc, char **argv)
 {
+    // -E (anywhere among the arguments): add the jets above sqrt(s)/2;
+    // -C: companion jets alone; -A: triggering and companion jets
+    // -f <factor>: trigger-value cut factor, both families (a slice edge);
+    // -fe / -fj: EM / JP alone; -J: JP levels in
+    // "all"; -V: add the EM jets failing only the veto margin
+    bool hi_e = false, comp_only = false, comp_add = false, jp_in_all = false, add_veto = false;
+    double factor_em = kEmCutFactor, factor_jp = kJpCutFactor;
+    {
+        int m = 1;
+        for (int i = 1; i < argc; i++)
+        {
+            const std::string a = argv[i];
+            if (a == "-E") { hi_e = true; continue; }
+            if (a == "-C") { comp_only = true; continue; }
+            if (a == "-A") { comp_add = true; continue; }
+            if (a == "-J") { jp_in_all = true; continue; }
+            if (a == "-V") { add_veto = true; continue; }
+            if (a == "-f" && i + 1 < argc) { factor_em = factor_jp = std::atof(argv[++i]); continue; }
+            if (a == "-fe" && i + 1 < argc) { factor_em = std::atof(argv[++i]); continue; }
+            if (a == "-fj" && i + 1 < argc) { factor_jp = std::atof(argv[++i]); continue; }
+            argv[m++] = argv[i];
+        }
+        argc = m;
+    }
+    {
+        bool edge_em = false, edge_jp = false;
+        for (int g = 0; g < kNTrgSlices; g++)
+        {
+            edge_em |= std::fabs(kTrgSliceEdge[g] - factor_em) < 1e-6;
+            edge_jp |= std::fabs(kTrgSliceEdge[g] - factor_jp) < 1e-6;
+        }
+        if (!edge_em || !edge_jp) { std::cerr << "ERROR: -f / -fe / -fj must be a slice edge (1.15, 1.3, 1.45, 1.6)" << std::endl; return 1; }
+    }
+    if (comp_only && comp_add) { std::cerr << "ERROR: -C and -A exclude each other" << std::endl; return 1; }
     const bool per_run = argc > 1 && std::string(argv[1]) == "-r";
     if (argc < 5)
     {
-        std::cerr << "Usage: " << argv[0] << " <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]\n"
-                  << "       " << argv[0] << " -r <yield file list> <run polarization table> <out.root> [rebin = 2] [bad-run list | none] [flagged | all]" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]\n"
+                  << "       " << argv[0] << " [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] -r <yield file list> <run polarization table> <out.root> [rebin = 2] [bad-run list | none] [flagged | all]\n"
+                  << "  -E: include the jets with corrected E above sqrt(s)/2 (default: left out, as the FMS EM-jet analysis)\n"
+                  << "  -C: companion jets alone (below the trigger threshold, in events with a jet above it)\n"
+                  << "  -A: triggering and companion jets together (default: triggering jets alone)\n"
+                  << "  -f: trigger value cut, factor x nominal threshold, both families: 1.15, 1.3, 1.45 or 1.6\n"
+                  << "  -fe / -fj: the factor for EM levels / JP levels alone (default 1.3 for both)\n"
+                  << "  -J: \"all\" = EM + JP union, each jet once (default: EM levels only; allJP is always written)\n"
+                  << "  -V: add EM jets that failed only the HCal-veto margin" << std::endl;
         return 1;
     }
     const int rebin = argc > 5 ? std::atoi(argv[5]) : 2;
-    if (rebin < 1 || kNXfBins % rebin) { std::cerr << "ERROR: bad rebin" << std::endl; return 1; }
+    if (rebin < 1) { std::cerr << "ERROR: bad rebin" << std::endl; return 1; }
 
     Sums sums;
+    sums.hi_e = hi_e;
+    sums.use_trig = !comp_only;
+    sums.use_comp = comp_only || comp_add;
+    sums.use_veto = add_veto;
+    sums.factor_em = factor_em;
+    sums.factor_jp = factor_jp;
+    const std::string trg_note = TString::Format("trigger value >= %.2f (EM) / %.2f (JP) x threshold; levels judged per family (EM, JP); all = %s%s", factor_em, factor_jp,
+                                                 jp_in_all ? "EM levels + JP jets not firing EM (-J union)" : "EM levels",
+                                                 add_veto ? "; EM veto failures added (-V)" : "").Data();
+    std::printf("AnAsymmetry: %s\n", trg_note.c_str());
+    const std::string hie_note = hi_e ? "jets above sqrt(s)/2 included (-E)" : "jets above sqrt(s)/2 left out (default, as the FMS)";
+    const std::string sample_note = comp_only ? "companion jets alone (-C)" : comp_add ? "triggering and companion jets (-A)" : "triggering jets (default)";
+    std::printf("AnAsymmetry: %s; %s\n", hie_note.c_str(), sample_note.c_str());
     std::string pol_note, bad_note;
     if (!per_run)
     {
@@ -329,20 +496,29 @@ int main(int argc, char **argv)
         pol_note = std::string("per-run P from ") + argv[3];
     }
 
+    if (sums.nbins % rebin) { std::cerr << "ERROR: rebin " << rebin << " does not divide the " << sums.nbins << " x_F bins" << std::endl; return 1; }
+    if (sums.n_no_hie > 0)
+        std::printf("AnAsymmetry: WARNING: %d yield file(s) have no _hiE histograms (made before 2026-11-04, jets above sqrt(s)/2 dropped there)\n", sums.n_no_hie);
     if (sums.n_old_labels > 0)
         std::printf("AnAsymmetry: %d yield file(s) without spin_convention (old Spin_config mapping): spin states relabelled p -> 3 - p\n", sums.n_old_labels);
     TFile out(argv[per_run ? 4 : 2], "RECREATE");
     if (per_run) TNamed("bad_runs", bad_note.c_str()).Write();
+    TNamed("high_E_jets", hie_note.c_str()).Write();
+    TNamed("jet_sample", sample_note.c_str()).Write();
+    TNamed("trigger_selection", trg_note.c_str()).Write();
     const std::string table_name = std::string(argv[per_run ? 4 : 2]).substr(0, std::string(argv[per_run ? 4 : 2]).rfind(".root")) + ".txt";
     FILE *table = std::fopen(table_name.c_str(), "w");
     std::fprintf(table, "# A_N = eps / (<P> <|cos phi|>), %s; stat = statistical error only\n", pol_note.c_str());
+    std::fprintf(table, "# %s; %s; %s\n", hie_note.c_str(), sample_note.c_str(), trg_note.c_str());
     if (per_run) std::fprintf(table, "# bad runs: %s\n", bad_note.c_str());
     std::fprintf(table, "# level class beam xF_lo xF_hi <xF> A_N stat jets <|cos|> <P>\n");
-    for (int L = 0; L <= kNEmLevels; L++)
+    for (int L = 0; L <= kNTrgLevels + 1; L++)
     {
-        // levels summed: one level, or all (L = kNEmLevels)
-        const int l0 = L < kNEmLevels ? L : 0, l1 = L < kNEmLevels ? L + 1 : kNEmLevels;
-        const char *lname = L < kNEmLevels ? kEmLevelName[L] : "all";
+        // levels summed: one level, all (L = kNTrgLevels: EM, with -J also JP),
+        // allJP (L = kNTrgLevels + 1)
+        const int l0 = L < kNTrgLevels ? L : L == kNTrgLevels ? 0 : kNEmLevels;
+        const int l1 = L < kNTrgLevels ? L + 1 : L == kNTrgLevels ? (jp_in_all ? kNTrgLevels : kNEmLevels) : kNTrgLevels;
+        const char *lname = L < kNTrgLevels ? kTrgLevelName[L] : L == kNTrgLevels ? "all" : "allJP";
         const int l = L;
         // [photon class, kNPhotonClasses = all, kNPhotonClasses + 1 = np3plus (3 or
         // more points: np3 + np4 + np5plus), kNPhotonClasses + 2 = np12 (1 or 2
@@ -359,14 +535,17 @@ int main(int argc, char **argv)
             for (int ll = l0; ll < l1; ll++)
             for (int kk = k0; kk < k1; kk++, first = false)
             {
-                TH1D *c = (TH1D *)sums.h[TString::Format("h_abscos_%s_%s", kEmLevelName[ll], PhotonClassName(kk)).Data()]->Rebin(rebin, "tmp_c");
-                TH1D *x = (TH1D *)sums.h[TString::Format("h_xfsum_%s_%s", kEmLevelName[ll], PhotonClassName(kk)).Data()]->Rebin(rebin, "tmp_x");
+                // the -J union ("all" with JP levels): JP jets that did not fire EM at the factor
+                const bool jpo = L == kNTrgLevels && IsJpLevel(ll);
+                const std::string ok_ = jpo ? "#jponly" : "";
+                TH1D *c = (TH1D *)sums.h[TString::Format("h_abscos_%s_%s", kTrgLevelName[ll], PhotonClassName(kk)).Data() + ok_]->Rebin(rebin, "tmp_c");
+                TH1D *x = (TH1D *)sums.h[TString::Format("h_xfsum_%s_%s", kTrgLevelName[ll], PhotonClassName(kk)).Data() + ok_]->Rebin(rebin, "tmp_x");
                 if (first) { mcos[k] = (TH1D *)c->Clone("c_" + tag); mxf[k] = (TH1D *)x->Clone("x_" + tag); }
                 else { mcos[k]->Add(c); mxf[k]->Add(x); }
                 delete c; delete x;
                 for (int b = 0; b < 2; b++)
                 {
-                    TH1D *pr = (TH1D *)sums.pw[b][ll][kk]->Rebin(rebin, "tmp_p");
+                    TH1D *pr = (TH1D *)(jpo ? sums.pwo : sums.pw)[b][ll][kk]->Rebin(rebin, "tmp_p");
                     if (first) mpol[b][k] = (TH1D *)pr->Clone(TString::Format("p%d_", b) + tag);
                     else mpol[b][k]->Add(pr);
                     delete pr;
@@ -374,7 +553,7 @@ int main(int argc, char **argv)
                 for (int s = 0; s < kNSides; s++)
                     for (int p = 0; p < kNSpinStates; p++)
                     {
-                        TH1D *r = (TH1D *)sums.h[YieldName(ll, kk, s, p).Data()]->Rebin(rebin, "tmp_y");
+                        TH1D *r = (TH1D *)sums.h[YieldName(ll, kk, s, p).Data() + ok_]->Rebin(rebin, "tmp_y");
                         if (first) y[k][s][p] = (TH1D *)r->Clone(TString::Format("y_%d_%d_", s, p) + tag);
                         else y[k][s][p]->Add(r);
                         delete r;

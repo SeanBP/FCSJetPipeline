@@ -3,7 +3,8 @@
 # per-stage timing table per job.
 # Usage:
 #   ./submit_an_job.sh -f <listfile> -o <outdir> [-n <files_per_job>] \
-#       [-c <calib json>] [-t <triggers>] [-l <label>] [-k <0|1>] [-J <N>] [-N]
+#       [-c <calib json>] [-t <triggers>] [-l <label>] [-k <0|1>] [-J <N>]
+#       [-S <seed>] [-N]
 #
 #   -f  MakeRunList.pl-format list ("<url or path>/<events>" per line)
 #   -o  output directory; histograms go to <outdir>/hists/, timing tables
@@ -17,15 +18,26 @@
 #       jet_calibration/JES_Lookups/JetEnergyScale_lookup_em_only.json
 #       (copied into asymmetry/jes/ for the SandBox). It must be a
 #       "logcubic" map
-#   -t  FCS trigger names an event must have fired, default
-#       fcsEM0,fcsEM1,fcsEM2 and their _tpc copies (the EM triggers AnHistograms
-#       counts; an event listing only a _tpc copy is a valid EM event)
+#   -t  FCS trigger names an event must have fired, default the triggers
+#       AnHistograms counts: fcsEM0,fcsEM1,fcsEM2 and their _tpc copies (an
+#       event listing only a _tpc copy is a valid EM event) and the jet
+#       patches fcsJP2, fcsJPA1, fcsJPBC1, fcsJPDE1, fcsJPA0, fcsJPBC0, fcsJPDE0
+#       (EM only before 2026-11-05)
 #   -l  label for the generated XML, default "an"
 #   -k  1 = save stdout/stderr under <outdir>/log/, default 0
 #   -J  keep the calibrated jet files (UE-subtracted, JES applied) of every
-#       N-th job in <outdir>/jets/: 1 = all, 0 = none (default). About
-#       0.3 MB per MuDst
+#       N-th job in <outdir>/jets/, merged into one jets_<run>_<job>.root per
+#       job (hadd in the job's scratch; the tree has event_run, event_id per
+#       event): 1 = all, 0 = none (default). About 0.75 MB per MuDst with the
+#       JP events and trigger values
+#   -S  shuffle the job order with this seed (condor starts jobs roughly in
+#       order, so the jobs finished at any time are then a random spread over
+#       the runs, not the earliest runs; 0 = run order, default)
 #   -N  write the XML and job layout, do not submit
+#
+#   The output directory also gets code_<label>.patch (git diff HEAD of the
+#   pipeline at submission, the job's SandBox being the working tree) and
+#   code_<label>_status.txt (git status, for untracked files).
 
 set -e
 
@@ -33,13 +45,14 @@ LISTFILE=""
 OUTDIR=""
 FILES_PER_JOB=40
 CALIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../jet_calibration/JES_Lookups" && pwd)/JetEnergyScale_lookup_em_only.json"
-TRIGGER_FILTER="fcsEM0,fcsEM1,fcsEM2,fcsEM0_tpc,fcsEM1_tpc,fcsEM2_tpc"
+TRIGGER_FILTER="fcsEM0,fcsEM1,fcsEM2,fcsEM0_tpc,fcsEM1_tpc,fcsEM2_tpc,fcsJP2,fcsJPA1,fcsJPBC1,fcsJPDE1,fcsJPA0,fcsJPBC0,fcsJPDE0"
 LABEL="an"
 KEEPLOGS=0
 KEEP_JETS=0
 DRYRUN=0
+SHUFFLE_SEED=0
 
-while getopts "f:o:n:c:t:l:k:J:Nh" opt; do
+while getopts "f:o:n:c:t:l:k:J:S:Nh" opt; do
   case $opt in
     f) LISTFILE="$OPTARG" ;;
     o) OUTDIR="$OPTARG" ;;
@@ -49,8 +62,9 @@ while getopts "f:o:n:c:t:l:k:J:Nh" opt; do
     l) LABEL="$OPTARG" ;;
     k) KEEPLOGS="$OPTARG" ;;
     J) KEEP_JETS="$OPTARG" ;;
+    S) SHUFFLE_SEED="$OPTARG" ;;
     N) DRYRUN=1 ;;
-    h|*) sed -n '2,27p' "$0"; exit 0 ;;
+    h|*) sed -n '2,36p' "$0"; exit 0 ;;
   esac
 done
 
@@ -62,6 +76,7 @@ fi
 grep -q '"model": *"logcubic"' "$CALIB" || { echo "Error: $CALIB is not a log-cubic EM-only map (CalibrationMap_em_only); pass one with -c"; exit 1; }
 [[ "$FILES_PER_JOB" =~ ^[1-9][0-9]*$ ]] || { echo "Error: -n must be a positive integer"; exit 1; }
 [[ "$KEEP_JETS" =~ ^[0-9]+$ ]] || { echo "Error: -J must be a non-negative integer"; exit 1; }
+[[ "$SHUFFLE_SEED" =~ ^[0-9]+$ ]] || { echo "Error: -S must be a non-negative integer"; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIPELINE_ROOT="$(dirname "${SCRIPT_DIR}")"
@@ -97,6 +112,12 @@ awk -v N="${FILES_PER_JOB}" '
               r = order[i]; n = cnt[r]; c = int((n + N - 1) / N); base = int(n / c); rem = n % c; s = first[r]
               for (j = 0; j < c; j++) { m = base + (j < rem ? 1 : 0); print s, m; s += m } } }
 ' "${SORTEDLIST}" > "${RANGEFILE}"
+if [ "$SHUFFLE_SEED" != "0" ]; then
+    # random job order, reproducible from the seed
+    awk -v seed="${SHUFFLE_SEED}" 'BEGIN { srand(seed) } { printf "%.12f %s\n", rand(), $0 }' "${RANGEFILE}" \
+        | sort -k1,1 | cut -d' ' -f2- > "${RANGEFILE}.tmp" && mv "${RANGEFILE}.tmp" "${RANGEFILE}"
+    echo "Job order shuffled (seed ${SHUFFLE_SEED})"
+fi
 NPROC=$(wc -l < "${RANGEFILE}")
 echo "Job layout: $(wc -l < "${SORTEDLIST}") files in ${NPROC} jobs of at most ${FILES_PER_JOB} consecutive files of one run"
 
@@ -134,7 +155,11 @@ calib_json=${CALIB}
 trigger_filter=${TRIGGER_FILTER}
 keep_logs=${KEEPLOGS}
 keep_jets_every=${KEEP_JETS}
+shuffle_seed=${SHUFFLE_SEED}
+code_uncommitted_files=$(git -C "${PIPELINE_ROOT}" status --porcelain 2>/dev/null | grep -c . || true)
 EOF
+git -C "${PIPELINE_ROOT}" diff HEAD > "${OUTDIR}/code_${LABEL}.patch" 2>/dev/null || true
+git -C "${PIPELINE_ROOT}" status --short > "${OUTDIR}/code_${LABEL}_status.txt" 2>/dev/null || true
 
 [ "$DRYRUN" = "1" ] && { echo "Dry run (-N): not submitted"; exit 0; }
 

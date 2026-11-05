@@ -11,6 +11,7 @@
 #include <algorithm>
 #include "JetParameters.h"
 #include "FcsTriggerDefs.h"
+#include "FcsTrigSums.h"
 #include "TFile.h"
 #include "TTree.h"
 #include "TString.h"
@@ -124,9 +125,50 @@ int main(int argc, char** argv) {
     outTree->Branch("reco_tau1", &reco_tau1);
     outTree->Branch("reco_tau2", &reco_tau2);
 
+    // Photons in the jet. Point jets (use_points): the jet's ECal point
+    // constituents, as the FMS EM-jet analysis (BrightSTAR: nPhotons =
+    // jet->GetNumberOfTowers(), its "towers" being FMS points). Hit jets:
     // ECAL FCS points with energy > point_energy_min within deltaR < R of the
-    // jet axis (the FMS photon definition)
+    // jet axis (no point constituents to count). Before 2026-11-05 point jets
+    // used the deltaR count too, which differs on ~2.5% of jets (points at the
+    // cone edge: pseudorapidity vs FastJet's rapidity, the z_proj projection).
     outTree->Branch("reco_nphotons", &reco_nphotons);
+
+    // What the FCS trigger compared with its thresholds, per jet, from the
+    // SimpleTree's trigger 2x2 sums (shared/FcsTrigSums.h; -1 if the
+    // SimpleTree has none): reco_trg_em_et, the largest ECal 4x4 window with
+    // its centre within R (stage-1 truncated, GeV E_T); reco_trg_em_hmax and
+    // reco_trg_em_hnear, that window's largest neighbouring and nearest HCal
+    // 4x4; reco_trg_jp_et, the largest JP patch (ECal + HCal) containing the
+    // jet axis, reco_trg_jp_patch (ns*5 + patch, A..E = 0..4) and
+    // reco_trg_jp_mask (every containing patch, bit ns*5 + patch);
+    // reco_trg_em_et_raw / reco_trg_jp_et_raw without the truncation.
+    // reco_cone_ecal_et / reco_cone_hcal_et: E_T of all ECal / HCal hits
+    // (energy > 0) within R of the axis, for comparison.
+    vector<float> reco_trg_em_et, reco_trg_em_hmax, reco_trg_em_hnear, reco_trg_em_et_raw, reco_trg_jp_et, reco_trg_jp_et_raw;
+    vector<int> reco_trg_jp_patch, reco_trg_jp_mask;
+    vector<float> reco_cone_ecal_et, reco_cone_hcal_et;
+    outTree->Branch("reco_trg_em_et", &reco_trg_em_et);
+    outTree->Branch("reco_trg_em_hmax", &reco_trg_em_hmax);
+    outTree->Branch("reco_trg_em_hnear", &reco_trg_em_hnear);
+    outTree->Branch("reco_trg_em_et_raw", &reco_trg_em_et_raw);
+    outTree->Branch("reco_trg_jp_et", &reco_trg_jp_et);
+    outTree->Branch("reco_trg_jp_et_raw", &reco_trg_jp_et_raw);
+    outTree->Branch("reco_trg_jp_patch", &reco_trg_jp_patch);
+    outTree->Branch("reco_trg_jp_mask", &reco_trg_jp_mask);
+    outTree->Branch("reco_cone_ecal_et", &reco_cone_ecal_et);
+    outTree->Branch("reco_cone_hcal_et", &reco_cone_hcal_et);
+    // FCS stage-3 bits before prescale (SimpleTree fcs_tcu_bits: EM0-2 bits
+    // 3-5, JP2 6, JPA1/BC1/DE1 7-9, JPA0/BC0/DE0 10-12), for turn-ons
+    UInt_t fcs_tcu_bits = 0;
+    Int_t fcs_tcu_source = 0;
+    outTree->Branch("fcs_tcu_bits", &fcs_tcu_bits, "fcs_tcu_bits/i");
+    outTree->Branch("fcs_tcu_source", &fcs_tcu_source, "fcs_tcu_source/I");
+    // run and event number (SimpleTree event_run, event_id; 0 / -1 if absent),
+    // so merged jet files keep each event's run
+    Int_t event_run = 0, event_id = -1;
+    outTree->Branch("event_run", &event_run, "event_run/I");
+    outTree->Branch("event_id", &event_id, "event_id/I");
 
     // Per-event FCS trigger flags, passed through from the SimpleTree (FcsTriggerDefs.h)
     Int_t Trig_flag[kNTrigFlags];
@@ -178,6 +220,9 @@ int main(int argc, char** argv) {
     Int_t Cal_npts;
     Float_t Cal_pt_energy[MAX_PTS], Cal_pt_x[MAX_PTS], Cal_pt_y[MAX_PTS], Cal_pt_z[MAX_PTS];
     Int_t Cal_pt_detid[MAX_PTS];
+
+    Float_t trg_e2x2[2][16][10], trg_h2x2[2][10][6];
+    FcsTrgGeom trg_geom;
 
     Long64_t cumulative_event = 0;
 
@@ -237,6 +282,37 @@ int main(int argc, char** argv) {
                  << "0 reco jets will be built for this file." << endl;
         }
 
+        fcs_tcu_bits = 0; fcs_tcu_source = 0;
+        event_run = 0; event_id = -1;
+        if ( tree->GetBranch("event_run") ) {
+            tree->SetBranchAddress("event_run", &event_run);
+            tree->SetBranchAddress("event_id", &event_id);
+        }
+        if ( tree->GetBranch("fcs_tcu_bits") ) {
+            tree->SetBranchAddress("fcs_tcu_bits", &fcs_tcu_bits);
+            tree->SetBranchAddress("fcs_tcu_source", &fcs_tcu_source);
+        }
+
+        // trigger 2x2 sums and their centres (SimpleTrees from 2026-11-05 on)
+        trg_geom.ok = false;
+        if ( tree->GetBranch("trg_e2x2") && tree->GetBranch("trg_h2x2") ) {
+            tree->SetBranchAddress("trg_e2x2", (void*)trg_e2x2);
+            tree->SetBranchAddress("trg_h2x2", (void*)trg_h2x2);
+            TTree* gt = (TTree*)f->Get("trg_geom");
+            if ( gt && gt->GetEntries() > 0 ) {
+                gt->SetBranchAddress("trg_e2x2_x", (void*)trg_geom.ex);
+                gt->SetBranchAddress("trg_e2x2_y", (void*)trg_geom.ey);
+                gt->SetBranchAddress("trg_e2x2_z", (void*)trg_geom.ez);
+                gt->SetBranchAddress("trg_h2x2_x", (void*)trg_geom.hx);
+                gt->SetBranchAddress("trg_h2x2_y", (void*)trg_geom.hy);
+                gt->SetBranchAddress("trg_h2x2_z", (void*)trg_geom.hz);
+                gt->GetEntry(0);
+                trg_geom.ok = true;
+            } else {
+                cerr << "Warning: " << fname << " has trigger sums but no trg_geom tree; reco_trg_* = -1" << endl;
+            }
+        }
+
         Long64_t nentries = tree->GetEntries();
         cout << "Processing file: " << fname << " with " << nentries << " events." << endl;
 
@@ -273,6 +349,9 @@ int main(int argc, char** argv) {
             reco_nconst.clear();
             reco_area.clear();
             reco_nphotons.clear();
+            reco_trg_em_et.clear(); reco_trg_em_hmax.clear(); reco_trg_em_hnear.clear(); reco_trg_em_et_raw.clear();
+            reco_trg_jp_et.clear(); reco_trg_jp_et_raw.clear(); reco_trg_jp_patch.clear(); reco_trg_jp_mask.clear();
+            reco_cone_ecal_et.clear(); reco_cone_hcal_et.clear();
 
             vector<PseudoJet> reco_particles;
             vector<int> reco_detid;
@@ -344,18 +423,51 @@ int main(int argc, char** argv) {
                 reco_x_F.push_back(computeFeynmanX(jet.E(), jet.eta(), event_sqrt_s_gev));
                 reco_side.push_back(computeSide(rx));
 
+                // point jets: the ECal point constituents (FMS); hit jets: points within R
                 int nphotons = 0;
-                for (int p = 0; p < Cal_npts; p++) {
-                    if (Cal_pt_detid[p] != 0 && Cal_pt_detid[p] != 1) continue;
-                    if (!pass_point_energy_cut(Cal_pt_energy[p], event_sqrt_s_gev)) continue;
-                    double pEta, pPhi;
-                    computeEtaPhi(Cal_pt_x[p], Cal_pt_y[p], pEta, pPhi);
-                    double dPhi = fabs(pPhi - jet.phi());
-                    if (dPhi > M_PI) dPhi = 2 * M_PI - dPhi;
-                    double dEta = pEta - jet.eta();
-                    if (sqrt(dEta * dEta + dPhi * dPhi) < R) nphotons++;
+                if (use_points) {
+                    for (auto &c : consts) {
+                        const int det = reco_detid[c.user_index()];
+                        if (det == 0 || det == 1) nphotons++;
+                    }
+                } else {
+                    for (int p = 0; p < Cal_npts; p++) {
+                        if (Cal_pt_detid[p] != 0 && Cal_pt_detid[p] != 1) continue;
+                        if (!pass_point_energy_cut(Cal_pt_energy[p], event_sqrt_s_gev)) continue;
+                        double pEta, pPhi;
+                        computeEtaPhi(Cal_pt_x[p], Cal_pt_y[p], pEta, pPhi);
+                        double dPhi = fabs(pPhi - jet.phi());
+                        if (dPhi > M_PI) dPhi = 2 * M_PI - dPhi;
+                        double dEta = pEta - jet.eta();
+                        if (sqrt(dEta * dEta + dPhi * dPhi) < R) nphotons++;
+                    }
                 }
                 reco_nphotons.push_back(nphotons);
+
+                // trigger quantities and cone sums
+                {
+                    const FcsTrgJet tj = FcsTrgForJet(trg_e2x2, trg_h2x2, trg_geom, jet.eta(), jet.phi_std(), R);
+                    reco_trg_em_et.push_back(tj.em_et);
+                    reco_trg_em_hmax.push_back(tj.em_hmax);
+                    reco_trg_em_hnear.push_back(tj.em_hnear);
+                    reco_trg_em_et_raw.push_back(tj.em_et_raw);
+                    reco_trg_jp_et.push_back(tj.jp_et);
+                    reco_trg_jp_et_raw.push_back(tj.jp_et_raw);
+                    reco_trg_jp_patch.push_back(tj.jp_patch);
+                    reco_trg_jp_mask.push_back(tj.jp_mask);
+                    double ce = 0, ch = 0;
+                    for (int k = 0; k < Cal_nhits; k++) {
+                        const int d = Cal_detid[k];
+                        if (d < 0 || d > 3 || !(Cal_hit_energy[k] > 0)) continue;
+                        double heta, hphi;
+                        FcsTrgEtaPhi(Cal_hit_posx[k], Cal_hit_posy[k], Cal_hit_posz[k], heta, hphi);
+                        if (FcsTrgDR(heta, hphi, jet.eta(), jet.phi_std()) >= R) continue;
+                        const double et = Cal_hit_energy[k] / cosh(heta);
+                        if (d < 2) ce += et; else ch += et;
+                    }
+                    reco_cone_ecal_et.push_back(ce);
+                    reco_cone_hcal_et.push_back(ch);
+                }
 
                 for (auto &c : consts) {
                     int idx = c.user_index();

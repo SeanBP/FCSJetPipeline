@@ -199,6 +199,7 @@
             <File>file:./.sl73_x8664_gcc485</File>
             <File>file:./StRoot</File>
             <File>file:./shared/JetParameters.h</File>
+            <File>file:./shared/FcsTrigSums.h</File>
             <File>file:./underlying_event</File>
         </Package>
     </SandBox>
