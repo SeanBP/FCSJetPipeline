@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+    Re-histogram job: AnHistograms on kept, calibrated jet files of an A_N
+    pass (jets_<run>_<job>.root, one per original job), so a change to the
+    yield selection (AnConfig.h, e.g. the EM veto margin) needs no new
+    reconstruction. One yield file per input file: an_hists_<run>_<job>.root,
+    the same names as the original pass. Each job takes a block of input
+    files, copies one at a time to scratch, histograms it and deletes it.
+
+    Filled in by submit_rehist.sh:
+      {{LISTFILE}}    absolute paths of the jet files, one per line
+      {{NPERJOB}}     files per job
+      {{NPROCESSES}}  number of jobs
+      {{OUTDIR}}      output directory (hists/ under it)
+-->
+
+<job nProcesses="{{NPROCESSES}}">
+
+    <ResourceUsage><Memory><MinMemory>1000</MinMemory></Memory></ResourceUsage>
+
+    <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
+
+    <command>
+
+        cp shared/* .
+        cp asymmetry/AnConfig.h asymmetry/AnHistograms.cpp .
+
+        @ line_start = ${JOBINDEX} * {{NPERJOB}} + 1
+        @ line_end = ${line_start} + {{NPERJOB}} - 1
+        sed -n "${line_start},${line_end}p" {{LISTFILE}} > my_files.list
+        echo "JOBINDEX ${JOBINDEX}: lines ${line_start}-${line_end}, `wc -l &lt; my_files.list` files"
+
+        tcsh -c 'module purge; module load fastjet-3.3.4; module load root-5.34.38; printenv LD_LIBRARY_PATH &gt;! modules_ld.txt; g++ -m64 -O2 AnHistograms.cpp VectorDict.cxx -o AnHistograms `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11'
+        if ( ! -x AnHistograms ) then
+            echo "ERROR: compilation failed"
+            exit 1
+        endif
+        set MOD_LD = `cat modules_ld.txt`
+
+        foreach f ( `cat my_files.list` )
+            set b = `basename ${f}`
+            set tag = `echo ${b} | sed -e 's/^jets_//' -e 's/\.root$//'`
+            cp ${f} ${b}
+            if ( ! -s ${b} ) then
+                echo "ERROR: could not copy ${f}"
+                rm -f ${b}
+                continue
+            endif
+            echo ${b} &gt;! one.list
+            env LD_LIBRARY_PATH="${MOD_LD}" ./AnHistograms one.list an_hists_${tag}.root &gt;&amp;! hist.log
+            if ( $status != 0 || ! -f an_hists_${tag}.root ) then
+                echo "ERROR: AnHistograms failed on ${b}"
+                tail -5 hist.log
+                rm -f an_hists_${tag}.root
+            endif
+            rm -f ${b}
+        end
+        ls an_hists_*.root | wc -l
+
+    </command>
+
+    <SandBox installer="ZIP">
+        <Package>
+            <File>file:./shared/VectorDict.cxx</File>
+            <File>file:./shared/VectorDict.h</File>
+            <File>file:./shared/VectorDictClass.h</File>
+            <File>file:./shared/VectorDictLinkDef.h</File>
+            <File>file:./shared/JetParameters.h</File>
+            <File>file:./shared/FcsTrigSums.h</File>
+            <File>file:./asymmetry/AnConfig.h</File>
+            <File>file:./asymmetry/AnHistograms.cpp</File>
+        </Package>
+    </SandBox>
+
+    <stdout URL="file:/dev/null"/>
+    <stderr URL="file:/dev/null"/>
+
+    <output fromScratch="an_hists_*.root" toURL="file:{{OUTDIR}}/hists/" />
+
+</job>

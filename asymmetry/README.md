@@ -12,7 +12,7 @@ not included.
 ```
 ./make_smoke_list.py <outdir>/<prefix> --runs 60 --files 40
 ./submit_an_job.sh -f <outdir>/<prefix>.list -o <outdir> -l <prefix> -k 1 -J 1
-./smoke_report.sh <outdir> <outdir>/<prefix>_good_runs.txt     # once the jobs end
+./smoke_report.sh <outdir> <outdir>/<prefix>_good_runs.txt [report_<date>]   # any time: uses the finished jobs
 ```
 
 - `make_smoke_list.py`: the good runs (catalog analysis runs that pass the
@@ -24,7 +24,33 @@ not included.
   (`an_projected.txt`, `an_vs_xf_projected*.png`), yield and sanity plots
   and per-run trends (`plots/`), and wall time, memory and scratch per
   stage, per job (also condor's record) and extrapolated to the full pass
-  (`resources.txt`, `condor_jobs.txt`).
+  (`resources.txt`, `condor_jobs.txt`). Also the JP levels, the EM + JP
+  union (`an_union.*`, `an_vs_xf_union.png`), and two-photon jets inside vs
+  outside the pi0 mass window (`mgg_peak.png` with the fitted peak,
+  `an_mass_in/out.*`, `an_vs_xf_mass.png`). A third argument names the
+  report folder (default `report`), so reports on a pass still running do
+  not overwrite each other; yield files younger than 10 minutes are skipped.
+- `batch_feeder.sh` (condor scheduler-universe job on the submit node):
+  submits the next batch of a pass when that keeps at most N of its jobs in
+  condor; see its header.
+- `submit_rehist.sh` (`rehist_job.xml`): reruns AnHistograms on a pass's
+  kept jet files after a change to the yield selection (AnConfig.h), with
+  no new reconstruction.
+- `submit_merge_hists.sh` (`merge_hists_job.xml`, `hist_entries.C`): merges
+  a finished pass's per-job yield files into one per run, in place (summed
+  histogram entries checked before the parts are deleted), to save disk.
+  AnAsymmetry takes the run from the file's `runs` entry, so the merged
+  files are read like the per-job ones (A_N checked identical).
+- 20% Run 22 pass (2026-11-05): `/star/data01/pwg/seanp/asymmetry/run22_20pct_v2`,
+  20% of all good-run events (tape and qgp017 included in the count, 1.75e9),
+  194,800 files in two run-disjoint batches (4,998 + 1,428 jobs), code frozen
+  in `pipeline_frozen/` (= d462f44). EM veto margin 1.15 in its `hists/`;
+  rerun at 1.3 into `run22_20pct_v2_vm130`.
+- Remaining-files pass (2026-11-05): `/star/data01/pwg/seanp/asymmetry/run22_rest_v1`,
+  the 512,757 reachable good-run files the 20% pass did not read (4.59e9
+  events), 14,229 jobs in three run-disjoint batches, jet files kept for
+  every 20th job (disk quota), yields merged per run after each batch
+  (`pass_cleanup.sh` there).
 - `smoke_v1` (2026-11-03): 60 runs 23008012-23107043, 2357 files, 2.08e7
   events, 0.27% of the 7.85e9 good-run events, in
   `/star/data01/pwg/seanp/asymmetry/smoke_v1`.
@@ -57,7 +83,7 @@ Step 6 runs on the job outputs, not in the job.
 - **`AnConfig.h`**: selection and binning.
   - Trigger levels EM0–2 and JP0–2 with A. Ogawa's nominal thresholds
     (`kTrgThresholdGeV` = 2.0 / 3.5 / 5.0 and 4.0 / 6.0 / 8.0 GeV), the
-    default cut factors `kEmCutFactor` = 1.15 and `kJpCutFactor` = 1.3, the EM HCal-veto margin 1.15
+    default cut factors `kEmCutFactor` = `kJpCutFactor` = 1.3, the EM HCal-veto margin `kEmVetoMargin` = 1.3
     and the yield slices (1.15, 1.3, 1.45, 1.6 × threshold). Until 2026-11-05
     the EM levels cut uncorrected jet pT at 1.15 × threshold.
   - The 2 GeV corrected pT minimum.
@@ -139,6 +165,12 @@ Step 6 runs on the job outputs, not in the job.
     levels in "all" (the JP jets whose EM slice is below the EM factor) (EM only by default; "allJP" is always written); `-V`:
     add the EM jets that failed only the veto margin. Yield files made
     before 2026-11-05 are refused.
+  - `-m in:<peak>` / `-m out:<peak>`: the np2 rows become the two-photon
+    jets with pair mass inside / outside 0.5-1.5 x peak (whole 25 MeV bins
+    whose centre is in it), from the `h_xFm_*` yields; `<|cos phi|>`, `<x_F>`
+    and P are those of all np2 jets. Default jets only (factor 1.3, no
+    `-E`/`-C`/`-A`/`-V`); with `-J` the union. `mgg_peak.C` fits the peak,
+    `plot_an_mass.C` overlays in and out.
   - `-r`: one yield file per run, summed; each bin uses the mean polarization
     of its jets (runs weighted by their jets, as FMS weighted by events).
   - `-r` also drops bad runs: by default the runs with a flag in D.

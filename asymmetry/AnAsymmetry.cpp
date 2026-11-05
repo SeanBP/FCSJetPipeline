@@ -80,6 +80,17 @@
 // (_veto). Yield files made before 2026-11-05 (no "trigger_rule") have
 // neither and are refused.
 //
+// Pi0 mass window (-m in:<peak> / -m out:<peak>). The np2 rows then hold the
+// two-photon jets whose pair mass is inside (in) or outside (out) 0.5-1.5 x
+// <peak> GeV, from AnHistograms' x_F vs mass yields (h_xFm_*, E <= sqrt(s)/2,
+// jets at the default factor 1.3, -J union from _jponly): a mass bin (25 MeV)
+// counts as inside if its centre is in the window, and the window actually
+// used is printed. <|cos phi|>, <x_F> and the run-weighted P per bin are those
+// of all np2 jets (the mass split is not stored for them; the jets in and out
+// of the window share the acceptance, so the difference is small). Only the
+// np2 rows are meaningful in this mode; it excludes -E, -C, -A, -V and factors
+// other than 1.3.
+//
 // Outputs: <out.root> with the graphs and TNamed "bad_runs" (-r), and
 // <out.root minus .root>.txt, the table of every point (level, photon class,
 // beam, x_F bin, <x_F>, A_N, stat error, jets, <|cos phi|>, <P>).
@@ -97,7 +108,7 @@
 // place of the triggering jets), -A of both together. The choice is printed,
 // in the table header and as TNamed "jet_sample". -E applies to either.
 //
-// Usage: ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]
+// Usage: ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] [-m in|out:<peak>] <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]
 //        ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] -r <yield file list> <run polarization table> <out.root> [rebin = 2]
 //                         [bad-run list = kBadRunListDefault | none] [flagged | all]
 //   rebin 2 gives x_F bins of 0.05, as the FMS EM-jet analysis
@@ -110,10 +121,12 @@
 #include <TFile.h>
 #include <TGraphAsymmErrors.h>
 #include <TH1D.h>
+#include <TH2D.h>
 #include <TNamed.h>
 #include <TSystem.h>
 #include <TDatime.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -172,6 +185,32 @@ struct Sums
     int n_old_labels = 0, n_no_hie = 0, nbins = 0;
     bool hi_e = false, use_trig = true, use_comp = false, use_veto = false;
     double factor_em = kEmCutFactor, factor_jp = kJpCutFactor;
+    // -m: 0 off, 1 inside the mass window, 2 outside; np2 yields from h_xFm_*
+    int mass_mode = 0;
+    double mass_lo = 0, mass_hi = 0;
+    bool InWindow(double m) const { return m >= mass_lo && m <= mass_hi; }
+    // np2 yield of one (level, side, spin) from the x_F vs mass yields
+    TH1D *ReadMass(TFile &f, const std::string &name, bool jp_only)
+    {
+        // name = h_xF_<level>_np2_<side>_<spin>
+        TString n(name.c_str());
+        n.ReplaceAll("h_xF_", "h_xFm_");
+        n.ReplaceAll("_np2_", "_");
+        if (jp_only) n += "_jponly";
+        TH2D *m = (TH2D *)f.Get(n);
+        if (!m) return 0;
+        TH1D *a = new TH1D((name + "_rdm").c_str(), "", m->GetNbinsX(), m->GetXaxis()->GetXmin(), m->GetXaxis()->GetXmax());
+        a->SetDirectory(0);
+        a->Sumw2(false);
+        for (int by = 1; by <= m->GetNbinsY(); by++)
+        {
+            const bool in = InWindow(m->GetYaxis()->GetBinCenter(by));
+            if ((mass_mode == 1) != in) continue;
+            for (int bx = 1; bx <= m->GetNbinsX(); bx++) a->AddBinContent(bx, m->GetBinContent(bx, by));
+        }
+        a->SetEntries(a->Integral());
+        return a;
+    }
     // the suffixes summed for one histogram name: the triggering slices at or
     // above the factor (JP levels: with every EM tag, or with jp_only the EM
     // tags below the factor), companions, veto failures (EM levels only)
@@ -194,6 +233,8 @@ struct Sums
     static bool IsJpName(const std::string &name) { return name.find("_JP") != std::string::npos; }
     TH1D *Read(TFile &f, const std::string &name, bool &have_hie, bool jp_only = false)
     {
+        if (mass_mode && name.compare(0, 5, "h_xF_") == 0 && name.find("_np2_") != std::string::npos)
+            return ReadMass(f, name, jp_only);
         TH1D *a = 0;
         const std::vector<std::string> sfx = Suffixes(IsJpName(name), jp_only);
         for (size_t c = 0; c < sfx.size(); c++)
@@ -223,6 +264,11 @@ struct Sums
             return false;
         }
         const bool old_labels = !f.Get("spin_convention");
+        if (mass_mode && (old_labels || !f.Get("h_xFm_EM0_xpos_BuYu")))
+        {
+            std::cerr << "ERROR: " << f.GetName() << " has no h_xFm_* (or old spin labels); -m needs yield files from 2026-11-05 on" << std::endl;
+            return false;
+        }
         if (old_labels) n_old_labels++;
         bool have_hie = true;
         std::vector<std::string> names;
@@ -365,6 +411,7 @@ int main(int argc, char **argv)
     // "all"; -V: add the EM jets failing only the veto margin
     bool hi_e = false, comp_only = false, comp_add = false, jp_in_all = false, add_veto = false;
     double factor_em = kEmCutFactor, factor_jp = kJpCutFactor;
+    std::string mass_opt;
     {
         int m = 1;
         for (int i = 1; i < argc; i++)
@@ -378,6 +425,7 @@ int main(int argc, char **argv)
             if (a == "-f" && i + 1 < argc) { factor_em = factor_jp = std::atof(argv[++i]); continue; }
             if (a == "-fe" && i + 1 < argc) { factor_em = std::atof(argv[++i]); continue; }
             if (a == "-fj" && i + 1 < argc) { factor_jp = std::atof(argv[++i]); continue; }
+            if (a == "-m" && i + 1 < argc) { mass_opt = argv[++i]; continue; }
             argv[m++] = argv[i];
         }
         argc = m;
@@ -403,7 +451,8 @@ int main(int argc, char **argv)
                   << "  -f: trigger value cut, factor x nominal threshold, both families: 1.15, 1.3, 1.45 or 1.6\n"
                   << "  -fe / -fj: the factor for EM levels / JP levels alone (default 1.3 for both)\n"
                   << "  -J: \"all\" = EM + JP union, each jet once (default: EM levels only; allJP is always written)\n"
-                  << "  -V: add EM jets that failed only the HCal-veto margin" << std::endl;
+                  << "  -V: add EM jets that failed only the HCal-veto margin\n"
+                  << "  -m in:<peak> | out:<peak>: np2 rows = two-photon jets with pair mass inside / outside 0.5-1.5 x <peak> GeV" << std::endl;
         return 1;
     }
     const int rebin = argc > 5 ? std::atoi(argv[5]) : 2;
@@ -416,9 +465,34 @@ int main(int argc, char **argv)
     sums.use_veto = add_veto;
     sums.factor_em = factor_em;
     sums.factor_jp = factor_jp;
+    std::string mass_note;
+    if (!mass_opt.empty())
+    {
+        const size_t c = mass_opt.find(':');
+        const std::string w = mass_opt.substr(0, c);
+        const double peak = c == std::string::npos ? 0 : std::atof(mass_opt.substr(c + 1).c_str());
+        if ((w != "in" && w != "out") || !(peak > 0)) { std::cerr << "ERROR: -m takes in:<peak> or out:<peak> (GeV)" << std::endl; return 1; }
+        if (hi_e || comp_only || comp_add || add_veto || std::fabs(factor_em - 1.3) > 1e-6 || std::fabs(factor_jp - 1.3) > 1e-6)
+        {
+            std::cerr << "ERROR: -m works with the default jets only (no -E, -C, -A, -V; factors 1.3)" << std::endl;
+            return 1;
+        }
+        sums.mass_mode = w == "in" ? 1 : 2;
+        // the window in whole 25 MeV bins: a bin is in if its centre is
+        const double bw = (kMassMax - kMassMin) / kNMassBins;
+        double lo = 1e9, hi = -1e9;
+        for (int b = 0; b < kNMassBins; b++)
+        {
+            const double cen = kMassMin + (b + 0.5) * bw;
+            if (cen >= 0.5 * peak && cen <= 1.5 * peak) { lo = std::min(lo, cen - 0.5 * bw); hi = std::max(hi, cen + 0.5 * bw); }
+        }
+        sums.mass_lo = 0.5 * peak; sums.mass_hi = 1.5 * peak;
+        mass_note = TString::Format("np2 = two-photon jets with M_gg %s 0.5-1.5 x %.4f GeV (bins %.3f-%.3f GeV); <|cos|>, <x_F>, P of all np2", w == "in" ? "inside" : "outside", peak, lo, hi).Data();
+        std::printf("AnAsymmetry: %s\n", mass_note.c_str());
+    }
     const std::string trg_note = TString::Format("trigger value >= %.2f (EM) / %.2f (JP) x threshold; levels judged per family (EM, JP); all = %s%s", factor_em, factor_jp,
                                                  jp_in_all ? "EM levels + JP jets not firing EM (-J union)" : "EM levels",
-                                                 add_veto ? "; EM veto failures added (-V)" : "").Data();
+                                                 add_veto ? "; EM veto failures added (-V)" : "").Data() + (mass_note.empty() ? std::string() : "; " + mass_note);
     std::printf("AnAsymmetry: %s\n", trg_note.c_str());
     const std::string hie_note = hi_e ? "jets above sqrt(s)/2 included (-E)" : "jets above sqrt(s)/2 left out (default, as the FMS)";
     const std::string sample_note = comp_only ? "companion jets alone (-C)" : comp_add ? "triggering and companion jets (-A)" : "triggering jets (default)";

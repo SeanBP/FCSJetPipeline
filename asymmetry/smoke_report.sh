@@ -7,6 +7,10 @@
 #                              jet once
 #   an_vs_xf_union.png         the union A_N vs x_F
 #   an_vs_xf_<JP level>.png    A_N per JP level and allJP
+#   mgg_peak.png               two-photon jets' pair mass, the fitted pi0 peak
+#   an_mass_in/out.root, .txt  AnAsymmetry -J -m in/out:<peak>: np2 rows = the
+#                              two-photon jets inside / outside 0.5-1.5 x peak
+#   an_vs_xf_mass.png          their A_N vs x_F, inside vs outside
 #   an_vs_xf.png               final A_N vs x_F, statistical errors
 #   an_projected.txt           the table with errors projected to the full
 #                              good-run sample (project_errors.py)
@@ -38,7 +42,7 @@ GOOD="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REP="${OUTDIR}/${3:-report}"
 mkdir -p "${REP}/build"
-cp "${HERE}"/{AnAsymmetry.cpp,AnPlots.cpp,AnConfig.h,plot_an.C} "${REP}/build/"
+cp "${HERE}"/{AnAsymmetry.cpp,AnPlots.cpp,AnConfig.h,plot_an.C,mgg_peak.C,plot_an_mass.C} "${REP}/build/"
 find "${OUTDIR}/hists" -maxdepth 1 -name 'an_hists_*.root' -mmin +10 | sort > "${REP}/yields.list"
 # jobs submitted so far, over all batches of the pass
 NJOBS=$(cat "${OUTDIR}"/run_params_*.txt 2>/dev/null | awk -F= '$1 == "nProcesses" && $2 > 0 { n += $2 } END { if (n) print n }')
@@ -54,6 +58,14 @@ container "g++ -m64 -O2 build/AnAsymmetry.cpp -o build/AnAsymmetry \`root-config
 container "./build/AnAsymmetry -r yields.list ${HERE}/run22_polarization.txt an.root" > "${REP}/an_asymmetry.log"
 grep -A20 "^all, all photon classes" "${REP}/an_asymmetry.log" || true
 container "./build/AnAsymmetry -J -r yields.list ${HERE}/run22_polarization.txt an_union.root" > "${REP}/an_asymmetry_union.log"
+# two-photon jets in vs out of the pi0 mass window (0.5-1.5 x the fitted peak)
+container "root -b -q -l 'build/mgg_peak.C(\"yields.list\",\"mgg_peak.png\")'" > "${REP}/mgg_peak.log" 2>&1
+PEAK=$(sed -n 's/^peak=//p' "${REP}/mgg_peak.log" | tail -1)
+echo "pi0 peak: ${PEAK} GeV"
+if [ -n "$PEAK" ] && [ "$PEAK" != "0" ]; then
+    container "./build/AnAsymmetry -J -m in:${PEAK} -r yields.list ${HERE}/run22_polarization.txt an_mass_in.root" > "${REP}/an_asymmetry_mass_in.log"
+    container "./build/AnAsymmetry -J -m out:${PEAK} -r yields.list ${HERE}/run22_polarization.txt an_mass_out.root" > "${REP}/an_asymmetry_mass_out.log"
+fi
 
 "${HERE}/project_errors.py" "${OUTDIR}" "${REP}/an.txt" "${GOOD}" | tee "${REP}/projection.log"
 SCALE=$(grep '^scale=' "${REP}/projection.log" | cut -d= -f2)
@@ -76,6 +88,9 @@ root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_JP1.png","JP1","all",1,0,10,"
 root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_JP2.png","JP2","all",1,0,10,"${SAMPLE}")' || exit 1
 PLOTS
 container "tcsh plot_an.csh" > "${REP}/plot_an.log" 2>&1 || { tail "${REP}/plot_an.log"; exit 1; }
+if [ -f "${REP}/an_mass_in.root" ] && [ -f "${REP}/an_mass_out.root" ]; then
+    container "root -b -q -l 'build/plot_an_mass.C(\"an_mass_in.root\",\"an_mass_out.root\",\"an_vs_xf_mass.png\",${PEAK},\"${SAMPLE}\")'" >> "${REP}/plot_an.log" 2>&1 || echo "WARNING: mass-window plot failed (plot_an.log)"
+fi
 container "./build/AnPlots yields.list plots" > "${REP}/anplots.log" 2>&1 || { tail "${REP}/anplots.log"; exit 1; }
 
 "${HERE}/estimate_resources.py" "${OUTDIR}/timing" --runs "${GOOD}" > "${REP}/resources.txt"

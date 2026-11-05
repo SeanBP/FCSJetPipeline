@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+    Merge the per-job yield files of an A_N pass into one file per run, to
+    save disk: <outdir>/hists/an_hists_<run>_<job>.root (and an earlier
+    an_hists_<run>_m.root, if any) -> an_hists_<run>_m.root. The files hold
+    only histograms (summed by hadd) and the TNamed runs / spin_convention /
+    trigger_rule, the same in every file of a run (hadd keeps the first).
+    Each job takes a block of runs; per run it copies the parts to scratch,
+    hadds them, checks that the summed entries of all histograms agree, then
+    puts the merged file in place and deletes the parts. Runs with one file
+    are left alone. On any failure the parts are kept.
+
+    Filled in by submit_merge_hists.sh:
+      {{RUNLIST}}     run numbers, one per line
+      {{NPERJOB}}     runs per job
+      {{NPROCESSES}}  number of jobs
+      {{HISTDIR}}     the hists/ directory
+-->
+
+<job nProcesses="{{NPROCESSES}}">
+
+    <ResourceUsage><Memory><MinMemory>2000</MinMemory></Memory></ResourceUsage>
+
+    <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
+
+    <command>
+
+        set nonomatch
+        cp asymmetry/hist_entries.C .
+        @ line_start = ${JOBINDEX} * {{NPERJOB}} + 1
+        @ line_end = ${line_start} + {{NPERJOB}} - 1
+        sed -n "${line_start},${line_end}p" {{RUNLIST}} > my_runs.list
+        echo "JOBINDEX ${JOBINDEX}: runs ${line_start}-${line_end}"
+
+        foreach run ( `cat my_runs.list` )
+            rm -f part_*.root merged.root
+            set parts = `find {{HISTDIR}} -maxdepth 1 -name "an_hists_${run}_*.root"`
+            if ( $#parts &lt; 2 ) then
+                echo "run ${run}: $#parts file(s), nothing to merge"
+                continue
+            endif
+            set ok = 1
+            set i = 0
+            foreach p ( ${parts} )
+                @ i = ${i} + 1
+                cp ${p} part_${i}.root
+                if ( ! -s part_${i}.root ) set ok = 0
+            end
+            if ( ${ok} == 0 ) then
+                echo "ERROR run ${run}: copy failed, parts kept"
+                continue
+            endif
+            tcsh -c 'module purge; module load root-5.34.38; hadd -f merged.root part_*.root' &gt;&amp;! hadd.log
+            if ( $status != 0 || ! -s merged.root ) then
+                echo "ERROR run ${run}: hadd failed, parts kept"
+                tail -5 hadd.log
+                continue
+            endif
+            setenv HE_PATTERN 'part_*.root'
+            set nin = `tcsh -c 'module purge; module load root-5.34.38; root -l -b -q hist_entries.C' |&amp; grep '^ENTRIES' | awk '{print $2}'`
+            setenv HE_PATTERN merged.root
+            set nout = `tcsh -c 'module purge; module load root-5.34.38; root -l -b -q hist_entries.C' |&amp; grep '^ENTRIES' | awk '{print $2}'`
+            if ( "${nin}" == "" || "${nin}" != "${nout}" ) then
+                echo "ERROR run ${run}: entries ${nin} in parts, ${nout} merged; parts kept"
+                continue
+            endif
+            cp merged.root {{HISTDIR}}/.an_hists_${run}_m.root.tmp
+            if ( ! -s {{HISTDIR}}/.an_hists_${run}_m.root.tmp ) then
+                echo "ERROR run ${run}: copy back failed, parts kept"
+                rm -f {{HISTDIR}}/.an_hists_${run}_m.root.tmp
+                continue
+            endif
+            # the old merged file (if any) is one of the parts: delete parts, then put the new one in place
+            rm -f ${parts}
+            mv {{HISTDIR}}/.an_hists_${run}_m.root.tmp {{HISTDIR}}/an_hists_${run}_m.root
+            echo "run ${run}: merged $#parts files, ${nout} entries"
+        end
+        rm -f part_*.root merged.root
+
+    </command>
+
+    <SandBox installer="ZIP">
+        <Package>
+            <File>file:./asymmetry/hist_entries.C</File>
+        </Package>
+    </SandBox>
+
+    <stdout URL="file:{{LOGDIR}}/merge_$JOBID.out"/>
+    <stderr URL="file:{{LOGDIR}}/merge_$JOBID.err"/>
+
+</job>

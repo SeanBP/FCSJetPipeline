@@ -73,9 +73,12 @@ static const char *const kTrgLevelName[kNTrgLevels] = {"EM0", "EM1", "EM2", "JP0
 static const double kTrgThresholdGeV[kNTrgLevels] = {2.0, 3.5, 5.0, 4.0, 6.0, 8.0};
 inline bool IsJpLevel(int l) { return l >= kNEmLevels; }
 // Default cut factor per family: 1.3 for both (Sean 2026-11-05, for the 20%
-// pass; EM was 1.15 for a few hours). At 1.3 the turn-on loss is <= 0.4% for
-// every trigger and gain period (trg_safety.txt), so a sharp cut in
-// simulation matches; 1.15 stays available (AnAsymmetry -fe 1.15). Run 22 scan (125 runs, TriggerPlayground/trg_eff_scan.cpp):
+// pass; EM was 1.15 for a few hours). At 1.3 the turn-on loss
+// (trg_safety.txt), jet-weighted over each gain period, is <= 0.4% for every
+// trigger; single run groups reach 1.5% (EM1, 23028001-23034017) and 1.1%
+// (EM0, 23035007-23037065), both wide turn-on fits from ~200 reference
+// events; JP <= 0.2% in every group. A sharp cut in simulation is then good
+// to about 1% for EM; 1.15 stays available (AnAsymmetry -fe 1.15). Run 22 scan (125 runs, TriggerPlayground/trg_eff_scan.cpp):
 // hardware-bit efficiency above 1.15 x threshold EM0 0.958, EM1 0.904, EM2
 // 0.98; JP0 0.976 with the slice 1.15-1.3 only 0.80-0.95 between 23027047
 // and 23066055, while JP >= 1.3 is 0.999 in every period.
@@ -93,7 +96,15 @@ inline bool IsJpBadRun(int run)
 static const double kEmCutFactor = 1.3;
 static const double kJpCutFactor = 1.3;
 inline double CutFactor(int level) { return IsJpLevel(level) ? kJpCutFactor : kEmCutFactor; }
-static const double kEmVetoMargin = 1.15;
+// EM HCal-veto margin: a jet counts only if its largest neighbouring HCal 4x4
+// <= ECal 4x4 / (4 x margin). 1.3 since 2026-11-05 (Sean: same number as the
+// cut factor, uniform): EM above 1.3 x threshold then fires 96.7% (EM0) /
+// 97.4% (EM1) before 23027047 and >= 99.6% later; 1.15 gave 90% early (the
+// online HCal/ECal ratio was ~1.4-1.5 x the offline one before 23027047;
+// 1.5 would give >= 99.7% everywhere). TriggerPlayground/trg_eff_scan.cpp
+// trg_veto_periods.png. Not stored in slices: changing it reruns AnHistograms
+// on the kept jet trees (submit_rehist.sh).
+static const double kEmVetoMargin = 1.3;
 static const int kNTrgSlices = 4;
 static const double kTrgSliceEdge[kNTrgSlices] = {1.15, 1.30, 1.45, 1.60};  // lower edges; the last runs to infinity
 static const char *const kTrgSliceSuffix[kNTrgSlices] = {"_t115", "_t130", "_t145", "_t160"};
