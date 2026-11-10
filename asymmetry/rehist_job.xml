@@ -25,6 +25,7 @@
 
         cp shared/* .
         cp asymmetry/AnConfig.h asymmetry/AnHistograms.cpp .
+        cp asymmetry/collins/CollinsConfig.h asymmetry/collins/CollinsHistograms.h .
 
         @ line_start = ${JOBINDEX} * {{NPERJOB}} + 1
         @ line_end = ${line_start} + {{NPERJOB}} - 1
@@ -70,6 +71,8 @@
             <File>file:./shared/FcsTrigSums.h</File>
             <File>file:./asymmetry/AnConfig.h</File>
             <File>file:./asymmetry/AnHistograms.cpp</File>
+            <File>file:./asymmetry/collins/CollinsConfig.h</File>
+            <File>file:./asymmetry/collins/CollinsHistograms.h</File>
         </Package>
     </SandBox>
 

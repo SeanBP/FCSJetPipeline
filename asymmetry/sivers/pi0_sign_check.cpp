@@ -14,7 +14,7 @@
 // constant (the sign is the question), --pol to change it.
 //
 // Usage: ./pi0_sign_check <jet file list> [P = 0.52]
-// Build: g++ -m64 -O2 pi0_sign_check.cpp VectorDict.cxx -o pi0_sign_check `root-config --cflags --libs` -std=c++11
+// Build (in asymmetry/sivers): g++ -m64 -O2 pi0_sign_check.cpp ../../shared/VectorDict.cxx -o pi0_sign_check -I.. -I../../shared `root-config --cflags --libs` -std=c++11
 
 #include <TChain.h>
 #include <TH1D.h>

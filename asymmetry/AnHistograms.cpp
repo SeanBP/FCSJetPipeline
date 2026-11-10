@@ -45,7 +45,23 @@
 // x_F vs the pair's invariant mass (no suffix: triggering jets at >= the
 // default factor x threshold (1.3); _t115: jets in 1.15-1.3;
 // _jponly, JP levels: jets at >= 1.3 in JP but not in EM, for an
-// EM + JP union), for a pi0 mass window chosen later.
+// EM + JP union), for a pi0 mass window chosen later. Every jet with
+// E <= sqrt(s)/2 and a leading-point pi0 probability (reco_pi0_lead_prob >= 0;
+// jet files from 2026-11-10 on) likewise fills
+//   h_xFP_<level>_<side>_<spin state>[_t115 | _comp | _jponly]
+// x_F vs P_lead, and h_abscosP_<level>[...] / h_xfsumP_<level>[...] (x_F vs
+// P_lead weighted with |cos phi| / x_F, summed over sides and spin states),
+// for P_lead ranges chosen later (AnAsymmetry -p). Without the branch they stay
+// empty and TNamed "plead_missing" is written. The Collins yields (h_xFg_*,
+// h_absg_*, h_xfsumg_*; TNamed "collins_missing" without their branches) are
+// filled in the same loop by collins/CollinsHistograms.h; see collins/README.md.
+// A_N vs the pi0 candidate's energy fraction: every jet with P_lead and z
+// (AnConfig.h kZCandPairMin), E <= sqrt(s)/2, default (no suffix) or _jponly, fills
+//   h_xFPz_<level>_<side>_<spin state>[_jponly]
+// (TH3D: x_F as h_xF_*, P_lead in 0-0.5-0.7-0.85-1, z in 10 bins to 1), and
+// h_abscosPz_<level>[_jponly] / h_xfsumPz_<level>[_jponly] (the same axes,
+// weighted with |cos phi| / x_F, summed over sides and spin states), for
+// AnAsymmetry -p ... -z.
 // Also written:
 //   h_cutflow                    jets (and events) at each cut
 //   h_events_<level>             events per spin state, by the highest listed
@@ -84,13 +100,15 @@
 // Output files of one run, or of a fill, add with hadd.
 //
 // Usage: ./AnHistograms <jet file list> <output.root>
-// Build: g++ -m64 -O2 AnHistograms.cpp VectorDict.cxx -o AnHistograms
+// Build: g++ -m64 -O2 AnHistograms.cpp VectorDict.cxx -o AnHistograms -Icollins
 //            `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11
+//        (the jobs copy collins/*.h next to it, so need no -Icollins)
 
 #include <TChain.h>
 #include <TFile.h>
 #include <TH1D.h>
 #include <TH2D.h>
+#include <TH3D.h>
 #include <TNamed.h>
 
 #include <cmath>
@@ -105,6 +123,7 @@
 #include "JetParameters.h"
 #include "VectorDict.h"
 #include "AnConfig.h"
+#include "CollinsHistograms.h"
 
 // The run number in a jet_output_<run>_<file>.root name, 0 if none
 static int RunFromFileName(const std::string &path)
@@ -234,6 +253,7 @@ int main(int argc, char **argv)
     std::vector<int> *nconst = 0, *c_jet = 0;
     Int_t from_points = -1;
     std::vector<float> *c_px = 0, *c_py = 0, *c_pz = 0, *c_e = 0;
+    std::vector<float> *plead = 0, *gup = 0, *zpair = 0, *pleadpair = 0, *z1 = 0;
     t.SetBranchAddress("Spin_config", &spin_config);
     t.SetBranchAddress("fcs_led", &led);
     t.SetBranchAddress("event_sqrt_s_gev", &sqrt_s);
@@ -278,6 +298,19 @@ int main(int argc, char **argv)
     t.SetBranchAddress("reco_const_py", &c_py);
     t.SetBranchAddress("reco_const_pz", &c_pz);
     t.SetBranchAddress("reco_const_E", &c_e);
+    const bool have_plead = t.GetBranch("reco_pi0_lead_prob") != 0;
+    if (have_plead) t.SetBranchAddress("reco_pi0_lead_prob", &plead);
+    else std::cerr << "Warning: no reco_pi0_lead_prob in the jet files; h_xFP_* stay empty" << std::endl;
+    const bool have_gup = t.GetBranch("reco_pi0_lead_gup") != 0 && t.GetBranch("reco_pi0_lead_zpair") != 0 && t.GetBranch("reco_pi0_lead_pair") != 0;
+    if (have_gup)
+    {
+        t.SetBranchAddress("reco_pi0_lead_gup", &gup); t.SetBranchAddress("reco_pi0_lead_zpair", &zpair);
+        t.SetBranchAddress("reco_pi0_lead_pair", &pleadpair);
+    }
+    else std::cerr << "Warning: no reco_pi0_lead_gup in the jet files; h_xFg_* stay empty" << std::endl;
+    const bool have_z = have_gup && t.GetBranch("reco_pi0_lead_z1") != 0;
+    if (have_z) t.SetBranchAddress("reco_pi0_lead_z1", &z1);
+    else std::cerr << "Warning: no reco_pi0_lead_z1 in the jet files; h_xFPz_* stay empty" << std::endl;
 
     TFile out(argv[2], "RECREATE");
     // [sample][EM tag][e]: samples SampSuffix(), EM tags for JP levels
@@ -289,6 +322,12 @@ int main(int argc, char **argv)
     // >= the default factor in JP that are not >= the default factor in EM (for an EM +
     // JP union of [0] without double counting)
     static TH2D *h_m[4][kNTrgLevels][kNSides][kNSpinStates];
+    // x_F vs P_lead, the same four samples as h_m, every jet with E <= sqrt(s)/2
+    static TH2D *h_p[4][kNTrgLevels][kNSides][kNSpinStates], *h_pcos[4][kNTrgLevels], *h_pxfs[4][kNTrgLevels];
+    // Collins (collins/CollinsHistograms.h): sample 0 default, 1 _jponly
+    static CollinsHistograms collins;
+    // A_N vs P_lead class vs z: [0] default, [1] _jponly
+    static TH3D *h_pz[2][kNTrgLevels][kNSides][kNSpinStates], *h_pzcos[2][kNTrgLevels], *h_pzxfs[2][kNTrgLevels];
     const char *const msfx[4] = {"", "_t115", kCompSuffix, "_jponly"};
     TH1D *h_events[kNTrgLevels], *h_pt[kNTrgLevels], *h_ptraw[kNTrgLevels], *h_ratio[kNTrgLevels];
     for (int l = 0; l < kNTrgLevels; l++)
@@ -324,7 +363,31 @@ int main(int argc, char **argv)
                 {
                     TString name = TString::Format("h_xFm_%s_%s_%s", kTrgLevelName[l], kSideName[s], kSpinStateName[p]) + msfx[m];
                     h_m[m][l][s][p] = new TH2D(name, name + ";x_{F};M_{#gamma#gamma} (GeV)", kNXfBins, kXfMin, kXfMax, kNMassBins, kMassMin, kMassMax);
+                    name = TString::Format("h_xFP_%s_%s_%s", kTrgLevelName[l], kSideName[s], kSpinStateName[p]) + msfx[m];
+                    h_p[m][l][s][p] = new TH2D(name, name + ";x_{F};P_{lead}", kNXfBins, kXfMin, kXfMax, kNPleadBins, kPleadMin, kPleadMax);
                 }
+            TString name = TString::Format("h_abscosP_%s", kTrgLevelName[l]) + msfx[m];
+            h_pcos[m][l] = new TH2D(name, name + ";x_{F};P_{lead}", kNXfBins, kXfMin, kXfMax, kNPleadBins, kPleadMin, kPleadMax);
+            name = TString::Format("h_xfsumP_%s", kTrgLevelName[l]) + msfx[m];
+            h_pxfs[m][l] = new TH2D(name, name + ";x_{F};P_{lead}", kNXfBins, kXfMin, kXfMax, kNPleadBins, kPleadMin, kPleadMax);
+            if (m != 0 && m != 3) continue;
+            const int mg = m == 0 ? 0 : 1;
+            {
+                double xa[kNXfBins + 1], za[kNZBinsA + 1];
+                for (int i = 0; i <= kNXfBins; i++) xa[i] = kXfMin + i * (kXfMax - kXfMin) / kNXfBins;
+                for (int i = 0; i <= kNZBinsA; i++) za[i] = i * kZMaxA / kNZBinsA;
+                for (int s = 0; s < kNSides; s++)
+                    for (int p = 0; p < kNSpinStates; p++)
+                    {
+                        TString zn = TString::Format("h_xFPz_%s_%s_%s", kTrgLevelName[l], kSideName[s], kSpinStateName[p]) + msfx[m];
+                        h_pz[mg][l][s][p] = new TH3D(zn, zn + ";x_{F};P_{lead};z", kNXfBins, xa, kNPleadClsZ, kPleadEdgesZ, kNZBinsA, za);
+                    }
+                TString zn = TString::Format("h_abscosPz_%s", kTrgLevelName[l]) + msfx[m];
+                h_pzcos[mg][l] = new TH3D(zn, zn + ";x_{F};P_{lead};z", kNXfBins, xa, kNPleadClsZ, kPleadEdgesZ, kNZBinsA, za);
+                zn = TString::Format("h_xfsumPz_%s", kTrgLevelName[l]) + msfx[m];
+                h_pzxfs[mg][l] = new TH3D(zn, zn + ";x_{F};P_{lead};z", kNXfBins, xa, kNPleadClsZ, kPleadEdgesZ, kNZBinsA, za);
+            }
+            collins.Book(mg, l, msfx[m]);
         }
         h_events[l] = new TH1D(TString::Format("h_events_%s", kTrgLevelName[l]), ";spin state;events", kNSpinStates, 0, kNSpinStates);
         for (int p = 0; p < kNSpinStates; p++) h_events[l]->GetXaxis()->SetBinLabel(p + 1, kSpinStateName[p]);
@@ -537,6 +600,49 @@ int main(int argc, char **argv)
                 if (jp_dflt && !em_dflt) h_m[3][jpL[j]][side][spin]->Fill(xf, mass[j]);
                 if (comp) h_m[2][event_jl][side][spin]->Fill(xf, mass[j]);
             }
+            // x_F vs P_lead yields (E <= sqrt(s)/2), the same samples
+            const double pl = have_plead && j < plead->size() ? (*plead)[j] : -1;
+            if (pl >= 0 && !hi)
+            {
+                auto pfill = [&](int m, int l)
+                {
+                    h_p[m][l][side][spin]->Fill(xf, pl);
+                    h_pcos[m][l]->Fill(xf, pl, acos_);
+                    h_pxfs[m][l]->Fill(xf, pl, xf);
+                };
+                if (em_on) pfill(em_dflt ? 0 : 1, emL[j]);
+                if (jp_on) pfill(jp_dflt ? 0 : 1, jpL[j]);
+                if (jp_dflt && !em_dflt) pfill(3, jpL[j]);
+                if (comp) pfill(2, event_jl);
+            }
+            // A_N vs P_lead vs the pi0 candidate's z: default jets and JP-not-EM (_jponly)
+            if (have_z && pl >= 0 && !hi)
+            {
+                const double lp = (*pleadpair)[j], zp = (*zpair)[j], zl = (*z1)[j];
+                const double zc = (lp >= kZCandPairMin && zp >= 0) ? zp : zl;
+                if (zc >= 0)
+                {
+                    auto zfill = [&](int mg, int l)
+                    {
+                        h_pz[mg][l][side][spin]->Fill(xf, pl, zc);
+                        h_pzcos[mg][l]->Fill(xf, pl, zc, acos_);
+                        h_pzxfs[mg][l]->Fill(xf, pl, zc, xf);
+                    };
+                    if (em_dflt) zfill(0, emL[j]);
+                    if (jp_dflt) zfill(0, jpL[j]);
+                    if (jp_dflt && !em_dflt) zfill(1, jpL[j]);
+                }
+            }
+            // Collins yields: default jets (EM and JP levels) and JP-not-EM (_jponly)
+            const double gg = have_gup && j < gup->size() ? (*gup)[j] : -9;
+            const double plp = have_gup && j < pleadpair->size() ? (*pleadpair)[j] : -1;
+            if (CollinsHistograms::Has(gg, plp) && !hi)
+            {
+                const double zz = (*zpair)[j];
+                if (em_dflt) collins.Fill(0, emL[j], side, spin, xf, gg, zz, plp);
+                if (jp_dflt) collins.Fill(0, jpL[j], side, spin, xf, gg, zz, plp);
+                if (jp_dflt && !em_dflt) collins.Fill(1, jpL[j], side, spin, xf, gg, zz, plp);
+            }
             // QA: default triggering jets ("sel", by the EM level, else the JP level) and companions ("comp")
             const int st = comp ? 2 : dflt ? 1 : -1;
             if (st < 0) continue;
@@ -557,6 +663,9 @@ int main(int argc, char **argv)
     for (std::set<int>::const_iterator r = runs.begin(); r != runs.end(); ++r) rs << (r == runs.begin() ? "" : " ") << *r;
     TNamed("runs", rs.str().c_str()).Write();
     TNamed("spin_convention", kSpinConventionTag).Write();
+    if (!have_plead) TNamed("plead_missing", "jet files without reco_pi0_lead_prob: h_xFP_* empty").Write();
+    if (!have_gup) TNamed("collins_missing", "jet files without reco_pi0_lead_gup: h_xFg_* empty").Write();
+    if (!have_z) TNamed("pz_missing", "jet files without reco_pi0_lead_z1: h_xFPz_* empty").Write();
     TNamed("trigger_rule", TString::Format("trigger values (reco_trg_*), slices from %.2f, default factor EM %.2f JP %.2f, EM veto margin %.2f", kTrgSliceEdge[0], kEmCutFactor, kJpCutFactor, kEmVetoMargin).Data()).Write();
     out.Write();
     printf("AnHistograms: %lld events, runs %s\n", n, rs.str().c_str());

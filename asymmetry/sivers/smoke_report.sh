@@ -49,9 +49,13 @@ OUTDIR="$(cd "$1" && pwd)"
 GOOD="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
 [ -d "${OUTDIR}/hists" ] && [ -f "$GOOD" ] || { sed -n '2,24p' "$0"; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# a file of this script's directory, else of the one above (repo layout:
+# asymmetry/sivers/ with the pass-level files in asymmetry/; a frozen report
+# code directory has them all side by side)
+src() { if [ -e "${HERE}/$1" ]; then echo "${HERE}/$1"; else echo "${HERE}/../$1"; fi; }
 REP="${OUTDIR}/${3:-report}"
 mkdir -p "${REP}/build"
-cp "${HERE}"/{AnAsymmetry.cpp,AnPlots.cpp,AnConfig.h,mgg_peak.C} "${REP}/build/"
+cp "$(src AnAsymmetry.cpp)" "$(src AnPlots.cpp)" "$(src AnConfig.h)" "$(src mgg_peak.C)" "${REP}/build/"
 find -L "${OUTDIR}/hists" -maxdepth 1 -name 'an_hists_*.root' -mmin +10 | sort > "${REP}/yields.list"
 # jobs submitted so far, over all batches of the pass
 NJOBS=$(cat "${OUTDIR}"/run_params_*.txt 2>/dev/null | awk -F= '$1 == "nProcesses" && $2 > 0 { n += $2 } END { if (n) print n }')
@@ -65,16 +69,16 @@ container() {
 
 if [ -z "${SMOKE_PLOTS_ONLY}" ]; then
 container "g++ -m64 -O2 build/AnAsymmetry.cpp -o build/AnAsymmetry \`root-config --cflags --libs\` -std=c++11 && g++ -m64 -O2 build/AnPlots.cpp -o build/AnPlots \`root-config --cflags --libs\` -std=c++11"
-container "./build/AnAsymmetry -r yields.list ${HERE}/run22_polarization.txt an.root" > "${REP}/an_asymmetry.log"
+container "./build/AnAsymmetry -r yields.list $(src run22_polarization.txt) an.root" > "${REP}/an_asymmetry.log"
 grep -A20 "^all, all photon classes" "${REP}/an_asymmetry.log" || true
-container "./build/AnAsymmetry -J -r yields.list ${HERE}/run22_polarization.txt an_union.root" > "${REP}/an_asymmetry_union.log"
+container "./build/AnAsymmetry -J -r yields.list $(src run22_polarization.txt) an_union.root" > "${REP}/an_asymmetry_union.log"
 # two-photon jets in vs out of the pi0 mass window (0.5-1.5 x the fitted peak)
 container "root -b -q -l 'build/mgg_peak.C(\"yields.list\",\"mgg_peak.png\")'" > "${REP}/mgg_peak.log" 2>&1
 PEAK=$(sed -n 's/^peak=//p' "${REP}/mgg_peak.log" | tail -1)
 echo "pi0 peak: ${PEAK} GeV"
 if [ -n "$PEAK" ] && [ "$PEAK" != "0" ]; then
-    container "./build/AnAsymmetry -J -m in:${PEAK} -r yields.list ${HERE}/run22_polarization.txt an_mass_in.root" > "${REP}/an_asymmetry_mass_in.log"
-    container "./build/AnAsymmetry -J -m out:${PEAK} -r yields.list ${HERE}/run22_polarization.txt an_mass_out.root" > "${REP}/an_asymmetry_mass_out.log"
+    container "./build/AnAsymmetry -J -m in:${PEAK} -r yields.list $(src run22_polarization.txt) an_mass_in.root" > "${REP}/an_asymmetry_mass_in.log"
+    container "./build/AnAsymmetry -J -m out:${PEAK} -r yields.list $(src run22_polarization.txt) an_mass_out.root" > "${REP}/an_asymmetry_mass_out.log"
 fi
 else
     # SMOKE_PLOTS_ONLY=1: an*.root, an.txt and mgg_peak.log are already in the
@@ -89,7 +93,7 @@ fi
 if [ -n "${SMOKE_PLOTS_ONLY}" ]; then echo "report plots redone in ${REP}"; exit 0; fi
 container "./build/AnPlots yields.list plots" > "${REP}/anplots.log" 2>&1 || { tail "${REP}/anplots.log"; exit 1; }
 
-"${HERE}/estimate_resources.py" "${OUTDIR}/timing" --runs "${GOOD}" > "${REP}/resources.txt"
+"$(src estimate_resources.py)" "${OUTDIR}/timing" --runs "${GOOD}" > "${REP}/resources.txt"
 cat "${REP}/resources.txt"
 
 REQ=$(grep '^request_id=' "${OUTDIR}"/run_params_*.txt | head -1 | cut -d= -f2)

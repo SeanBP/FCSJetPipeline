@@ -7,12 +7,42 @@ of the errors to the full sample, and the sizing study that extrapolates the
 job's wall time, memory, scratch and output to the full sample. Unfolding is
 not included.
 
+## Layout: A_N (Sivers-type) and Collins
+
+One condor pass fills both analyses' yields: AnHistograms.cpp has one event
+loop and writes one yield file per job.
+
+- **The pass (both analyses), in this directory:** the condor job
+  (an_job.xml, submit_an_job.sh), merging (merge_hists_job.xml,
+  submit_merge_hists.sh, hist_entries.C), re-histogramming (rehist_job.xml,
+  submit_rehist.sh), batch_feeder.sh, the catalog / run / polarization tables,
+  AnConfig.h (cuts, trigger levels, spin states, binning), AnHistograms.cpp
+  (one loop filling both analyses' yields: h_xF_* by photon class; h_xFm_* pi0
+  mass window; h_xFP_* leading-point pi0 probability P_lead; h_xFPz_* P_lead x
+  pi0-candidate energy fraction z; and the Collins yields via collins/),
+  AnPlots.cpp and anplots_job.sh (yield and sanity QA), estimate_resources.py.
+- **A_N (Sivers-type, jet left-right asymmetry):** sivers/. AnAsymmetry.cpp
+  (A_N; -m mass window, -p P_lead range, -z z range), plot_an*.C,
+  plot_pol_cos.C, mgg_peak.C, project_errors.py, the report scripts
+  (smoke_report.sh, submit_report_job.sh, report_job.sh, replot_report.sh,
+  an_pass_job.sh, mgg_job.sh) and checks (an_toy_closure.cpp,
+  pi0_sign_check.cpp). The scripts take the pass-level files (AnConfig.h,
+  AnPlots.cpp, the tables) from one level up, or from beside them in a frozen
+  report code directory.
+- **Collins (azimuthal modulation of the leading pi0 candidate around the
+  jet axis):** collins/. CollinsConfig.h (binning), CollinsHistograms.h (the
+  h_xFg_* yields, booked and filled from AnHistograms.cpp), README.md (method).
+  The extraction program is still to be written; it reads the same yield files.
+
+The per-jet quantities both use come from the jet files: shared/Pi0Prob.h and
+Pi0ProbBranches.h (reco_pi0_*), filled by data_to_jet/RecoJets.cpp.
+
 ## Smoke test (a sample spread over Run 22)
 
 ```
 ./make_smoke_list.py <outdir>/<prefix> --runs 60 --files 40
 ./submit_an_job.sh -f <outdir>/<prefix>.list -o <outdir> -l <prefix> -k 1 -J 1
-./smoke_report.sh <outdir> <outdir>/<prefix>_good_runs.txt [report_<date>]   # any time: uses the finished jobs
+./sivers/smoke_report.sh <outdir> <outdir>/<prefix>_good_runs.txt [report_<date>]   # any time: uses the finished jobs
 ```
 
 - `make_smoke_list.py`: the good runs (catalog analysis runs that pass the
@@ -78,7 +108,7 @@ calibrated jet files (about 0.3 MB per MuDst) only for every N-th job with
 | 3. UE subtraction | `underlying_event/UnderlyingEvent` | in-event eta-weighted side wedges: each jet's own event, its eta band from 2R out to 150° in azimuth |
 | 4. JES calibration | `jet_calibration/ApplyCorrections_em_only` | calibrates the UE-subtracted energy: `reco_E_corr = (reco_E - reco_ue_E) / scale` |
 | 5. A_N histograms | `AnHistograms` | yields vs x_F (`reco_x_F_corr`) and sanity distributions |
-| 6. A_N (offline) | `AnAsymmetry -r`, `plot_an.C`, `AnPlots`, `project_errors.py` | per-run yield files: flagged bad runs dropped (D. Kapukchyan's list), per-run polarization, A_N with statistical errors; yield and sanity plots; projected errors |
+| 6. A_N (offline) | `sivers/AnAsymmetry -r`, `sivers/plot_an.C`, `AnPlots`, `sivers/project_errors.py` | per-run yield files: flagged bad runs dropped (D. Kapukchyan's list), per-run polarization, A_N with statistical errors; yield and sanity plots; projected errors |
 
 Steps 1-3 run file by file: each MuDst is deleted once its SimpleTree is
 made, and each SimpleTree once its jets and UE are done, so a job's scratch
@@ -163,7 +193,7 @@ Step 6 runs on the job outputs, not in the job.
     the pair mass and orientation.
   - The classes are kept apart so they can be combined when A_N is formed.
     Files of one run or fill add with `hadd`.
-- **`AnAsymmetry.cpp`**: A_N from the yields (not part of the job):
+- **`sivers/AnAsymmetry.cpp`**: A_N from the yields (not part of the job):
   ```
   ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]
   ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] -r <yield file list> run22_polarization.txt <out.root> [rebin = 2] [list | none] [flagged | all]
@@ -199,7 +229,7 @@ Step 6 runs on the job outputs, not in the job.
     level "all" is the final result.
   - Also writes `<out>.txt`: every point with its statistical error, jets,
     <|cos phi|> and <P>.
-- **`plot_an.C`**: the final A_N vs x_F (blue at x_F > 0, yellow at x_F < 0,
+- **`sivers/plot_an.C`**: the final A_N vs x_F (blue at x_F > 0, yellow at x_F < 0,
   statistical errors only), `.png` and `.pdf`; optional error scale and
   points at zero for a projection:
   ```
@@ -223,11 +253,11 @@ Step 6 runs on the job outputs, not in the job.
   EM level), per photon class and per level, and per-run trends (events,
   jets per event, x > 0 / x < 0, spin-state fractions, EM level mix, mean
   energy; `runs.txt`). PNGs and one `plots.pdf`.
-- **`project_errors.py`**: `./project_errors.py <outdir> <an.txt> <good_runs.txt>`:
+- **`sivers/project_errors.py`**: `./sivers/project_errors.py <outdir> <an.txt> <good_runs.txt>`:
   stat_full = stat x sqrt(events processed / good-run events), from the
   catalog events of the files the jobs processed; writes
   `<an>_projected.txt` and prints the factor for `plot_an.C`'s `err_scale`.
-- **`an_toy_closure.cpp`**: toy jets with injected blue and yellow A_N,
+- **`sivers/an_toy_closure.cpp`**: toy jets with injected blue and yellow A_N,
   defined as left = spin x beam direction, unequal spin-state luminosities
   and a side-dependent efficiency; AnAsymmetry recovers both signs and sizes
   (0.05 bins: chi2 37.4 / 40 on 2e7 jets; two runs with different P through

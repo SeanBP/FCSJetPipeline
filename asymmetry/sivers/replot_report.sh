@@ -22,8 +22,12 @@ set -e
 REP="$(cd "$1" && pwd)"
 [ -f "${REP}/an.root" ] && [ -f "${REP}/an.txt" ] && [ -f "${REP}/projection.log" ] || { sed -n '2,19p' "$0"; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# a file of this script's directory, else of the one above (repo layout:
+# asymmetry/sivers/ with the pass-level files in asymmetry/; a frozen report
+# code directory has them all side by side)
+src() { if [ -e "${HERE}/$1" ]; then echo "${HERE}/$1"; else echo "${HERE}/../$1"; fi; }
 mkdir -p "${REP}/build"
-cp "${HERE}"/{plot_an.C,plot_an_means.C,plot_an_mass.C} "${REP}/build/"
+cp "$(src plot_an.C)" "$(src plot_an_means.C)" "$(src plot_an_mass.C)" "${REP}/build/"
 
 container() {
     singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 ${SMOKE_BIND:+-B ${SMOKE_BIND}} \
@@ -63,7 +67,7 @@ AX="${AN_YLO},${AN_YHI},${AN_XR}"
 container "tcsh plot_an.csh" > "${REP}/plot_an.log" 2>&1 || { tail "${REP}/plot_an.log"; exit 1; }
 # the yield and sanity pages (plots/), from the sums AnPlots saved when it read the yields
 if [ -f "${REP}/plots/qa_sums.root" ]; then
-    cp "${HERE}"/{AnPlots.cpp,AnConfig.h} "${REP}/build/"
+    cp "$(src AnPlots.cpp)" "$(src AnConfig.h)" "${REP}/build/"
     container "g++ -m64 -O2 build/AnPlots.cpp -o build/AnPlots \`root-config --cflags --libs\` -std=c++11 && ./build/AnPlots -s plots/qa_sums.root plots" > "${REP}/anplots_replot.log" 2>&1 \
         || { tail "${REP}/anplots_replot.log"; exit 1; }
     echo "plots/ redrawn from plots/qa_sums.root"

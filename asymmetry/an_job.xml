@@ -52,6 +52,7 @@
         cp underlying_event/* .
         cp jet_calibration/ApplyCorrections_em_only.cpp .
         cp asymmetry/AnConfig.h asymmetry/AnHistograms.cpp .
+        cp asymmetry/collins/CollinsConfig.h asymmetry/collins/CollinsHistograms.h .
         cp asymmetry/jes/{{CALIB_NAME}} calib.json
         cp -r data_to_jet/hcal_gain_corrections .
 
@@ -235,6 +236,8 @@
             <File>file:./jet_calibration/ApplyCorrections_em_only.cpp</File>
             <File>file:./asymmetry/AnConfig.h</File>
             <File>file:./asymmetry/AnHistograms.cpp</File>
+            <File>file:./asymmetry/collins/CollinsConfig.h</File>
+            <File>file:./asymmetry/collins/CollinsHistograms.h</File>
             <File>file:./asymmetry/jes/{{CALIB_NAME}}</File>
         </Package>
     </SandBox>

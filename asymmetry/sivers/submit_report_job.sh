@@ -11,12 +11,18 @@ GOOD="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
 NAME="${3:-report}"; MEM="${4:-1000}"
 [ -d "$OUTDIR/hists" ] && [ -f "$GOOD" ] || { sed -n '2,8p' "$0"; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# a file of this script's directory, else of the one above (repo layout:
+# asymmetry/sivers/ with the pass-level files in asymmetry/; a frozen report
+# code directory has them all side by side)
+src() { if [ -e "${HERE}/$1" ]; then echo "${HERE}/$1"; else echo "${HERE}/../$1"; fi; }
 CODE="$OUTDIR/${NAME}_code"
 rm -rf "$CODE"; mkdir -p "$CODE"
-cp "$HERE"/{smoke_report.sh,report_job.sh,AnAsymmetry.cpp,AnPlots.cpp,AnConfig.h,plot_an.C,plot_an_means.C,mgg_peak.C,plot_an_mass.C,replot_report.sh,project_errors.py,estimate_resources.py,run22_polarization.txt,catalog_runs_local.txt} "$CODE/"
+for f in smoke_report.sh report_job.sh AnAsymmetry.cpp AnPlots.cpp AnConfig.h plot_an.C plot_an_means.C mgg_peak.C plot_an_mass.C replot_report.sh project_errors.py estimate_resources.py run22_polarization.txt catalog_runs_local.txt; do
+    cp "$(src $f)" "$CODE/"
+done
 # the repository's other files the report code includes or reads
-for f in $(grep -h -o '#include "[^"]*"' "$HERE"/{AnAsymmetry.cpp,AnPlots.cpp,AnConfig.h} | sed 's/#include "\(.*\)"/\1/' | sort -u); do
-    [ -f "$HERE/$f" ] && cp "$HERE/$f" "$CODE/"
+for f in $(grep -h -o '#include "[^"]*"' "$(src AnAsymmetry.cpp)" "$(src AnPlots.cpp)" "$(src AnConfig.h)" | sed 's/#include "\(.*\)"/\1/' | sort -u); do
+    [ -f "$(src $f)" ] && cp "$(src $f)" "$CODE/"
 done
 NFILES=$(find "$OUTDIR/hists" -maxdepth 1 -name 'an_hists_*.root' | wc -l)
 # requests that fit a freed 1 GB farm slot: a job asking for more waits behind

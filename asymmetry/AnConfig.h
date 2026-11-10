@@ -229,4 +229,21 @@ static const char *const kCompSuffix = "_comp";
 static const int kNMassBins = 40;
 static const double kMassMin = 0.0, kMassMax = 1.0;
 
+// ------------------ Leading-point pi0 probability ------------------
+// x_F vs P_lead yields (h_xFP_*; reco_pi0_lead_prob, shared/Pi0ProbBranches.h)
+// for P_lead ranges chosen later (AnAsymmetry -p); 0.05 bins
+static const int kNPleadBins = 20;
+static const double kPleadMin = 0.0, kPleadMax = 1.0;
+
+// x_F vs P_lead vs the pi0 candidate's jet energy fraction z (h_xFPz_*): z is
+// the chosen pair's (reco_pi0_lead_zpair) when P_leadpair >= kZCandPairMin (a
+// resolved pi0 candidate), else the leading point's alone (reco_pi0_lead_z1:
+// a merged or partner-lost pi0, or a lone photon; 1 for one-point jets).
+// P_lead in the four classes below, z in 10 bins (the last holds z = 1).
+static const double kZCandPairMin = 0.5;
+static const int kNPleadClsZ = 4;
+static const double kPleadEdgesZ[kNPleadClsZ + 1] = {0.0, 0.5, 0.7, 0.85, 1.0001};
+static const int kNZBinsA = 10;
+static const double kZMaxA = 1.0001;
+
 #endif

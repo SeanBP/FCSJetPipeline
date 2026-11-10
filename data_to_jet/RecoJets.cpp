@@ -459,7 +459,7 @@ int main(int argc, char** argv) {
                         if (det != 0 && det != 1) continue;
                         pe.push_back(c.E()); ppx.push_back(c.px()); ppy.push_back(c.py()); ppz.push_back(c.pz());
                     }
-                    pi0b.Push(pe, ppx, ppy, ppz, jet.E(), use_points);
+                    pi0b.Push(pe, ppx, ppy, ppz, jet.E(), jet.px(), jet.py(), jet.pz(), use_points);
                 }
 
                 // trigger quantities and cone sums

@@ -59,6 +59,17 @@ struct Pi0ProbResult
     float best_r = 0;
     int best_i = -1, best_j = -1;
     float lead_pair = 0, lead = -1;  // P_leadpair, P_lead (-1: not computed)
+    // leading-point candidate pi0 pair: the leading (highest-energy) point and
+    // the partner whose pair mass is closest to the reconstructed pi0 peak at
+    // that pair energy (the calibration's S mean; 0.135 GeV without one).
+    // Indices are the caller's (constituent order); -1 / -1 values for n < 2.
+    int lead_i = -1, lead_partner = -1;
+    float lead_mgg = -1;      // pair mass, GeV
+    float lead_phih = -9;     // pair azimuth around the jet axis, rad (-pi, pi]; -9 if not computed (see Pi0LeadPair)
+    float lead_jt = -1;       // pair momentum transverse to the jet axis, GeV
+    float lead_gup = -9;      // sin(phi_S - phi_H) for spin up (+y): the Collins weight g; -9 if not computed
+    float lead_zpair = -1;    // pair energy / jet energy (the ejet passed in)
+    float lead_z1 = -1;       // leading point energy / jet energy (n >= 1; 1 for a one-point jet)
 };
 
 struct Pi0ProbCalib
@@ -320,12 +331,68 @@ inline Pi0ProbResult Pi0ProbFromRatios(const Pi0ProbCalib &c, const std::vector<
 // The probabilities for one jet. E, px, py, pz: its points (ECal point
 // constituents, any order; best_i/j index them), ejet: the jet energy the
 // prior is binned in (raw reco_E).
+// The leading-point candidate pair (see Pi0ProbResult): fills lead_i,
+// lead_partner, lead_mgg, lead_phih, lead_jt, lead_zpair for n >= 2.
+// Collins-type hadron-in-jet frame (jx, jy, jz = jet momentum): j = jet
+// direction; y' = (z x j)/|z x j|, the normal of the reaction plane spanned by
+// the beam (+z, the blue beam, the FCS side) and the jet; x' = y' x j, in the
+// reaction plane and perpendicular to the jet. With p = p_lead + p_partner,
+// phi_H = atan2(p.y', p.x') and j_T = |p - (p.j) j|. g = sin(phi_S - phi_H) with
+// phi_S = atan2(s.y', s.x') the azimuth of the spin-up direction s = +y in the
+// same frame: a geometric weight; for spin down the Collins modulation flips
+// sign (the asymmetry analysis splits jets by the sign of g and divides by
+// <|g|>, as left/right and <|cos phi|> for A_N).
+inline void Pi0LeadPair(const Pi0ProbCalib &c, const std::vector<double> &E, const std::vector<double> &px,
+                        const std::vector<double> &py, const std::vector<double> &pz, double ejet,
+                        double jx, double jy, double jz, Pi0ProbResult &res)
+{
+    const int n = (int)E.size();
+    if (n < 1) return;
+    int L = 0;
+    for (int i = 1; i < n; i++) if (E[i] > E[L]) L = i;
+    res.lead_z1 = ejet > 0 ? (float)(E[L] / ejet) : -1.f;
+    if (n < 2) { res.lead_i = L; return; }
+    double best = 1e30;
+    for (int j = 0; j < n; j++)
+    {
+        if (j == L) continue;
+        const double m = Pi0PairMass(E[L], px[L], py[L], pz[L], E[j], px[j], py[j], pz[j]), ep = E[L] + E[j];
+        const double mu = (c.ok && !c.sMean.empty()) ? c.sMean[Pi0ProbCalib::Bin(c.eS, ep)] : 0.135;
+        if (std::fabs(m - mu) < best)
+        {
+            best = std::fabs(m - mu);
+            res.lead_partner = j; res.lead_mgg = (float)m; res.lead_zpair = ejet > 0 ? (float)(ep / ejet) : -1.f;
+        }
+    }
+    res.lead_i = L;
+    const int j = res.lead_partner;
+    const double jn = std::sqrt(jx * jx + jy * jy + jz * jz);
+    if (!(jn > 0)) return;
+    const double ux = jx / jn, uy = jy / jn, uz = jz / jn;
+    double yx = -uy, yy = ux;  // z x j = (-j_y, j_x, 0)
+    const double yn = std::sqrt(yx * yx + yy * yy);
+    if (!(yn > 0)) return;     // jet along the beam: no reaction plane
+    yx /= yn; yy /= yn;
+    const double xx = yy * uz, xy = -yx * uz, xz = yx * uy - yy * ux;  // x' = y' x j (y'_z = 0)
+    const double hx = px[L] + px[j], hy = py[L] + py[j], hz = pz[L] + pz[j];
+    const double hl = hx * ux + hy * uy + hz * uz;
+    const double tx = hx - hl * ux, ty = hy - hl * uy, tz = hz - hl * uz;
+    res.lead_jt = (float)std::sqrt(tx * tx + ty * ty + tz * tz);
+    res.lead_phih = (float)std::atan2(tx * yx + ty * yy, tx * xx + ty * xy + tz * xz);
+    const double phis = std::atan2(yy, xy);  // s = (0, 1, 0): s.y' = y'_y, s.x' = x'_y
+    res.lead_gup = (float)std::sin(phis - res.lead_phih);
+}
+
+// jx, jy, jz: the jet's momentum, for the lead pair's frame (Pi0LeadPair);
+// leave them 0 to skip phi_H and j_T
 inline Pi0ProbResult Pi0Prob(const Pi0ProbCalib &c, const std::vector<double> &E, const std::vector<double> &px,
-                             const std::vector<double> &py, const std::vector<double> &pz, double ejet)
+                             const std::vector<double> &py, const std::vector<double> &pz, double ejet,
+                             double jx = 0, double jy = 0, double jz = 0)
 {
     Pi0ProbResult res;
     const int n = (int)E.size();
     res.npairs = n * (n - 1) / 2;
+    Pi0LeadPair(c, E, px, py, pz, ejet, jx, jy, jz, res);
     if (!c.ok) { res.status = kPi0ProbNoCalib; res.prob = res.logodds = res.lead_pair = res.lead = -1; return res; }
     if (n < 2)
     {

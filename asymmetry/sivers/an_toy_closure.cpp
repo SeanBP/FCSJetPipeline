@@ -15,7 +15,7 @@
 // AnAsymmetry's per-run polarization (-r).
 //
 // Usage: ./an_toy_closure <out_yields.root> [jets = 20000000] [P_blue = 0.55] [P_yellow = 0.50] [run = 1] [seed = 12345]
-// Build: g++ -m64 -O2 an_toy_closure.cpp -o an_toy_closure -I../shared `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11
+// Build: g++ -m64 -O2 an_toy_closure.cpp -o an_toy_closure -I.. -I../../shared `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11
 
 #include <TFile.h>
 #include <TH1D.h>

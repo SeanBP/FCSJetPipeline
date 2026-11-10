@@ -93,6 +93,23 @@
 // np2 rows are meaningful in this mode; it excludes -E, -C, -A, -V and factors
 // other than 1.3.
 //
+// Leading-point pi0 probability range (-p <lo>:<hi>). The np1 rows (and so
+// "all" and np12) then hold every jet with P_lead (reco_pi0_lead_prob) in
+// [lo, hi), from AnHistograms' x_F vs P_lead yields (h_xFP_*, E <= sqrt(s)/2,
+// jets at the default factor 1.3, -J union from _jponly): a 0.05 P_lead bin
+// counts if its centre is in the range. Their <|cos phi|> and <x_F> come from
+// h_abscosP_* / h_xfsumP_* of the same jets. The other photon-class rows are
+// empty in this mode. Same restrictions as -m (which it excludes); yield files
+// without h_xFP_* or with "plead_missing" (jet files before 2026-11-10) are
+// refused.
+//
+// Pi0 candidate energy fraction (-z <lo>:<hi>, with or without -p): the same
+// rows, from the x_F vs P_lead vs z yields (h_xFPz_*, h_abscosPz_*,
+// h_xfsumPz_*), jets with z in [lo, hi) (bins of 0.1 by centre; the last bin
+// holds z = 1, the one-point jets). z is the chosen pair's energy fraction when
+// P_leadpair >= 0.5, else the leading point's (AnConfig.h kZCandPairMin). With
+// -z, -p must use the P_lead class edges 0, 0.5, 0.7, 0.85, 1.
+//
 // Outputs: <out.root> with the graphs and TNamed "bad_runs" (-r), and
 // <out.root minus .root>.txt, the table of every point (level, photon class,
 // beam, x_F bin, <x_F>, A_N, stat error, jets, <|cos phi|>, <P>).
@@ -118,12 +135,14 @@
 //   with all photon classes summed; writes graphs
 //   gr_AN_<beam>_<level|all|allJP>_<photon class|all|np3plus|np12> (x_F > 0 blue, x_F < 0
 //   yellow) and gr_AN_<level|all|allJP>_<class|all> with both beams.
-// Build: g++ -m64 -O2 AnAsymmetry.cpp -o AnAsymmetry `root-config --cflags --libs` -std=c++11
+// Build: g++ -m64 -O2 AnAsymmetry.cpp -o AnAsymmetry -I.. `root-config --cflags --libs` -std=c++11
+//        (the report scripts copy AnConfig.h next to it, so need no -I..)
 
 #include <TFile.h>
 #include <TGraphAsymmErrors.h>
 #include <TH1D.h>
 #include <TH2D.h>
+#include <TH3D.h>
 #include <TNamed.h>
 #include <TSystem.h>
 #include <TDatime.h>
@@ -132,6 +151,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -190,6 +210,53 @@ struct Sums
     // -m: 0 off, 1 inside the mass window, 2 outside; np2 yields from h_xFm_*
     int mass_mode = 0;
     double mass_lo = 0, mass_hi = 0;
+    // -p: P_lead range [plead_lo, plead_hi); np1 rows = all jets in it, other classes empty
+    bool plead_mode = false, z_mode = false;
+    double plead_lo = 0, plead_hi = 1, z_lo = 0, z_hi = 1;
+    static bool StartsWith(const std::string &a, const char *b) { return a.compare(0, std::strlen(b), b) == 0; }
+    // -p: a yield (h_xF_<l>_<cls>_<side>_<spin>) or sum (h_abscos_ / h_xfsum_<l>_<cls>)
+    // of the jets in the P_lead range for cls np1, zero for the other classes
+    TH1D *ReadPlead(TFile &f, const std::string &name, bool jp_only)
+    {
+        TH1D *a = new TH1D((name + "_rdp").c_str(), "", kNXfBins, kXfMin, kXfMax);
+        a->SetDirectory(0);
+        const bool yield = StartsWith(name, "h_xF_");
+        if (!yield) a->Sumw2();
+        if (name.find("_np1") == std::string::npos) return a;
+        TString n(name.c_str());
+        const char *tag = z_mode ? "Pz_" : "P_";
+        if (yield) { n.ReplaceAll("h_xF_", TString("h_xF") + tag); n.ReplaceAll("_np1_", "_"); }
+        else { n.ReplaceAll("h_abscos_", TString("h_abscos") + tag); n.ReplaceAll("h_xfsum_", TString("h_xfsum") + tag); n.ReplaceAll("_np1", ""); }
+        if (jp_only) n += "_jponly";
+        if (z_mode)
+        {
+            TH3D *m3 = (TH3D *)f.Get(n);
+            if (!m3 || m3->GetNbinsX() != a->GetNbinsX()) { delete a; return 0; }
+            for (int by = 1; by <= m3->GetNbinsY(); by++)
+            {
+                const double c = m3->GetYaxis()->GetBinCenter(by);
+                if (c < plead_lo || c >= plead_hi) continue;
+                for (int bz = 1; bz <= m3->GetNbinsZ(); bz++)
+                {
+                    const double cz = m3->GetZaxis()->GetBinCenter(bz);
+                    if (cz < z_lo || cz >= z_hi) continue;
+                    for (int bx = 1; bx <= m3->GetNbinsX(); bx++) a->AddBinContent(bx, m3->GetBinContent(bx, by, bz));
+                }
+            }
+            a->SetEntries(a->Integral());
+            return a;
+        }
+        TH2D *m = (TH2D *)f.Get(n);
+        if (!m) { delete a; return 0; }
+        for (int by = 1; by <= m->GetNbinsY(); by++)
+        {
+            const double c = m->GetYaxis()->GetBinCenter(by);
+            if (c < plead_lo || c >= plead_hi) continue;
+            for (int bx = 1; bx <= m->GetNbinsX(); bx++) a->AddBinContent(bx, m->GetBinContent(bx, by));
+        }
+        a->SetEntries(a->Integral());
+        return a;
+    }
     bool InWindow(double m) const { return m >= mass_lo && m <= mass_hi; }
     // np2 yield of one (level, side, spin) from the x_F vs mass yields
     TH1D *ReadMass(TFile &f, const std::string &name, bool jp_only)
@@ -267,6 +334,8 @@ struct Sums
     {
         if (mass_mode && name.compare(0, 5, "h_xF_") == 0 && name.find("_np2_") != std::string::npos)
             return ReadMass(f, name, jp_only);
+        if (plead_mode && (StartsWith(name, "h_xF_") || StartsWith(name, "h_abscos_") || StartsWith(name, "h_xfsum_")))
+            return ReadPlead(f, name, jp_only);
         TH1D *a = 0;
         const std::vector<std::string> sfx = Suffixes(IsJpName(name), jp_only);
         for (size_t c = 0; c < sfx.size(); c++)
@@ -299,6 +368,16 @@ struct Sums
         if (mass_mode && (old_labels || !f.Get("h_xFm_EM0_xpos_BuYu")))
         {
             std::cerr << "ERROR: " << f.GetName() << " has no h_xFm_* (or old spin labels); -m needs yield files from 2026-11-05 on" << std::endl;
+            return false;
+        }
+        if (z_mode && (!f.Get("h_xFPz_EM0_xpos_BuYu") || f.Get("pz_missing")))
+        {
+            std::cerr << "ERROR: " << f.GetName() << " has no filled h_xFPz_* (jet files without reco_pi0_lead_z1, or an older AnHistograms); -z needs yield files from 2026-11-10 on" << std::endl;
+            return false;
+        }
+        if (plead_mode && (old_labels || !f.Get("h_xFP_EM0_xpos_BuYu") || f.Get("plead_missing")))
+        {
+            std::cerr << "ERROR: " << f.GetName() << " has no filled h_xFP_* (jet files without reco_pi0_lead_prob, or an older AnHistograms); -p needs yield files from 2026-11-10 on" << std::endl;
             return false;
         }
         if (old_labels) n_old_labels++;
@@ -456,7 +535,7 @@ int main(int argc, char **argv)
     // "all"; -V: add the EM jets failing only the veto margin
     bool hi_e = false, comp_only = false, comp_add = false, jp_in_all = false, add_veto = false;
     double factor_em = kEmCutFactor, factor_jp = kJpCutFactor;
-    std::string mass_opt;
+    std::string mass_opt, plead_opt, z_opt;
     {
         int m = 1;
         for (int i = 1; i < argc; i++)
@@ -471,6 +550,8 @@ int main(int argc, char **argv)
             if (a == "-fe" && i + 1 < argc) { factor_em = std::atof(argv[++i]); continue; }
             if (a == "-fj" && i + 1 < argc) { factor_jp = std::atof(argv[++i]); continue; }
             if (a == "-m" && i + 1 < argc) { mass_opt = argv[++i]; continue; }
+            if (a == "-p" && i + 1 < argc) { plead_opt = argv[++i]; continue; }
+            if (a == "-z" && i + 1 < argc) { z_opt = argv[++i]; continue; }
             argv[m++] = argv[i];
         }
         argc = m;
@@ -497,7 +578,9 @@ int main(int argc, char **argv)
                   << "  -fe / -fj: the factor for EM levels / JP levels alone (default 1.3 for both)\n"
                   << "  -J: \"all\" = EM + JP union, each jet once (default: EM levels only; allJP is always written)\n"
                   << "  -V: add EM jets that failed only the HCal-veto margin\n"
-                  << "  -m in:<peak> | out:<peak>: np2 rows = two-photon jets with pair mass inside / outside 0.5-1.5 x <peak> GeV" << std::endl;
+                  << "  -m in:<peak> | out:<peak>: np2 rows = two-photon jets with pair mass inside / outside 0.5-1.5 x <peak> GeV\n"
+                  << "  -p <lo>:<hi>: np1 rows (and all, np12) = every jet with leading-point pi0 probability P_lead in [lo, hi)\n"
+                  << "  -z <lo>:<hi>: the same rows, jets whose pi0 candidate carries a jet energy fraction z in [lo, hi) (with -p: class edges 0, 0.5, 0.7, 0.85, 1)" << std::endl;
         return 1;
     }
     const int rebin = argc > 5 ? std::atoi(argv[5]) : 2;
@@ -533,6 +616,36 @@ int main(int argc, char **argv)
         }
         sums.mass_lo = 0.5 * peak; sums.mass_hi = 1.5 * peak;
         mass_note = TString::Format("np2 = two-photon jets with M_gg %s 0.5-1.5 x %.4f GeV (bins %.3f-%.3f GeV); <|cos|>, <x_F>, P of all np2", w == "in" ? "inside" : "outside", peak, lo, hi).Data();
+        std::printf("AnAsymmetry: %s\n", mass_note.c_str());
+    }
+    if (!z_opt.empty() && plead_opt.empty()) plead_opt = "0:1";
+    if (!plead_opt.empty())
+    {
+        const size_t c = plead_opt.find(':');
+        const double lo = std::atof(plead_opt.substr(0, c).c_str()), hi = c == std::string::npos ? -1 : std::atof(plead_opt.substr(c + 1).c_str());
+        if (c == std::string::npos || !(lo >= 0 && hi > lo && hi <= 1.0 + 1e-9)) { std::cerr << "ERROR: -p takes <lo>:<hi> with 0 <= lo < hi <= 1" << std::endl; return 1; }
+        if (!mass_opt.empty()) { std::cerr << "ERROR: -p and -m exclude each other" << std::endl; return 1; }
+        if (hi_e || comp_only || comp_add || add_veto || std::fabs(factor_em - 1.3) > 1e-6 || std::fabs(factor_jp - 1.3) > 1e-6)
+        {
+            std::cerr << "ERROR: -p works with the default jets only (no -E, -C, -A, -V; factors 1.3)" << std::endl;
+            return 1;
+        }
+        sums.plead_mode = true;
+        sums.plead_lo = lo; sums.plead_hi = hi + (hi >= 1.0 - 1e-9 ? 1e-6 : 0);
+        mass_note = TString::Format("np1 rows (all, np12) = every jet with P_lead in [%.2f, %.2f%s (0.05 bins by centre); other photon classes empty", lo, hi, hi >= 1.0 - 1e-9 ? "]" : ")").Data();
+        if (!z_opt.empty())
+        {
+            const size_t cz = z_opt.find(':');
+            const double zl = std::atof(z_opt.substr(0, cz).c_str()), zh = cz == std::string::npos ? -1 : std::atof(z_opt.substr(cz + 1).c_str());
+            if (cz == std::string::npos || !(zl >= 0 && zh > zl && zh <= 1.0 + 1e-9)) { std::cerr << "ERROR: -z takes <lo>:<hi> with 0 <= lo < hi <= 1" << std::endl; return 1; }
+            bool elo = false, ehi = false;
+            for (int k = 0; k <= kNPleadClsZ; k++) { elo |= std::fabs(kPleadEdgesZ[k] - lo) < 1e-6; ehi |= std::fabs(std::min(kPleadEdgesZ[k], 1.0) - hi) < 1e-6; }
+            if (!elo || !ehi) { std::cerr << "ERROR: with -z, -p must use the P_lead class edges 0, 0.5, 0.7, 0.85, 1" << std::endl; return 1; }
+            sums.z_mode = true;
+            sums.z_lo = zl; sums.z_hi = zh + (zh >= 1.0 - 1e-9 ? 1e-3 : 0);
+            mass_note += TString::Format("; pi0 candidate z in [%.2f, %.2f%s", zl, zh, zh >= 1.0 - 1e-9 ? "] (z = 1: one-point jets)" : ")").Data();
+            std::printf("AnAsymmetry: pi0 candidate z in [%.2f, %.2f%s\n", zl, zh, zh >= 1.0 - 1e-9 ? "]" : ")");
+        }
         std::printf("AnAsymmetry: %s\n", mass_note.c_str());
     }
     const std::string trg_note = TString::Format("trigger value >= %.2f (EM) / %.2f (JP) x threshold; levels judged per family (EM, JP); all = %s%s", factor_em, factor_jp,
