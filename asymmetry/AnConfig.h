@@ -93,6 +93,33 @@ inline bool IsJpBadRun(int run)
     for (int i = 0; i < kNJpBadRuns; i++) if (kJpBadRuns[i] == run) return true;
     return false;
 }
+// Runs left out of A_N on top of the external bad-run list (AnAsymmetry -r,
+// every mode, also with "none"): hot runs found in the 20% pass QA
+// (report_20pct_vm130, plots/runs.txt; Sean 2026-11-06; two more 2026-11-09). The first nine made
+// 94-99.7% of the A_N jets at x_F 0.6-1 and 40% at 0.50-0.55 (a fake flat
+// tail from ~150 GeV to sqrt(s)/2), under 1% below x_F 0.35.
+struct SuppBadRun { int run; const char *why; };
+static const int kNSuppBadRuns = 11;
+static const SuppBadRun kSuppBadRuns[kNSuppBadRuns] = {
+    {23053066, "hot: x>0/x<0 jets 11, <E> 88 GeV"},
+    {23053067, "hot: x>0/x<0 jets 101, <E> 125 GeV"},
+    {23053068, "hot: x>0/x<0 jets 110, <E> 126 GeV"},
+    {23055022, "hot: <E> 128 GeV"},
+    {23082017, "odd: 1 jet in 1180 events, <E> 77 GeV"},
+    {23083002, "odd: x>0/x<0 jets 5 (6 jets)"},
+    {23088022, "hot: 0.75 jets per event, <E> 180 GeV"},
+    {23100051, "hot: x>0/x<0 jets 6.3, <E> 133 GeV"},
+    {23106016, "hot: x>0/x<0 jets 13, <E> 57 GeV"},
+    // found in the full-sample QA (report_full_v1; Sean 2026-11-09): one-sided
+    // toward x < 0 (the yellow side)
+    {23050009, "one-sided: x>0/x<0 jets 0.035 (206k jets, 92% EM0)"},
+    {23050010, "one-sided: x>0/x<0 jets 0.26"},
+};
+inline const char *SuppBadRunReason(int run)
+{
+    for (int i = 0; i < kNSuppBadRuns; i++) if (kSuppBadRuns[i].run == run) return kSuppBadRuns[i].why;
+    return 0;
+}
 static const double kEmCutFactor = 1.3;
 static const double kJpCutFactor = 1.3;
 inline double CutFactor(int level) { return IsJpLevel(level) ? kJpCutFactor : kEmCutFactor; }

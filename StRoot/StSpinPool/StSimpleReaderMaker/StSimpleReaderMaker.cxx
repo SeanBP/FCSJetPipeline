@@ -19,6 +19,7 @@
 #include "StEvent/StFcsCluster.h"
 #include "StEvent/StFcsPoint.h"
 #include "StMuDSTMaker/COMMON/StMuPrimaryVertex.h"
+#include "StMuDSTMaker/COMMON/StMuEpdHit.h"
 
 #include "StFcsDbMaker/StFcsDbMaker.h"
 #include "StFcsDbMaker/StFcsDb.h"
@@ -204,6 +205,15 @@ Int_t StSimpleReaderMaker::Init( )
   out_tree->Branch("trg_h2x2", trg_h2x2, "trg_h2x2[2][10][6]/F");
   out_tree->Branch("event_vertex_z", &event_vertex_z, "event_vertex_z/F");
   out_tree->Branch("event_vertex_source", &event_vertex_source, "event_vertex_source/I");
+  out_tree->Branch("bbc_tac_diff", &bbc_tac_diff, "bbc_tac_diff/I");
+  out_tree->Branch("bbc_vz_tac", &bbc_vz_tac, "bbc_vz_tac/F");
+  out_tree->Branch("bbc_vz_det", &bbc_vz_det, "bbc_vz_det/F");
+  out_tree->Branch("epd_vz", &epd_vz, "epd_vz/F");
+  out_tree->Branch("vpd_vz", &vpd_vz, "vpd_vz/F");
+  out_tree->Branch("epd_avgtac_e", &epd_avgtac_e, "epd_avgtac_e/F");
+  out_tree->Branch("epd_avgtac_w", &epd_avgtac_w, "epd_avgtac_w/F");
+  out_tree->Branch("epd_ntac_e", &epd_ntac_e, "epd_ntac_e/I");
+  out_tree->Branch("epd_ntac_w", &epd_ntac_w, "epd_ntac_w/I");
   out_tree->Branch("event_sqrt_s_gev", &event_sqrt_s_gev, "event_sqrt_s_gev/D");
 
   out_tree->Branch("sigma_job", &sigma_job, "sigma_job/D");
@@ -267,6 +277,8 @@ Int_t StSimpleReaderMaker::Make( )
   event_run = 0; event_id = -1; fcs_tcu_bits = 0; fcs_tcu_source = 0;
   event_vertex_z = -9999;
   event_vertex_source = 0;
+  bbc_tac_diff = -4096; bbc_vz_tac = bbc_vz_det = epd_vz = vpd_vz = -9999;
+  epd_avgtac_e = epd_avgtac_w = 0; epd_ntac_e = epd_ntac_w = 0;
   event_sqrt_s_gev = -1;
 
   // -----------
@@ -395,6 +407,32 @@ Int_t StSimpleReaderMaker::Make( )
         event_vertex_z = bbcVz;
         event_vertex_source = 3; // BBC
       }
+    }
+
+    // Vertex test branches (see the header): every detector's z, uncut
+    {
+      const StTriggerData* td = muEvent->triggerData();
+      if ( td ){
+        bbc_tac_diff = (int)td->bbcTimeDifference() - 4096;
+        if ( bbc_tac_diff != 0 && bbc_tac_diff != -4096 ) bbc_vz_tac = bbc_tac_diff * -0.2475;
+      }
+      bbc_vz_det = muEvent->bbcTriggerDetector().zVertex();
+      if ( muEvent->numberOfVpdEastHits() > 0 && muEvent->numberOfVpdWestHits() > 0 ) vpd_vz = muEvent->vpdVz();
+      double sume = 0, sumw = 0;
+      TClonesArray* epdArr = muDst->epdHits();
+      const int nepd = epdArr ? epdArr->GetEntriesFast() : 0;
+      for ( int k = 0; k < nepd; k++ ){
+        StMuEpdHit* eh = (StMuEpdHit*)epdArr->UncheckedAt(k);
+        if ( !eh ) continue;
+        const float nmip = eh->nMIP();
+        const int tac = eh->tac();
+        if ( !(nmip > 1 && nmip < 15 && tac > 50) ) continue;
+        if ( eh->side() < 0 ){ sume += tac; epd_ntac_e++; }
+        else { sumw += tac; epd_ntac_w++; }
+      }
+      if ( epd_ntac_e > 0 ) epd_avgtac_e = sume / epd_ntac_e;
+      if ( epd_ntac_w > 0 ) epd_avgtac_w = sumw / epd_ntac_w;
+      if ( epd_avgtac_e > 50 && epd_avgtac_w > 50 ) epd_vz = (epd_avgtac_w - epd_avgtac_e) * 0.2475;
     }
 
     event_sqrt_s_gev = SqrtSForRun(runNumber);

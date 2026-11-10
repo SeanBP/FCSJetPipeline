@@ -11,6 +11,7 @@
 #include <sstream>
 #include "JetParameters.h"
 #include "FcsTrigSums.h"
+#include "Pi0ProbBranches.h"
 #include "FcsTriggerDefs.h"
 #include "TFile.h"
 #include "TTree.h"
@@ -159,6 +160,12 @@ int main(int argc, char** argv) {
     // energy > point_energy_min within deltaR < R of the jet axis. Files made
     // before 2026-11-05 used the deltaR count for point jets too (~2.5% differ).
     outTree->Branch("reco_nphotons", &reco_nphotons);
+
+    // Per-jet probability of >= 1 resolved pi0 from the point-pair masses
+    // (shared/Pi0ProbBranches.h: reco_pi0_*; point jets only)
+    Pi0ProbBranches pi0b;
+    pi0b.Book(outTree);
+    if (use_points) pi0b.Load(false);
 
     // FCS trigger quantities and cone sums per reco jet, as
     // data_to_jet/RecoJets.cpp (shared/FcsTrigSums.h; -1 without trigger
@@ -395,7 +402,7 @@ int main(int argc, char** argv) {
 
             truth_nconst.clear(); reco_nconst.clear();
             truth_area.clear(); reco_area.clear();
-            reco_nphotons.clear(); truth_nphotons.clear();
+            reco_nphotons.clear(); pi0b.Clear(); truth_nphotons.clear();
             reco_trg_em_et.clear(); reco_trg_em_hmax.clear(); reco_trg_em_hnear.clear(); reco_trg_em_et_raw.clear();
             reco_trg_jp_et.clear(); reco_trg_jp_et_raw.clear(); reco_trg_jp_patch.clear(); reco_trg_jp_mask.clear();
             reco_cone_ecal_et.clear(); reco_cone_hcal_et.clear();
@@ -495,7 +502,7 @@ int main(int argc, char** argv) {
                 if (em_only && (det == 2 || det == 3)) continue;
 
                 if (use_points) {
-                    if (!pass_point_energy_cut(e, kSqrtS_MainRun22_GeV)) continue;
+                    if (!pass_point_energy_cut(e)) continue;
                 } else if (!(((det == 0 || det == 1) && e > mip_threshold * ecal_mip) ||
                              ((det == 2 || det == 3) && e > mip_threshold * hcal_mip)))
                     continue;
@@ -640,7 +647,7 @@ int main(int argc, char** argv) {
                 } else {
                     for (int p = 0; p < Cal_npts; p++) {
                         if (Cal_pt_detid[p] != 0 && Cal_pt_detid[p] != 1) continue;
-                        if (!pass_point_energy_cut(Cal_pt_energy[p], kSqrtS_MainRun22_GeV)) continue;
+                        if (!pass_point_energy_cut(Cal_pt_energy[p])) continue;
                         double pEta, pPhi;
                         computeEtaPhi(Cal_pt_x[p], Cal_pt_y[p], pEta, pPhi);
                         double dPhi = fabs(pPhi - jet.phi());
@@ -650,6 +657,17 @@ int main(int argc, char** argv) {
                     }
                 }
                 reco_nphotons.push_back(nphotons);
+
+                // pi0 probability from the ECal point constituents (reco_const_* order)
+                {
+                    vector<double> pe, ppx, ppy, ppz;
+                    for (auto &c : consts) {
+                        const int det = reco_detid[c.user_index()];
+                        if (det != 0 && det != 1) continue;
+                        pe.push_back(c.E()); ppx.push_back(c.px()); ppy.push_back(c.py()); ppz.push_back(c.pz());
+                    }
+                    pi0b.Push(pe, ppx, ppy, ppz, jet.E(), use_points);
+                }
 
                 // trigger quantities and cone sums (as RecoJets)
                 {

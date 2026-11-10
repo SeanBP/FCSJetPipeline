@@ -179,7 +179,7 @@ int main(int argc, char **argv)
                 for (int i = 0; i < std::min((int)Cal_npts, MAX_PTS) && nr > 0; i++)
                 {
                     if (Cal_pt_detid[i] != 0 && Cal_pt_detid[i] != 1) continue;
-                    if (!pass_point_energy_cut(Cal_pt_energy[i], event_sqrt_s_gev)) continue;
+                    if (!pass_point_energy_cut(Cal_pt_energy[i])) continue;
                     const double rho = std::sqrt((double)Cal_pt_x[i] * Cal_pt_x[i] + (double)Cal_pt_y[i] * Cal_pt_y[i]);
                     p_eta.push_back(std::asinh(Cal_pt_z[i] / rho)); p_phi.push_back(std::atan2(Cal_pt_y[i], Cal_pt_x[i]));
                     p_E.push_back(Cal_pt_energy[i]); p_tile.push_back(geo.TileOf(Cal_pt_x[i], Cal_pt_y[i]));

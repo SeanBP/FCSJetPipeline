@@ -1,0 +1,11 @@
+universe = vanilla
+executable = /star/data01/pwg/seanp/vertex_test_v1/job2.sh
+arguments = $(run)
+output = /star/data01/pwg/seanp/vertex_test_v1/log4/$(run).out
+error = /star/data01/pwg/seanp/vertex_test_v1/log4/$(run).err
+log = /star/data01/pwg/seanp/vertex_test_v1/log4/condor.log
+request_memory = 1000
+request_disk = 1000
++JobPrio = 20
+getenv = true
+queue run from /star/data01/pwg/seanp/vertex_test_v1/scan_jobs.txt

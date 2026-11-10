@@ -2,7 +2,7 @@
 // cross-section-weighted simulation: applies the map in memory exactly as
 // jet_calibration/ApplyCorrections_em_only.cpp does (bilinear interpolation
 // of A, B at the jet's |x|, y; one evaluation at the jet's own energy
-// clamped to the map's [Emin, Emax]; E_corr = E / scale) and reports the central
+// held at 2 GeV below and at sqrt(s)/2 above; E_corr = E / scale) and reports the central
 // value of E_corr / E_truth in bins of truth energy, for all positions and three
 // radial bands, with the estimators the map is built from (arXiv:1609.05195,
 // Sec. 2.1): the Gaussian-core mean (jet_scale/GaussCore.h) where the bin has
@@ -171,7 +171,9 @@ static double Scale(const Map &m, double x, double y, double E)
         const double a = Z[i][j] * (1 - tx) + Z[i + 1][j] * tx, b = Z[i][j + 1] * (1 - tx) + Z[i + 1][j + 1] * tx;
         p[k] = a * (1 - ty) + b * ty;
     }
-    const double l = std::log(std::min(std::max(E, m.Emin), m.Emax));
+    // as ApplyCorrections_em_only: held at kJesEvalMinGeV below and at sqrt(s)/2
+    // (simulation's) above (JetParameters.h; before 2026-11-06 the map's [Emin, Emax])
+    const double l = std::log(std::min(std::max(E, kJesEvalMinGeV), 0.5 * kSqrtS_MainRun22_GeV));
     return p[0] + l * (p[1] + l * (m.C + l * m.D));
 }
 

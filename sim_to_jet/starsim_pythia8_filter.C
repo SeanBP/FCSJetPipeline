@@ -157,9 +157,14 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t p
   _primary->SetEtaRange ( +1.0, +5.0 );
   _primary->SetPhiRange ( 0., TMath::TwoPi() );
 
-  // z-vertex: gauss widths x=1mm, y=1mm, z=30cm
+  // z-vertex: gauss widths x=1mm, y=1mm, z=30cm unless SIM_VZ_SIGMA
   _primary->SetVertex( 0., 0., 0. );
-  _primary->SetSigma( 0.1, 0.1, 30.0 );
+  // z width from $SIM_VZ_SIGMA (cm; submit_sim_to_jet.sh -Z), default 30
+  Double_t vzSigma = 30.0;
+  if ( gSystem->Getenv("SIM_VZ_SIGMA") && atof(gSystem->Getenv("SIM_VZ_SIGMA")) > 0 )
+    vzSigma = atof(gSystem->Getenv("SIM_VZ_SIGMA"));
+  cout << "Primary vertex z sigma = " << vzSigma << " cm" << endl;
+  _primary->SetSigma( 0.1, 0.1, vzSigma );
 
   _primary -> Init();
 

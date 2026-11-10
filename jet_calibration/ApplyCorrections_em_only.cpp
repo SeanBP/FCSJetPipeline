@@ -3,9 +3,16 @@
 //
 // scale(x,y,E) = A + B lnE + C ln^2E + D ln^3E, with A, B interpolated from
 // the map's bins and C, D global (the JSON must say "model": "logcubic"),
-// evaluated at the jet's own UE-subtracted energy E = reco_E - reco_ue_E
-// clamped to the map's fitted range [Emin, Emax]:
+// evaluated at the jet's own UE-subtracted energy E = reco_E - reco_ue_E,
+// held at kJesEvalMinGeV = 2 GeV below it and at sqrt(s)/2 above it
+// (JetParameters.h):
 // reco_E_corr = E / scale.
+// Up to 2026-11-06 E was held at the map's [Emin, Emax] instead (1.29-96.8 GeV for
+// jesmap_pixring_v1, the highest fitted response). The log-cubic levels off
+// there (median scale 0.907 at 96.8 GeV, 0.908 at 120, 0.897 at 250 GeV; the
+// 10-90% of positions within ~2%), so it is followed up to the kinematic limit
+// sqrt(s)/2 instead (Sean 2026-11-06); past that the cubic term would run
+// away, and such jets are left out of A_N anyway.
 // Jets that cannot be put on the calibrated scale get reco_E_corr =
 // reco_x_F_corr = -1 and must be dropped by the analysis: no UE estimate
 // ("No UE estimate") or outside the map ("Invalid entries": NaN beyond the
@@ -35,7 +42,7 @@ struct LookupGrid
     std::vector<std::vector<double>> A;
     std::vector<std::vector<double>> B;
     double C, D; // the same everywhere
-    double Emin, Emax; // fitted response range
+    double Emin, Emax; // fitted response range (information only; the evaluation range is JetParameters.h's)
 };
 
 double clamp(double v,double lo,double hi)
@@ -528,7 +535,7 @@ int main(int argc, char** argv)
                 double A_grid = bilinear(grid.x,grid.y,grid.A,x,y,imin,imax,jmin,jmax);
                 double B_grid = bilinear(grid.x,grid.y,grid.B,x,y,imin,imax,jmin,jmax);
 
-                double E_eval = clamp(E,grid.Emin,grid.Emax);
+                double E_eval = clamp(E,kJesEvalMinGeV,0.5*event_sqrt_s_gev);
 
                 double l = std::log(E_eval);
                 double F_grid = A_grid + l*(B_grid + l*(grid.C + l*grid.D));

@@ -47,7 +47,8 @@ while [ "$(date +%s)" -lt "$END" ]; do
         if [ -z "$REQ" ]; then log "ERROR: no request id from the submission; stopping (batches.txt unchanged)"; exit 1; fi
         echo "$REQ" >> "${STATE}/requests.txt"
         # drop the batch just submitted
-        awk -v line="$NEXT" 'done || $0 != line { print; next } { done = 1 }' "${STATE}/batches.txt" > "${STATE}/batches.txt.tmp" \
+        # the line goes in through the environment: awk -v would expand backslash escapes in it
+        LINE="$NEXT" awk 'done || $0 != ENVIRON["LINE"] { print; next } { done = 1 }' "${STATE}/batches.txt" > "${STATE}/batches.txt.tmp" \
             && mv "${STATE}/batches.txt.tmp" "${STATE}/batches.txt"
         log "submitted request ${REQ}"
         continue

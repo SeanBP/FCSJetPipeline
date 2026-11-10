@@ -10,7 +10,8 @@ events_full the catalog events of every good run (make_smoke_list.py's
 <prefix>_good_runs.txt: RunLog flag, flagged pi0 bad runs and runs without
 polarization removed). This assumes the test runs are representative (spread
 evenly over Run 22) in jets per event and polarization. Only test runs in
-the good-run list count, the runs AnAsymmetry -r keeps (same cuts).
+the good-run list count, the runs AnAsymmetry -r keeps (same cuts); runs it
+removed (listed in an.txt's "# bad runs" line) count in neither sample.
 
 Usage:
   ./project_errors.py <test outdir> <an.txt> <good_runs.txt>
@@ -34,6 +35,14 @@ def main():
         t = line.split()
         if t and not line.startswith("#"):
             good_ev[int(t[0])] = int(t[1])
+    # runs AnAsymmetry left out (bad-run lists, AnConfig.h kSuppBadRuns): the
+    # "# bad runs: ... removed: <run> <reason> ..." header line of an.txt
+    removed = set()
+    for line in open(an_txt):
+        if line.startswith("# bad runs:") and "removed:" in line:
+            removed = set(int(r) for r in re.findall(r"\b(2[0-9]{7})\b", line.split("removed:", 1)[1]))
+    for r in removed:
+        good_ev.pop(r, None)
     hist_runs = set()
     for f in glob.glob(os.path.join(outdir, "hists", "an_hists_*.root")):
         hist_runs.add(int(os.path.basename(f).split("_")[2]))
@@ -61,8 +70,8 @@ def main():
         sys.exit("no processed files found in %s" % outdir)
     scale = math.sqrt(ev_test / float(ev_full))
     note = ("test: %d runs, %d files, %.4g events; full: %d good runs, %.4g events; fraction %.5f; "
-            "stat_full = stat x %.4f" % (len(runs_test), files_test, ev_test, len(good_ev), ev_full,
-                                         ev_test / float(ev_full), scale))
+            "stat_full = stat x %.4f; %d runs left out by AnAsymmetry not counted" % (len(runs_test), files_test, ev_test, len(good_ev), ev_full,
+                                         ev_test / float(ev_full), scale, len(removed)))
     print(note)
 
     out = an_txt[:-4] + "_projected.txt" if an_txt.endswith(".txt") else an_txt + "_projected"

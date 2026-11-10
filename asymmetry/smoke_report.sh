@@ -17,8 +17,12 @@
 #   an_vs_xf_projected.png     the points with projected errors, and
 #   an_vs_xf_projected_zero.png the projected errors alone, at A_N = 0
 #   an_vs_xf_<EM level>.png    A_N per EM level
-#   an_vs_xf_np<N>.png         A_N for jets with exactly N = 1, 2 points, and
-#                              np3plus, 3 or more
+#   an_vs_xf_np<N>.png         A_N for jets with exactly N = 1, 2 points,
+#                              np12, 1 or 2, and np3plus, 3 or more (all A_N
+#                              plots on the same axes: AN_YLO, AN_YHI, AN_XR)
+#   an_vs_xf_allJP_np*.png,   the same photon classes for the JP levels alone and
+#   an_vs_xf_union_np*.png     for the EM + JP union
+#   an_means.png               <|cos phi|> and <P> per x_F bin and photon class
 #   plots/                     yields and sanity plots, per-run trends (AnPlots)
 #   resources.txt              wall time, memory, scratch per stage and job,
 #                              and the full-pass extrapolation
@@ -34,6 +38,11 @@
 #   written in the last 10 minutes are left out, in case condor is still
 #   copying them) do not overwrite each other
 # Compiles in the container; run it from the host (condor_history).
+# SMOKE_PLOTS_ONLY=1: only the error projection and the A_N plots, from the
+# AnAsymmetry outputs already in the report folder. For the plots alone (no
+# projection, no pass folder needed): replot_report.sh <report dir>.
+# SMOKE_BIND=<dir>: also bind <dir> into the container (an outdir on a
+# condor job's scratch disk; see report_job.sh).
 
 set -e
 OUTDIR="$(cd "$1" && pwd)"
@@ -42,18 +51,19 @@ GOOD="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REP="${OUTDIR}/${3:-report}"
 mkdir -p "${REP}/build"
-cp "${HERE}"/{AnAsymmetry.cpp,AnPlots.cpp,AnConfig.h,plot_an.C,mgg_peak.C,plot_an_mass.C} "${REP}/build/"
-find "${OUTDIR}/hists" -maxdepth 1 -name 'an_hists_*.root' -mmin +10 | sort > "${REP}/yields.list"
+cp "${HERE}"/{AnAsymmetry.cpp,AnPlots.cpp,AnConfig.h,mgg_peak.C} "${REP}/build/"
+find -L "${OUTDIR}/hists" -maxdepth 1 -name 'an_hists_*.root' -mmin +10 | sort > "${REP}/yields.list"
 # jobs submitted so far, over all batches of the pass
 NJOBS=$(cat "${OUTDIR}"/run_params_*.txt 2>/dev/null | awk -F= '$1 == "nProcesses" && $2 > 0 { n += $2 } END { if (n) print n }')
 echo "$(wc -l < "${REP}/yields.list") yield files${NJOBS:+ of ${NJOBS} jobs} ($(date))" | tee "${REP}/completed.txt"
 
 container() {
-    singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 \
+    singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 ${SMOKE_BIND:+-B ${SMOKE_BIND}} \
         /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif tcsh -c \
         "source /star/nfs4/AFS/star/group/star_cshrc.csh >& /dev/null; module purge >& /dev/null; module load root-5.34.38 >& /dev/null; cd ${REP}; $1"
 }
 
+if [ -z "${SMOKE_PLOTS_ONLY}" ]; then
 container "g++ -m64 -O2 build/AnAsymmetry.cpp -o build/AnAsymmetry \`root-config --cflags --libs\` -std=c++11 && g++ -m64 -O2 build/AnPlots.cpp -o build/AnPlots \`root-config --cflags --libs\` -std=c++11"
 container "./build/AnAsymmetry -r yields.list ${HERE}/run22_polarization.txt an.root" > "${REP}/an_asymmetry.log"
 grep -A20 "^all, all photon classes" "${REP}/an_asymmetry.log" || true
@@ -66,31 +76,17 @@ if [ -n "$PEAK" ] && [ "$PEAK" != "0" ]; then
     container "./build/AnAsymmetry -J -m in:${PEAK} -r yields.list ${HERE}/run22_polarization.txt an_mass_in.root" > "${REP}/an_asymmetry_mass_in.log"
     container "./build/AnAsymmetry -J -m out:${PEAK} -r yields.list ${HERE}/run22_polarization.txt an_mass_out.root" > "${REP}/an_asymmetry_mass_out.log"
 fi
+else
+    # SMOKE_PLOTS_ONLY=1: an*.root, an.txt and mgg_peak.log are already in the
+    # report folder (e.g. from condor jobs); redo the projection and the plots
+    PEAK=$(sed -n 's/^peak=//p' "${REP}/mgg_peak.log" | tail -1)
+fi
 
 "${HERE}/project_errors.py" "${OUTDIR}" "${REP}/an.txt" "${GOOD}" | tee "${REP}/projection.log"
-SCALE=$(grep '^scale=' "${REP}/projection.log" | cut -d= -f2)
-# what the plots show: "<test runs> of <good runs> good runs, <events> events = <percent> of the Run 22 good-run events"
-SAMPLE=$(awk '/^test:/ { gsub(/[;,]/, ""); printf "%s of %s good runs (up to 40 files each), %.2g events = %.1f%% of the Run 22 good-run events", $2, $9, $6, 100 * $15 }' "${REP}/projection.log")
-cat > "${REP}/plot_an.csh" <<PLOTS
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf.png","all","all",1,0,10,"${SAMPLE}")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_projected.png","all","all",${SCALE},0,10,"${SAMPLE}")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_projected_zero.png","all","all",${SCALE},1,10,"${SAMPLE}")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_EM0.png","EM0","all",1,0,10,"${SAMPLE}")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_EM1.png","EM1","all",1,0,10,"${SAMPLE}")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_EM2.png","EM2","all",1,0,10,"${SAMPLE}")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_np1.png","all","np1",1,0,10,"${SAMPLE}")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_np2.png","all","np2",1,0,10,"${SAMPLE}")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_np3plus.png","all","np3plus",1,0,10,"${SAMPLE}")' || exit 1
-root -b -q -l 'build/plot_an.C("an_union.root","an_vs_xf_union.png","all","all",1,0,10,"${SAMPLE}")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_allJP.png","allJP","all",1,0,10,"${SAMPLE}")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_JP0.png","JP0","all",1,0,10,"${SAMPLE}")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_JP1.png","JP1","all",1,0,10,"${SAMPLE}")' || exit 1
-root -b -q -l 'build/plot_an.C("an.root","an_vs_xf_JP2.png","JP2","all",1,0,10,"${SAMPLE}")' || exit 1
-PLOTS
-container "tcsh plot_an.csh" > "${REP}/plot_an.log" 2>&1 || { tail "${REP}/plot_an.log"; exit 1; }
-if [ -f "${REP}/an_mass_in.root" ] && [ -f "${REP}/an_mass_out.root" ]; then
-    container "root -b -q -l 'build/plot_an_mass.C(\"an_mass_in.root\",\"an_mass_out.root\",\"an_vs_xf_mass.png\",${PEAK},\"${SAMPLE}\")'" >> "${REP}/plot_an.log" 2>&1 || echo "WARNING: mass-window plot failed (plot_an.log)"
-fi
+# every A_N plot (list, axes, text): replot_report.sh, which also redraws them
+# later from the report folder alone
+"${HERE}/replot_report.sh" "${REP}"
+if [ -n "${SMOKE_PLOTS_ONLY}" ]; then echo "report plots redone in ${REP}"; exit 0; fi
 container "./build/AnPlots yields.list plots" > "${REP}/anplots.log" 2>&1 || { tail "${REP}/anplots.log"; exit 1; }
 
 "${HERE}/estimate_resources.py" "${OUTDIR}/timing" --runs "${GOOD}" > "${REP}/resources.txt"

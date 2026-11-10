@@ -48,6 +48,12 @@
                              hits (-F)
       {{CALIB_SAMPLE}}      1 = JES calibration sample (-C): no jet pT
                              minimums
+      {{VZ_SIGMA}}          -Z: Gaussian sigma of the generated primary vertex z, cm
+                             (SIM_VZ_SIGMA in starsim_*_filter.C; default 30)
+      {{PI0_DUMP}}          -D: 1 = also write pi0dump_*.root (truth-labelled
+                             point jets, Pi0Playground/pi0_prob/pi0_jet_dump.cpp,
+                             with sigma_job/N_job) from every job's SimpleTree
+      RESOURCE_USAGE         -R: an explicit condor memory request (MB), or none
       {{OUTDIR}}            absolute output directory
       {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
 
@@ -60,6 +66,7 @@
 -->
 
 <job nProcesses="1">
+{{RESOURCE_USAGE}}
 
     <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
 
@@ -72,6 +79,7 @@
         cp sim_to_jet/* .
         cp shared/* .
         cp underlying_event/* .
+        cp Pi0Playground/pi0_prob/pi0_jet_dump.cpp .
 
         if ( "{{GENERATOR}}" == "pythia8" ) then
             ln -sf starsim_pythia8_filter.C starsim.C
@@ -104,6 +112,8 @@
         echo "EM-only        = {{EM_ONLY}}"
         echo "Use points     = {{USE_POINTS}}"
         echo "Calib sample   = {{CALIB_SAMPLE}}"
+        echo "vz sigma       = {{VZ_SIGMA}} cm"
+        echo "pi0 dump       = {{PI0_DUMP}}"
         echo "nevents        = {{NEVENTS}}"
         echo "Save SimpleTree = {{SAVE_SIMPLETREE}}"
         echo "JOBINDEX       = ${JOBINDEX}"
@@ -115,6 +125,7 @@
         echo "Starting detector simulation..."
 
         setenv FCS_FILTER_CONEPT {{FILTER_CONEPT}}
+        setenv SIM_VZ_SIGMA {{VZ_SIGMA}}
         root4star -q -b starsim.C\({{NEVENTS}},${myseed},${ptcut},{{TUNE_PARAM}},{{FILTER_ETHR}},${ptcutmax}${tune_arg}\)
 
         echo "Finished detector simulation."
@@ -163,6 +174,17 @@
         echo "jet_output_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root SimpleTree_mudst.root" > ue_pairs.list
         ./UnderlyingEvent ue_pairs.list
 
+        # In-job truth-labelled point jets for the pi0 probability calibration
+        # (file_idx = JOBINDEX, so dumps of one production never collide)
+        if ( {{PI0_DUMP}} == 1 ) then
+            echo "Compiling pi0_jet_dump..."
+            g++ -m64 -O2 pi0_jet_dump.cpp -o pi0_jet_dump -I. \
+                `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11
+            echo "SimpleTree_mudst.root" > pi0dump.list
+            ./pi0_jet_dump pi0dump.list pi0dump_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root ${JOBINDEX} 0 SimpleTree_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
+            rm -f pi0dump.list pi0_jet_dump
+        endif
+
         set keep_simpletree = 0
         if ( {{SAVE_SIMPLETREE}} > 0 ) then
             @ keep_simpletree = ( ${JOBINDEX} % {{SAVE_SIMPLETREE}} == 0 )
@@ -200,7 +222,11 @@
             <File>file:./StRoot</File>
             <File>file:./shared/JetParameters.h</File>
             <File>file:./shared/FcsTrigSums.h</File>
+            <File>file:./shared/Pi0Prob.h</File>
+            <File>file:./shared/Pi0ProbBranches.h</File>
+            <File>file:./shared/pi0prob.json</File>
             <File>file:./underlying_event</File>
+            <File>file:./Pi0Playground/pi0_prob/pi0_jet_dump.cpp</File>
         </Package>
     </SandBox>
 
@@ -210,5 +236,6 @@
     <output fromScratch="jet_output_*.root" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="SimpleTree_*.root" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="MuDst_*.MuDst.root" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="pi0dump_*.root" toURL="file:{{OUTDIR}}/" />
 
 </job>

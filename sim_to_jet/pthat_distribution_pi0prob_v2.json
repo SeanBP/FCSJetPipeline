@@ -1,0 +1,111 @@
+{
+  "description": "ptHat-range shares for the pi0-probability calibration production (pi0prob_v2, 2026-11-09): hedged toward the cross-section-weighted effective count of A_N-range EM point jets (raw E 28-100 GeV), which low ptHat dominates (forward jets, pT 3-8 GeV): 55% at 0-5 instead of the n_eff optimum of ~90%, whose estimate rests on few jets. From per-ptHat yields of the jes_pixring_v1 dumps. 'count' is the range's share of reference_total; submit_sim_to_jet.sh -w scales it to the -j jobs submitted.",
+  "reference_total": 10000,
+  "bins": [
+    {
+      "ptcut": 0,
+      "count": 5500,
+      "ptcutmax": 5
+    },
+    {
+      "ptcut": 5,
+      "count": 2500,
+      "ptcutmax": 10
+    },
+    {
+      "ptcut": 10,
+      "count": 1000,
+      "ptcutmax": 15
+    },
+    {
+      "ptcut": 15,
+      "count": 400,
+      "ptcutmax": 20
+    },
+    {
+      "ptcut": 20,
+      "count": 200,
+      "ptcutmax": 25
+    },
+    {
+      "ptcut": 25,
+      "count": 100,
+      "ptcutmax": 30
+    },
+    {
+      "ptcut": 30,
+      "count": 100,
+      "ptcutmax": 35
+    },
+    {
+      "ptcut": 35,
+      "count": 40,
+      "ptcutmax": 40
+    },
+    {
+      "ptcut": 40,
+      "count": 30,
+      "ptcutmax": 45
+    },
+    {
+      "ptcut": 45,
+      "count": 30,
+      "ptcutmax": 50
+    },
+    {
+      "ptcut": 50,
+      "count": 20,
+      "ptcutmax": 55
+    },
+    {
+      "ptcut": 55,
+      "count": 15,
+      "ptcutmax": 60
+    },
+    {
+      "ptcut": 60,
+      "count": 15,
+      "ptcutmax": 65
+    },
+    {
+      "ptcut": 65,
+      "count": 5,
+      "ptcutmax": 70
+    },
+    {
+      "ptcut": 70,
+      "count": 5,
+      "ptcutmax": 75
+    },
+    {
+      "ptcut": 75,
+      "count": 5,
+      "ptcutmax": 80
+    },
+    {
+      "ptcut": 80,
+      "count": 5,
+      "ptcutmax": 85
+    },
+    {
+      "ptcut": 85,
+      "count": 5,
+      "ptcutmax": 90
+    },
+    {
+      "ptcut": 90,
+      "count": 5,
+      "ptcutmax": 95
+    },
+    {
+      "ptcut": 95,
+      "count": 5,
+      "ptcutmax": 100
+    },
+    {
+      "ptcut": 100,
+      "count": 15,
+      "ptcutmax": -1
+    }
+  ]
+}

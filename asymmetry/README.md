@@ -30,6 +30,17 @@ not included.
   `an_mass_in/out.*`, `an_vs_xf_mass.png`). A third argument names the
   report folder (default `report`), so reports on a pass still running do
   not overwrite each other; yield files younger than 10 minutes are skipped.
+- `replot_report.sh <report dir>`: redraws every A_N plot of a report (about
+  25 plots, ~30 s) from the AnAsymmetry outputs saved in the report folder
+  (`an*.root`, `an.txt`, `projection.log`, `mgg_peak.log`) with the current
+  macros, and the QA pages in `plots/` with `AnPlots -s` from
+  `plots/qa_sums.root` (the sums AnPlots saves when it reads the yields), so
+  cosmetic changes need no pass over the yields. All A_N plots
+  share one axis range (`AN_YLO`, `AN_YHI`, `AN_XR`, default -0.02, 0.08,
+  0.6). The list of plots lives in this script; `smoke_report.sh` calls it.
+- `submit_report_job.sh` / `report_job.sh`: the whole report as one condor
+  job (yields copied to the worker's scratch); `an_pass_job.sh`: one
+  AnAsymmetry pass as a condor job, to run several side by side.
 - `batch_feeder.sh` (condor scheduler-universe job on the submit node):
   submits the next batch of a pass when that keeps at most N of its jobs in
   condor; see its header.

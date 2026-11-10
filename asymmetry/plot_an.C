@@ -24,19 +24,19 @@
 //     runs, 2.3% of the Run 22 good-run events" (smoke_report.sh fills it in)
 // Writes the .png and a .pdf next to it.
 
-// The photon-class requirement in words (AnConfig.h: the jet's point
-// constituents, FCS points above 1 GeV, as the FMS)
+// The photon-class requirement in words (Sean 2026-11-06: "jets with n
+// photons"; the classes count the jet's photon points, AnConfig.h)
 TString ClassText(const char *cls)
 {
     TString c = cls;
     if (c == "all") return "all jets";
-    if (c == "np5plus") return "jets with #geq 5 FCS points (E > 1 GeV) within R = 0.7 of the axis";
-    if (c == "np3plus") return "jets with #geq 3 FCS points (E > 1 GeV) within R = 0.7 of the axis";
-    if (c == "np12") return "jets with 1 or 2 FCS points (E > 1 GeV) within R = 0.7 of the axis";
+    if (c == "np5plus") return "jets with #geq 5 photons";
+    if (c == "np3plus") return "jets with #geq 3 photons";
+    if (c == "np12") return "jets with 1 or 2 photons";
     if (c.BeginsWith("np"))
     {
         TString n = c(2, c.Length() - 2);
-        return Form("jets with exactly %s FCS point%s (E > 1 GeV) within R = 0.7 of the axis", n.Data(), n == "1" ? "" : "s");
+        return Form("jets with %s photon%s", n.Data(), n == "1" ? "" : "s");
     }
     return c;
 }

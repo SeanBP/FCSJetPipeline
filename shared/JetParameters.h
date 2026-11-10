@@ -36,7 +36,7 @@ static const float mip_threshold = 0.1;
 // FCS points (-F 1): minimum point energy, GeV, as the FMS EM-jet analysis
 // (kFmsEngMin, UnderlyingEventPlayground/fms_emjet_reference.txt). Also the
 // energy floor of the points counted as photons. Applied via
-// pass_point_energy_cut().
+// pass_point_energy_cut() (no upper cut on points; see there).
 static const float point_energy_min = 1.0f;
 
 // ------------------ Geometry cut (symmetric two-window detector) ------------------
@@ -127,6 +127,15 @@ static const double kSqrtS_EarlyRun22_GeV = 509.734; // runs <= 23002045
 static const double kSqrtS_MainRun22_GeV  = 508.426; // runs >= 23002052 (and sim's fixed value)
 static const int    kSqrtSRunThreshold    = 23002045;
 
+// ------------------ JES evaluation range ------------------
+// The EM-only log-cubic JES (ApplyCorrections_em_only, jes_closure) is
+// evaluated at the jet's UE-subtracted energy held at kJesEvalMinGeV from
+// below and at sqrt(s)/2 from above (Sean 2026-11-06). 2 GeV is about the
+// curve's minimum on jesmap_pixring_v1 (median scale 0.797; 0.801 at the
+// map's lowest fitted response, 1.29 GeV), so the hold changes nothing
+// measurable; analysis jets are above ~12 GeV.
+static const double kJesEvalMinGeV = 2.0;
+
 inline double computeSqrtSForRun(int runNumber)
 {
     return (runNumber <= kSqrtSRunThreshold) ? kSqrtS_EarlyRun22_GeV : kSqrtS_MainRun22_GeV;
@@ -143,12 +152,15 @@ inline double computeFeynmanX(double E, double eta, double sqrtS)
     return 2.0 * pz / sqrtS;
 }
 
-// FCS point energy window: above point_energy_min and at most one beam's
-// energy, sqrt(s)/2 (higher is unphysical: hot channels, beam background).
-// Shared by sim_to_jet and data_to_jet.
-inline bool pass_point_energy_cut(float e, double sqrtS)
+// FCS point energy cut: above point_energy_min. Shared by sim_to_jet,
+// data_to_jet and underlying_event. Until 2026-11-06 points above sqrt(s)/2
+// were dropped here as well; that silently rebuilt a jet with a hot channel
+// from its remaining points. Now such a jet keeps its energy and is handled as
+// a whole by the jet-level cut (pass_physical_jet_cut; AnHistograms keeps jets
+// above sqrt(s)/2 apart, AnAsymmetry -E adds them) (Sean 2026-11-06).
+inline bool pass_point_energy_cut(float e)
 {
-    return e > point_energy_min && e <= 0.5 * sqrtS;
+    return e > point_energy_min;
 }
 
 // Analysis-level cut on the corrected jet (after UE subtraction and energy

@@ -134,6 +134,21 @@ class StSimpleReaderMaker : public StMaker
   Float_t event_vertex_z = -9999;
   Int_t event_vertex_source = 0; // 0=none, 1=TPC, 2=VPD, 3=BBC
 
+  // Vertex test (2026-11-09, after D. Kapukchyan's StFwdAnaVertex /
+  // StFwdAnaEpdQaAndVert): the raw per-detector z, no |z| cut, -9999 = none.
+  //  bbc_tac_diff: StTriggerData::bbcTimeDifference() - 4096 (-4096 = no TAC)
+  //  bbc_vz_tac:   bbc_tac_diff * -0.2475 cm (0.0165 ns * 30 cm/ns / 2), when
+  //                bbc_tac_diff != 0
+  //  bbc_vz_det:   StMuEvent bbcTriggerDetector().zVertex() (the source of
+  //                event_vertex_source 3)
+  //  epd_vz:       (avg TAC west - avg TAC east) * 0.2475 cm over hits with
+  //                1 < nMIP < 15 and TAC > 50, when both averages are > 50
+  //  vpd_vz:       StMuEvent::vpdVz() when the VPD has hits
+  Int_t bbc_tac_diff = -4096;
+  Float_t bbc_vz_tac = -9999, bbc_vz_det = -9999, epd_vz = -9999, vpd_vz = -9999;
+  Float_t epd_avgtac_e = 0, epd_avgtac_w = 0;
+  Int_t epd_ntac_e = 0, epd_ntac_w = 0;
+
   // Per-run sqrt(s), GeV (computeSqrtSForRun() in JetParameters.h)
   Double_t event_sqrt_s_gev = -1;
 

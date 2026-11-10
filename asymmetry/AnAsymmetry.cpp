@@ -43,7 +43,9 @@
 // that passed. Mode "flagged" (default) drops the flagged runs; "all" drops
 // every listed run, i.e. the whole reviewed period. The
 // list's path, modification time, mode and the runs it removed are printed and
-// written to the output as TNamed "bad_runs". "none" uses no list.
+// written to the output as TNamed "bad_runs". "none" uses no list. The runs
+// of AnConfig.h kSuppBadRuns (hot runs from the 20% pass QA) are left out in
+// every case.
 //
 // x_F. Each point sits at the bin's mean corrected x_F (h_xfsum_* over the
 // summed yields; negative for yellow), its horizontal error bar spanning the
@@ -211,6 +213,36 @@ struct Sums
         a->SetEntries(a->Integral());
         return a;
     }
+    // -m: per x_F bin, the fraction of a file's two-photon jets of level l in
+    // (out of) the mass window: window yield / all np2 yield, 0 where empty
+    TH1D *WindowFraction(TFile &f, int l, bool jp_only, bool &have_hie)
+    {
+        int k2 = -1;
+        for (int k = 0; k < kNPhotonClasses; k++)
+            if (std::string(PhotonClassName(k)) == "np2") k2 = k;
+        TH1D *win = 0, *all = 0;
+        const int mm = mass_mode;
+        for (int s = 0; s < kNSides; s++)
+            for (int p = 0; p < kNSpinStates; p++)
+            {
+                mass_mode = mm;
+                TH1D *a = Read(f, YieldName(l, k2, s, p).Data(), have_hie, jp_only);
+                mass_mode = 0;
+                TH1D *b = Read(f, YieldName(l, k2, s, p).Data(), have_hie, jp_only);
+                mass_mode = mm;
+                if (!win) { win = (TH1D *)a->Clone("wf_win"); win->SetDirectory(0); all = (TH1D *)b->Clone("wf_all"); all->SetDirectory(0); }
+                else { win->Add(a); all->Add(b); }
+                delete a; delete b;
+            }
+        for (int bx = 0; bx <= win->GetNbinsX() + 1; bx++)
+        {
+            const double na = all->GetBinContent(bx);
+            win->SetBinContent(bx, na > 0 ? win->GetBinContent(bx) / na : 0);
+            win->SetBinError(bx, 0);
+        }
+        delete all;
+        return win;
+    }
     // the suffixes summed for one histogram name: the triggering slices at or
     // above the factor (JP levels: with every EM tag, or with jp_only the EM
     // tags below the factor), companions, veto failures (EM levels only)
@@ -330,6 +362,19 @@ struct Sums
             for (int o = 0; o < (IsJpName(names[i]) ? 2 : 1); o++)
             {
                 TH1D *in = Read(f, names[i], have_hie, o == 1);
+                // -m: h_abscos / h_xfsum of np2 hold every two-photon jet, while the
+                // yields hold only those in (out of) the window; scale the sums by
+                // this file's window fraction per x_F bin, so that dividing by the
+                // window yield gives <|cos phi|> and <x_F> of all np2 jets
+                if (mass_mode)
+                    for (int l = 0; l < kNTrgLevels; l++)
+                    {
+                        const TString c = TString::Format("h_abscos_%s_np2", kTrgLevelName[l]), x = TString::Format("h_xfsum_%s_np2", kTrgLevelName[l]);
+                        if (names[i] != c.Data() && names[i] != x.Data()) continue;
+                        TH1D *wf = WindowFraction(f, l, o == 1, have_hie);
+                        in->Multiply(wf);
+                        delete wf;
+                    }
                 const std::string key = target + (o ? "#jponly" : "");
                 if (h.count(key)) h[key]->Add(in);
                 else { h[key] = (TH1D *)in->Clone((key + "_sum").c_str()); h[key]->SetDirectory(0); }
@@ -536,6 +581,7 @@ int main(int argc, char **argv)
                                        have_st ? TDatime((UInt_t)st.fMtime).AsSQLString() : "unknown", bad_mode.c_str(), bad.size(), n_flagged).Data();
         }
         else bad_note = "no bad-run list";
+        bad_note += TString::Format(" + %d runs of AnConfig.h kSuppBadRuns", kNSuppBadRuns).Data();
         std::printf("AnAsymmetry: bad runs: %s\n", bad_note.c_str());
         std::ifstream list(argv[2]);
         std::string f;
@@ -549,6 +595,11 @@ int main(int argc, char **argv)
             if (run == 0 || it == table.end() || !(it->second.first > 0 && it->second.second > 0))
             {
                 skipped.push_back(f + (run == 0 ? " (not one run)" : it == table.end() ? " (run not in the polarization table)" : " (no polarization for a beam)"));
+                continue;
+            }
+            if (const char *why = SuppBadRunReason(run))
+            {
+                bad_removed.push_back(TString::Format("%d %s (AnConfig.h)", run, why).Data());
                 continue;
             }
             std::map<int, std::string>::const_iterator bi = bad.find(run);

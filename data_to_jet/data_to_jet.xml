@@ -223,6 +223,9 @@
             <File>file:./StRoot</File>
             <File>file:./shared/JetParameters.h</File>
             <File>file:./shared/FcsTrigSums.h</File>
+            <File>file:./shared/Pi0Prob.h</File>
+            <File>file:./shared/Pi0ProbBranches.h</File>
+            <File>file:./shared/pi0prob.json</File>
             <File>file:./underlying_event</File>
         </Package>
     </SandBox>

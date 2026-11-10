@@ -2,9 +2,12 @@
 // two AnAsymmetry -m outputs (in:<peak> and out:<peak>; class np2, level
 // "all": with -J the EM + JP union). Blue beam at x_F > 0, yellow at x_F < 0;
 // filled = inside, open = outside (shifted slightly in x to stay readable).
-// Usage: root -b -q 'plot_an_mass.C("an_mass_in.root", "an_mass_out.root", "an_vs_xf_mass.png", 0.115[, "sample"])'
+// Usage: root -b -q 'plot_an_mass.C("an_mass_in.root", "an_mass_out.root", "an_vs_xf_mass.png", 0.115[, "sample"[, y_lo, y_hi[, x_range]]])'
+//   y_lo, y_hi, x_range: fixed axes as in plot_an.C (0 = automatic), so the
+//   plot matches the other A_N plots
 
-void plot_an_mass(const char *in_root, const char *out_root, const char *out_png, double peak, const char *sample = "")
+void plot_an_mass(const char *in_root, const char *out_root, const char *out_png, double peak, const char *sample = "",
+                  double y_lo = 0, double y_hi = 0, double x_range = 0)
 {
     gStyle->SetOptStat(0);
     TFile *f[2] = {TFile::Open(in_root), TFile::Open(out_root)};
@@ -39,10 +42,12 @@ void plot_an_mass(const char *in_root, const char *out_root, const char *out_png
     double xr = 1.0;
     if (xmax > 0) xr = 0.05 * ceil((xmax + 0.02) / 0.05);
     if (xr > 1.0) xr = 1.0;
+    if (x_range > 0) xr = x_range;
     TH1D *frame = new TH1D("frame_anm", "Run 22 FCS two-photon jets: A_{N} in vs out of the #pi^{0} mass window (EM + JP union);x_{F};A_{N}", 100, -xr, xr);
     const double span = ymax - ymin + 1e-6;
     frame->SetMinimum(ymin - 0.08 * span);
     frame->SetMaximum(ymax + 0.75 * span);
+    if (y_hi > y_lo) { frame->SetMinimum(y_lo); frame->SetMaximum(y_hi); }
     frame->GetYaxis()->SetTitleOffset(1.4);
     frame->Draw();
     TLine *zero = new TLine(-xr, 0, xr, 0); zero->SetLineStyle(2); zero->Draw();
@@ -64,8 +69,9 @@ void plot_an_mass(const char *in_root, const char *out_root, const char *out_png
     lg->AddEntry(g[1][1], "yellow, outside", "pe");
     lg->Draw();
     TLatex t; t.SetNDC(); t.SetTextSize(0.024); t.SetTextFont(42);
-    t.DrawLatex(0.155, 0.735, Form("jets with exactly 2 FCS points; window: 25 MeV mass bins with centre in 0.5-1.5 #times the fitted peak %.3f GeV%s%s", peak,
-                                   TString(sample) != "" ? "; " : "", sample));
+    // two lines, as plot_an.C: the selection, then the sample
+    t.DrawLatex(0.155, 0.740, Form("jets with 2 photons; window: 25 MeV mass bins with centre in 0.5-1.5 #times the fitted peak %.3f GeV", peak));
+    if (TString(sample) != "") t.DrawLatex(0.155, 0.708, sample);
     gPad->RedrawAxis();
     c->SaveAs(out_png);
     TString pdf = out_png; pdf.ReplaceAll(".png", ".pdf"); c->SaveAs(pdf);

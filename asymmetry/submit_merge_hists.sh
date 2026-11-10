@@ -64,6 +64,6 @@ REPORT=$(find "${PIPELINE_ROOT}" -maxdepth 1 -name 'sched*.report' -newer "${MAR
 REQID=$(basename "${REPORT}" .report | sed 's/^sched//')
 rm -f "${MARKER}"
 echo "${REQID}" > "$DIR/merge_logs/request_${LABEL}.txt"
-# ahead of the pass's own idle jobs (same user: condor otherwise runs them in submission order)
-condor_qedit -constraint "regexp(\"${REQID}\", Arguments)" JobPrio 10 > /dev/null 2>&1 || true
+# ahead of the pass's own idle jobs (same user: condor otherwise runs them in submission order; SUMS jobs here come with JobPrio 10)
+condor_qedit -constraint "regexp(\"${REQID}\", Arguments)" JobPrio 20 > /dev/null 2>&1 || true
 echo "Submitted request ${REQID}"

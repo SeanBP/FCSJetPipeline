@@ -20,7 +20,7 @@
 
 <job nProcesses="{{NPROCESSES}}">
 
-    <ResourceUsage><Memory><MinMemory>2000</MinMemory></Memory></ResourceUsage>
+    <ResourceUsage><Memory><MinMemory>1000</MinMemory></Memory></ResourceUsage>
 
     <shell>singularity exec -e -B /direct -B /star -B /afs -B /gpfs -B /sdcc/lustre02 /cvmfs/star.sdcc.bnl.gov/containers/rhic_sl7.sif</shell>
 

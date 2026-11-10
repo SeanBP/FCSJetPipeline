@@ -9,9 +9,14 @@
 // fits with C and D held there, which is the joint optimum since the model is
 // linear. The A and B maps are smoothed over the grid (as the scale at two
 // anchor energies, see ANCHOR_E) and masked to the buffered ECal fiducial
-// region. The polynomial has no plateau, so evaluators clamp E to the range
-// of all fitted responses [Emin, Emax], holding the scale flat outside the
-// data (as CMSSW's SimpleJetCorrector clamps pT to each record's range). The
+// region. The JSON records the range of all fitted responses [Emin, Emax].
+// Since 2026-11-06 the evaluators (ApplyCorrections_em_only, jes_closure) do
+// not use it: they hold E at 2 GeV below (JetParameters.h kJesEvalMinGeV, near
+// the curve's minimum) and follow the curve above Emax up to sqrt(s)/2: on
+// jesmap_pixring_v1 the log-cubic levels off past Emax = 96.8 GeV (median
+// scale 0.907 there, 0.897 at 250 GeV), so holding it at Emax (as CMSSW's
+// SimpleJetCorrector clamps pT to each record's range) was no longer needed.
+// A map whose curve does not level off would need the Emax hold back. The
 // range is the whole face's, not each position's: the shape is constrained
 // over all of it, and past a position's own last point only its level and
 // slope are carried along that shape (a per-position clamp held the outer

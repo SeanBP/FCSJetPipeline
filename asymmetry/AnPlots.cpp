@@ -28,7 +28,17 @@
 //                          fractions, EM level mix, mean corrected E
 // plus all pages in plots.pdf.
 //
-// Usage: ./AnPlots <yield file list> <out dir>
+// The runs of AnConfig.h kSuppBadRuns (left out of A_N) are left out of the
+// summed pages too, and kept in the per-run rows (runs.png, runs.txt).
+//
+// Two steps: reading the yields (the slow part, ~40 min over a full report's
+// files) writes everything the pages use to <out dir>/qa_sums.root (the
+// summed histograms, the per-run rows as TTree "runs", the file count); -s
+// draws the pages again from that file alone, in seconds, for cosmetic
+// changes.
+//
+// Usage: ./AnPlots <yield file list> <out dir>      read the yields, save qa_sums.root, draw
+//        ./AnPlots -s <qa_sums.root> <out dir>      draw from a saved qa_sums.root
 // Build: g++ -m64 -O2 AnPlots.cpp -o AnPlots `root-config --cflags --libs` -std=c++11
 
 #include <TCanvas.h>
@@ -42,6 +52,7 @@
 #include <TNamed.h>
 #include <TStyle.h>
 #include <TSystem.h>
+#include <TTree.h>
 
 #include <cmath>
 #include <cstdio>
@@ -167,8 +178,14 @@ static void HalfSqrtSLine(const std::string &var)
 
 int main(int argc, char **argv)
 {
-    if (argc < 3) { std::cerr << "Usage: " << argv[0] << " <yield file list> <out dir>" << std::endl; return 1; }
-    gOut = argv[2];
+    const bool from_sums = argc > 3 && std::string(argv[1]) == "-s";
+    if (argc < 3 || (std::string(argv[1]) == "-s" && argc < 4))
+    {
+        std::cerr << "Usage: " << argv[0] << " <yield file list> <out dir>\n       " << argv[0] << " -s <qa_sums.root> <out dir>" << std::endl;
+        return 1;
+    }
+    const char *in_arg = from_sums ? argv[2] : argv[1];
+    gOut = from_sums ? argv[3] : argv[2];
     gSystem->mkdir(gOut.c_str(), true);
     gStyle->SetOptStat(0);
     gStyle->SetPalette(55);
@@ -177,17 +194,46 @@ int main(int argc, char **argv)
     // per-run quantities, filled file by file
     struct RunRow { double ev_read, ev_pass, jets, xpos, xneg, spin[kNSpinStates], lvl[kNTrgLevels], esum, en; };
     std::map<int, RunRow> rows;
-    std::ifstream list(argv[1]);
+    std::ifstream list(from_sums ? "" : in_arg);
     std::string fn;
-    int nfiles = 0;
-    while (list >> fn)
+    int nfiles = 0, n_supp = 0;
+    if (from_sums)
+    {
+        // everything the pages need, as saved by an earlier run on the yields
+        TFile in(in_arg);
+        if (in.IsZombie()) { std::cerr << "ERROR: cannot open " << in_arg << std::endl; return 1; }
+        TIter next(in.GetListOfKeys());
+        while (TObject *k = next())
+        {
+            TObject *o = in.Get(k->GetName());
+            if (o && o->InheritsFrom(TH1::Class())) { TH1 *h = (TH1 *)o; h->SetDirectory(0); gSum[k->GetName()] = h; }
+        }
+        TNamed *nf = (TNamed *)in.Get("n_files");
+        nfiles = nf ? std::atoi(nf->GetTitle()) : 0;
+        TTree *t = (TTree *)in.Get("runs");
+        if (t)
+        {
+            int run; RunRow r;
+            t->SetBranchAddress("run", &run);
+            t->SetBranchAddress("ev_read", &r.ev_read); t->SetBranchAddress("ev_pass", &r.ev_pass);
+            t->SetBranchAddress("jets", &r.jets); t->SetBranchAddress("xpos", &r.xpos); t->SetBranchAddress("xneg", &r.xneg);
+            t->SetBranchAddress("spin", r.spin); t->SetBranchAddress("lvl", r.lvl);
+            t->SetBranchAddress("esum", &r.esum); t->SetBranchAddress("en", &r.en);
+            for (Long64_t i = 0; i < t->GetEntries(); i++) { t->GetEntry(i); rows[run] = r; }
+        }
+        printf("AnPlots: from %s (%d files, %zu runs, %zu histograms)\n", in_arg, nfiles, rows.size(), gSum.size());
+    }
+    while (!from_sums && list >> fn)
     {
         TFile f(fn.c_str());
         if (f.IsZombie()) { std::cerr << "WARNING: cannot open " << fn << std::endl; continue; }
-        AddFile(f);
-        nfiles++;
         TNamed *rn = (TNamed *)f.Get("runs");
         const int run = rn ? std::atoi(rn->GetTitle()) : 0;
+        // runs AnAsymmetry always leaves out (AnConfig.h kSuppBadRuns): kept
+        // in the per-run rows (runs.png, runs.txt), not in the summed pages
+        if (SuppBadRunReason(run)) n_supp++;
+        else AddFile(f);
+        nfiles++;
         RunRow &r = rows[run];
         TH1 *cut = (TH1 *)f.Get("h_cutflow");
         if (cut) r.ev_read += cut->GetBinContent(cut->GetNbinsX());
@@ -227,7 +273,26 @@ int main(int argc, char **argv)
         if (ec) { r.esum += ec->GetMean() * ec->GetEntries(); r.en += ec->GetEntries(); }
     }
     if (nfiles == 0) { std::cerr << "ERROR: no files" << std::endl; return 1; }
-    printf("AnPlots: %d files, %zu runs\n", nfiles, rows.size());
+    if (!from_sums)
+    {
+        printf("AnPlots: %d files, %zu runs; %d files of AnConfig.h kSuppBadRuns runs only in the per-run rows\n", nfiles, rows.size(), n_supp);
+        // save what the pages use, so they can be redrawn with -s
+        TFile out((gOut + "/qa_sums.root").c_str(), "RECREATE");
+        for (std::map<std::string, TH1 *>::const_iterator it = gSum.begin(); it != gSum.end(); ++it) it->second->Write(it->first.c_str());
+        TNamed("n_files", TString::Format("%d", nfiles).Data()).Write();
+        TTree t("runs", "per-run rows of AnPlots");
+        int run; RunRow r;
+        t.Branch("run", &run, "run/I");
+        t.Branch("ev_read", &r.ev_read, "ev_read/D"); t.Branch("ev_pass", &r.ev_pass, "ev_pass/D");
+        t.Branch("jets", &r.jets, "jets/D"); t.Branch("xpos", &r.xpos, "xpos/D"); t.Branch("xneg", &r.xneg, "xneg/D");
+        t.Branch("spin", r.spin, TString::Format("spin[%d]/D", kNSpinStates));
+        t.Branch("lvl", r.lvl, TString::Format("lvl[%d]/D", kNTrgLevels));
+        t.Branch("esum", &r.esum, "esum/D"); t.Branch("en", &r.en, "en/D");
+        for (std::map<int, RunRow>::const_iterator it = rows.begin(); it != rows.end(); ++it) { run = it->first; r = it->second; t.Fill(); }
+        t.Write();
+        out.Close();
+        printf("AnPlots: wrote %s/qa_sums.root\n", gOut.c_str());
+    }
 
     TCanvas *c0 = new TCanvas("c0", "", 10, 10);
     c0->Print((gOut + "/plots.pdf[").c_str());
