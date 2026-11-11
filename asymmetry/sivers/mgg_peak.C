@@ -4,7 +4,8 @@
 // h_xFm_<level>_<side>_<spin>[_jponly]: each jet once, E <= sqrt(s)/2),
 // projects them on the mass and fits a Gaussian plus a linear background
 // around the highest bin in 0.05-0.30 GeV. Prints "peak=<GeV>" (the Gaussian
-// mean), "sigma=", and writes <out_png> with the fit.
+// mean), "sigma=" (AnAsymmetry -m in:<peak>:<sigma> takes peak +- 2 sigma),
+// and writes <out_png> with the fit and that window shaded.
 // Usage: root -b -q 'mgg_peak.C("yields.list", "mgg_peak.png")'
 
 void mgg_peak(const char *yield_list, const char *out_png)
@@ -57,10 +58,10 @@ void mgg_peak(const char *yield_list, const char *out_png)
     m->GetXaxis()->SetRangeUser(0, 0.6);
     m->SetMaximum(m->GetMaximum() * 1.15);
     m->Draw("hist");
-    // the window AnAsymmetry -m uses: whole bins whose centre is in 0.5-1.5 x peak
+    // the window AnAsymmetry -m uses: whole bins whose centre is in peak +- 2 sigma
     double wlo = 1e9, whi = -1e9;
     for (int b = 1; b <= m->GetNbinsX(); b++)
-        if (m->GetBinCenter(b) >= 0.5 * peak && m->GetBinCenter(b) <= 1.5 * peak)
+        if (m->GetBinCenter(b) >= peak - 2 * sig && m->GetBinCenter(b) <= peak + 2 * sig)
         {
             if (m->GetBinLowEdge(b) < wlo) wlo = m->GetBinLowEdge(b);
             if (m->GetBinLowEdge(b + 1) > whi) whi = m->GetBinLowEdge(b + 1);
@@ -72,6 +73,6 @@ void mgg_peak(const char *yield_list, const char *out_png)
     TLatex t; t.SetNDC(); t.SetTextSize(0.035);
     t.DrawLatex(0.45, 0.85, Form("peak %.3f GeV, #sigma %.3f GeV", peak, sig));
     t.DrawLatex(0.45, 0.80, Form("shaded: %.3f-%.3f GeV", wlo, whi));
-    t.DrawLatex(0.45, 0.75, "(bins with centre in 0.5-1.5 #times peak)");
+    t.DrawLatex(0.45, 0.75, "(bins with centre in peak #pm 2#sigma)");
     c->SaveAs(out_png);
 }

@@ -1,0 +1,12 @@
+# STAR FMS isolated pi0 A_N vs x_F (pi0 x_F), x_F > 0: z_em = E_pi0 / E_EMjet > 0.98 (anti-kT R = 0.7), M_gg 0-0.3 GeV, background subtracted
+# overlaid on our two-photon jets inside the pi0 mass window (an_mass_in.root, np2)
+# set: label of the following points; shift <dx>: drawn dx to the right (overlaps); columns: x_F  A_N  stat error (sys <= 0.0011, not included)
+set STAR FMS isolated #pi^{0} (z_{em}>0.98), p+p 500 GeV (Run 11), PRD 103, 092009
+# HEPData ins1837609, Table 4 from Fig7 (points at the mean x_F)
+0.1622 0.0195 0.0077
+0.1821 0.0184 0.0073
+0.2022 0.0316 0.0073
+0.2219 0.0315 0.0072
+0.2455 0.0353 0.0068
+0.2781 0.0565 0.0082
+0.3244 0.0557 0.0105

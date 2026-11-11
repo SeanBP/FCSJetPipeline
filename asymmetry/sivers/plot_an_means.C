@@ -10,7 +10,7 @@ void plot_an_means(const char *table, const char *out_png, const char *level = "
     gStyle->SetOptStat(0);
     const int nc = 5;
     const char *cls[nc] = {"all", "np1", "np2", "np12", "np3plus"};
-    const char *clab[nc] = {"all jets", "1 photon", "2 photons", "1 or 2 photons", "#geq 3 photons"};
+    const char *clab[nc] = {"all jets", "1 photon", "2 photons", "1 or 2 photons", "> 2 photons"};
     const int col[nc] = {kBlack, kAzure + 2, kOrange + 7, kGreen + 2, kMagenta + 1};
     const int mk[nc] = {20, 21, 22, 33, 23};
     const double msz[nc] = {1.1, 1.0, 1.2, 1.6, 1.2};

@@ -206,8 +206,8 @@ Step 6 runs on the job outputs, not in the job.
     levels in "all" (the JP jets whose EM slice is below the EM factor) (EM only by default; "allJP" is always written); `-V`:
     add the EM jets that failed only the veto margin. Yield files made
     before 2026-11-05 are refused.
-  - `-m in:<peak>` / `-m out:<peak>`: the np2 rows become the two-photon
-    jets with pair mass inside / outside 0.5-1.5 x peak (whole 25 MeV bins
+  - `-m in:<peak>:<sigma>` / `-m out:<peak>:<sigma>`: the np2 rows become the two-photon
+    jets with pair mass inside / outside peak +- 2 sigma (whole 25 MeV bins
     whose centre is in it), from the `h_xFm_*` yields; `<|cos phi|>`, `<x_F>`
     and P are those of all np2 jets. Default jets only (factor 1.3, no
     `-E`/`-C`/`-A`/`-V`); with `-J` the union. `mgg_peak.C` fits the peak,

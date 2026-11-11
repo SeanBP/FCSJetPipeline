@@ -224,9 +224,11 @@ static const char *const kHiESuffix = "_hiE";
 static const char *const kCompSuffix = "_comp";
 // ------------------ Two-photon jets ------------------
 // Invariant mass of the two point constituents of a two-photon jet: QA (qa_mgg_*) and x_F vs mass yields (h_xFm_*) for a pi0
-// window chosen later. 25 MeV bins; the data pi0 peak sits 8-17% below sim
-// (point energy scale).
-static const int kNMassBins = 40;
+// window chosen later. 5 MeV bins (Sean 2026-11-11: finer than the 25 MeV
+// before, for the peak fit and a +-2 sigma window that follows sigma; about
+// +0.5 MB per yield file); the data pi0 peak sits 8-17% below sim (point
+// energy scale).
+static const int kNMassBins = 200;
 static const double kMassMin = 0.0, kMassMax = 1.0;
 
 // ------------------ Leading-point pi0 probability ------------------

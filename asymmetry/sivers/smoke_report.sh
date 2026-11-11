@@ -8,8 +8,8 @@
 #   an_vs_xf_union.png         the union A_N vs x_F
 #   an_vs_xf_<JP level>.png    A_N per JP level and allJP
 #   mgg_peak.png               two-photon jets' pair mass, the fitted pi0 peak
-#   an_mass_in/out.root, .txt  AnAsymmetry -J -m in/out:<peak>: np2 rows = the
-#                              two-photon jets inside / outside 0.5-1.5 x peak
+#   an_mass_in/out.root, .txt  AnAsymmetry -J -m in/out:<peak>:<sigma>: np2 rows =
+#                              the two-photon jets inside / outside peak +- 2 sigma
 #   an_vs_xf_mass.png          their A_N vs x_F, inside vs outside
 #   an_vs_xf.png               final A_N vs x_F, statistical errors
 #   an_projected.txt           the table with errors projected to the full
@@ -72,13 +72,14 @@ container "g++ -m64 -O2 build/AnAsymmetry.cpp -o build/AnAsymmetry \`root-config
 container "./build/AnAsymmetry -r yields.list $(src run22_polarization.txt) an.root" > "${REP}/an_asymmetry.log"
 grep -A20 "^all, all photon classes" "${REP}/an_asymmetry.log" || true
 container "./build/AnAsymmetry -J -r yields.list $(src run22_polarization.txt) an_union.root" > "${REP}/an_asymmetry_union.log"
-# two-photon jets in vs out of the pi0 mass window (0.5-1.5 x the fitted peak)
+# two-photon jets in vs out of the pi0 mass window (fitted peak +- 2 sigma)
 container "root -b -q -l 'build/mgg_peak.C(\"yields.list\",\"mgg_peak.png\")'" > "${REP}/mgg_peak.log" 2>&1
 PEAK=$(sed -n 's/^peak=//p' "${REP}/mgg_peak.log" | tail -1)
-echo "pi0 peak: ${PEAK} GeV"
+SIGMA=$(sed -n 's/^sigma=//p' "${REP}/mgg_peak.log" | tail -1)
+echo "pi0 peak: ${PEAK} GeV, sigma ${SIGMA} GeV"
 if [ -n "$PEAK" ] && [ "$PEAK" != "0" ]; then
-    container "./build/AnAsymmetry -J -m in:${PEAK} -r yields.list $(src run22_polarization.txt) an_mass_in.root" > "${REP}/an_asymmetry_mass_in.log"
-    container "./build/AnAsymmetry -J -m out:${PEAK} -r yields.list $(src run22_polarization.txt) an_mass_out.root" > "${REP}/an_asymmetry_mass_out.log"
+    container "./build/AnAsymmetry -J -m in:${PEAK}:${SIGMA} -r yields.list $(src run22_polarization.txt) an_mass_in.root" > "${REP}/an_asymmetry_mass_in.log"
+    container "./build/AnAsymmetry -J -m out:${PEAK}:${SIGMA} -r yields.list $(src run22_polarization.txt) an_mass_out.root" > "${REP}/an_asymmetry_mass_out.log"
 fi
 else
     # SMOKE_PLOTS_ONLY=1: an*.root, an.txt and mgg_peak.log are already in the

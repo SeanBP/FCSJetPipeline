@@ -82,10 +82,13 @@
 // (_veto). Yield files made before 2026-11-05 (no "trigger_rule") have
 // neither and are refused.
 //
-// Pi0 mass window (-m in:<peak> / -m out:<peak>). The np2 rows then hold the
-// two-photon jets whose pair mass is inside (in) or outside (out) 0.5-1.5 x
-// <peak> GeV, from AnHistograms' x_F vs mass yields (h_xFm_*, E <= sqrt(s)/2,
-// jets at the default factor 1.3, -J union from _jponly): a mass bin (25 MeV)
+// Pi0 mass window (-m in:<mean>:<sigma> / -m out:<mean>:<sigma>). The np2 rows
+// then hold the two-photon jets whose pair mass is inside (in) or outside
+// (out) mean +- 2 sigma of the Gaussian fitted to the pi0 peak (mgg_peak.C;
+// Sean 2026-11-11: the window in units of the peak width). The older form
+// in:<peak> / out:<peak> still takes 0.5-1.5 x <peak>. The yields come from
+// AnHistograms' x_F vs mass yields (h_xFm_*, E <= sqrt(s)/2, jets at the
+// default factor 1.3, -J union from _jponly): a mass bin (25 MeV)
 // counts as inside if its centre is in the window, and the window actually
 // used is printed. <|cos phi|>, <x_F> and the run-weighted P per bin are those
 // of all np2 jets (the mass split is not stored for them; the jets in and out
@@ -127,7 +130,7 @@
 // place of the triggering jets), -A of both together. The choice is printed,
 // in the table header and as TNamed "jet_sample". -E applies to either.
 //
-// Usage: ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] [-m in|out:<peak>] <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]
+// Usage: ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] [-m in|out:<mean>:<sigma>] <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]
 //        ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] -r <yield file list> <run polarization table> <out.root> [rebin = 2]
 //                         [bad-run list = kBadRunListDefault | none] [flagged | all]
 //   rebin 2 gives x_F bins of 0.05, as the FMS EM-jet analysis
@@ -210,6 +213,9 @@ struct Sums
     // -m: 0 off, 1 inside the mass window, 2 outside; np2 yields from h_xFm_*
     int mass_mode = 0;
     double mass_lo = 0, mass_hi = 0;
+    // the mass bins actually in the window and their width (written as TNamed
+    // "mass_window" for plot_an_mass.C)
+    double mass_bin_lo = 0, mass_bin_hi = 0, mass_bin_w = 0;
     // -p: P_lead range [plead_lo, plead_hi); np1 rows = all jets in it, other classes empty
     bool plead_mode = false, z_mode = false;
     double plead_lo = 0, plead_hi = 1, z_lo = 0, z_hi = 1;
@@ -578,7 +584,8 @@ int main(int argc, char **argv)
                   << "  -fe / -fj: the factor for EM levels / JP levels alone (default 1.3 for both)\n"
                   << "  -J: \"all\" = EM + JP union, each jet once (default: EM levels only; allJP is always written)\n"
                   << "  -V: add EM jets that failed only the HCal-veto margin\n"
-                  << "  -m in:<peak> | out:<peak>: np2 rows = two-photon jets with pair mass inside / outside 0.5-1.5 x <peak> GeV\n"
+                  << "  -m in:<mean>:<sigma> | out:<mean>:<sigma>: np2 rows = two-photon jets with pair mass inside / outside mean +- 2 sigma (GeV;\n"
+                  << "     in:<peak> / out:<peak>: 0.5-1.5 x <peak>)\n"
                   << "  -p <lo>:<hi>: np1 rows (and all, np12) = every jet with leading-point pi0 probability P_lead in [lo, hi)\n"
                   << "  -z <lo>:<hi>: the same rows, jets whose pi0 candidate carries a jet energy fraction z in [lo, hi) (with -p: class edges 0, 0.5, 0.7, 0.85, 1)" << std::endl;
         return 1;
@@ -598,24 +605,55 @@ int main(int argc, char **argv)
     {
         const size_t c = mass_opt.find(':');
         const std::string w = mass_opt.substr(0, c);
+        const size_t c2 = c == std::string::npos ? std::string::npos : mass_opt.find(':', c + 1);
         const double peak = c == std::string::npos ? 0 : std::atof(mass_opt.substr(c + 1).c_str());
-        if ((w != "in" && w != "out") || !(peak > 0)) { std::cerr << "ERROR: -m takes in:<peak> or out:<peak> (GeV)" << std::endl; return 1; }
+        const double sig = c2 == std::string::npos ? 0 : std::atof(mass_opt.substr(c2 + 1).c_str());
+        if ((w != "in" && w != "out") || !(peak > 0) || (c2 != std::string::npos && !(sig > 0)))
+        {
+            std::cerr << "ERROR: -m takes in:<mean>:<sigma> or out:<mean>:<sigma> (GeV; or in:<peak> / out:<peak>)" << std::endl;
+            return 1;
+        }
+        // the window: mean +- kMassWindowSigma sigma, or 0.5-1.5 x peak
+        const double kMassWindowSigma = 2.0;
+        const double wlo = sig > 0 ? peak - kMassWindowSigma * sig : 0.5 * peak;
+        const double whi = sig > 0 ? peak + kMassWindowSigma * sig : 1.5 * peak;
+        const std::string wtext = sig > 0 ? TString::Format("%.4f +- 2 x %.4f GeV", peak, sig).Data()
+                                          : TString::Format("0.5-1.5 x %.4f GeV", peak).Data();
         if (hi_e || comp_only || comp_add || add_veto || std::fabs(factor_em - 1.3) > 1e-6 || std::fabs(factor_jp - 1.3) > 1e-6)
         {
             std::cerr << "ERROR: -m works with the default jets only (no -E, -C, -A, -V; factors 1.3)" << std::endl;
             return 1;
         }
         sums.mass_mode = w == "in" ? 1 : 2;
-        // the window in whole 25 MeV bins: a bin is in if its centre is
-        const double bw = (kMassMax - kMassMin) / kNMassBins;
-        double lo = 1e9, hi = -1e9;
-        for (int b = 0; b < kNMassBins; b++)
+        // the window in whole mass bins (a bin is in if its centre is), on the
+        // mass axis of the yield files (25 MeV before 2026-11-11, AnConfig.h
+        // kNMassBins after), read from the first file
+        int nmb = kNMassBins;
+        double mmin = kMassMin, mmax = kMassMax;
         {
-            const double cen = kMassMin + (b + 0.5) * bw;
-            if (cen >= 0.5 * peak && cen <= 1.5 * peak) { lo = std::min(lo, cen - 0.5 * bw); hi = std::max(hi, cen + 0.5 * bw); }
+            std::string first = per_run ? "" : argv[1];
+            if (per_run)
+            {
+                std::ifstream lst(argv[2]);
+                std::string line;
+                while (first.empty() && std::getline(lst, line))
+                    if (!line.empty() && line[0] != '#') first = line;
+            }
+            TFile *f0 = first.empty() ? 0 : TFile::Open(first.c_str());
+            TH2 *h0 = f0 && !f0->IsZombie() ? (TH2 *)f0->Get("h_xFm_EM0_xpos_BuYu") : 0;
+            if (h0) { nmb = h0->GetNbinsY(); mmin = h0->GetYaxis()->GetXmin(); mmax = h0->GetYaxis()->GetXmax(); }
+            delete f0;
         }
-        sums.mass_lo = 0.5 * peak; sums.mass_hi = 1.5 * peak;
-        mass_note = TString::Format("np2 = two-photon jets with M_gg %s 0.5-1.5 x %.4f GeV (bins %.3f-%.3f GeV); <|cos|>, <x_F>, P of all np2", w == "in" ? "inside" : "outside", peak, lo, hi).Data();
+        const double bw = (mmax - mmin) / nmb;
+        double lo = 1e9, hi = -1e9;
+        for (int b = 0; b < nmb; b++)
+        {
+            const double cen = mmin + (b + 0.5) * bw;
+            if (cen >= wlo && cen <= whi) { lo = std::min(lo, cen - 0.5 * bw); hi = std::max(hi, cen + 0.5 * bw); }
+        }
+        sums.mass_bin_lo = lo; sums.mass_bin_hi = hi; sums.mass_bin_w = bw;
+        sums.mass_lo = wlo; sums.mass_hi = whi;
+        mass_note = TString::Format("np2 = two-photon jets with M_gg %s %s (bins %.3f-%.3f GeV); <|cos|>, <x_F>, P of all np2", w == "in" ? "inside" : "outside", wtext.c_str(), lo, hi).Data();
         std::printf("AnAsymmetry: %s\n", mass_note.c_str());
     }
     if (!z_opt.empty() && plead_opt.empty()) plead_opt = "0:1";
@@ -744,6 +782,7 @@ int main(int argc, char **argv)
     TNamed("high_E_jets", hie_note.c_str()).Write();
     TNamed("jet_sample", sample_note.c_str()).Write();
     TNamed("trigger_selection", trg_note.c_str()).Write();
+    if (sums.mass_mode) TNamed("mass_window", TString::Format("%.4f %.4f %.4f", sums.mass_bin_lo, sums.mass_bin_hi, sums.mass_bin_w).Data()).Write();
     const std::string table_name = std::string(argv[per_run ? 4 : 2]).substr(0, std::string(argv[per_run ? 4 : 2]).rfind(".root")) + ".txt";
     FILE *table = std::fopen(table_name.c_str(), "w");
     std::fprintf(table, "# A_N = eps / (<P> <|cos phi|>), %s; stat = statistical error only\n", pol_note.c_str());
