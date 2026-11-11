@@ -87,7 +87,10 @@ else
     PEAK=$(sed -n 's/^peak=//p' "${REP}/mgg_peak.log" | tail -1)
 fi
 
-"${HERE}/project_errors.py" "${OUTDIR}" "${REP}/an.txt" "${GOOD}" | tee "${REP}/projection.log"
+# the full sample = all good-run events, disk and tape (run22_run_events_all.txt,
+# from the tape catalog; Sean 2026-11-11), when that table is there
+ALLEV="$(src run22_run_events_all.txt)"
+"${HERE}/project_errors.py" "${OUTDIR}" "${REP}/an.txt" "${GOOD}" $([ -f "${ALLEV}" ] && echo "${ALLEV}") | tee "${REP}/projection.log"
 # every A_N plot (list, axes, text): replot_report.sh, which also redraws them
 # later from the report folder alone
 "${HERE}/replot_report.sh" "${REP}"

@@ -13,8 +13,14 @@ evenly over Run 22) in jets per event and polarization. Only test runs in
 the good-run list count, the runs AnAsymmetry -r keeps (same cuts); runs it
 removed (listed in an.txt's "# bad runs" line) count in neither sample.
 
+With a 4th argument, a per-run event table (run files events, e.g.
+../run22_run_events_all.txt from the tape catalog, every file once),
+events_full is that table's events of the good runs: all good-run events, on
+disk and tape (Sean 2026-11-11). Without it, the good-run list's own events
+(the disk catalog, which counts duplicate disk copies) are used.
+
 Usage:
-  ./project_errors.py <test outdir> <an.txt> <good_runs.txt>
+  ./project_errors.py <test outdir> <an.txt> <good_runs.txt> [run events table]
 Writes <an>_projected.txt (AnAsymmetry's table plus stat_full) and prints the
 scale factor and the final points (level all, class all).
 """
@@ -35,6 +41,18 @@ def main():
         t = line.split()
         if t and not line.startswith("#"):
             good_ev[int(t[0])] = int(t[1])
+    full_src = "disk catalog"
+    if len(sys.argv) > 4:
+        all_ev = {}
+        for line in open(sys.argv[4]):
+            t = line.split()
+            if t and not line.startswith("#"):
+                all_ev[int(t[0])] = int(t[2])
+        missing = [r for r in good_ev if r not in all_ev]
+        if missing:
+            sys.exit("runs of the good-run list missing from %s: %s" % (sys.argv[4], missing[:10]))
+        good_ev = dict((r, all_ev[r]) for r in good_ev)
+        full_src = "disk and tape"
     # runs AnAsymmetry left out (bad-run lists, AnConfig.h kSuppBadRuns): the
     # "# bad runs: ... removed: <run> <reason> ..." header line of an.txt
     removed = set()
@@ -70,8 +88,8 @@ def main():
         sys.exit("no processed files found in %s" % outdir)
     scale = math.sqrt(ev_test / float(ev_full))
     note = ("test: %d runs, %d files, %.4g events; full: %d good runs, %.4g events; fraction %.5f; "
-            "stat_full = stat x %.4f; %d runs left out by AnAsymmetry not counted" % (len(runs_test), files_test, ev_test, len(good_ev), ev_full,
-                                         ev_test / float(ev_full), scale, len(removed)))
+            "stat_full = stat x %.4f; %d runs left out by AnAsymmetry not counted; full events: %s" % (len(runs_test), files_test, ev_test, len(good_ev), ev_full,
+                                         ev_test / float(ev_full), scale, len(removed), full_src))
     print(note)
 
     out = an_txt[:-4] + "_projected.txt" if an_txt.endswith(".txt") else an_txt + "_projected"

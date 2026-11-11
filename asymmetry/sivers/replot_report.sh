@@ -44,7 +44,10 @@ SCALE=$(grep '^scale=' "${REP}/projection.log" | cut -d= -f2)
 PEAK=$(sed -n 's/^peak=//p' "${REP}/mgg_peak.log" 2>/dev/null | tail -1)
 SIGMA=$(sed -n 's/^sigma=//p' "${REP}/mgg_peak.log" 2>/dev/null | tail -1)
 # what the plots show: "<test runs> of <good runs> good runs, <events> events = <percent> of the Run 22 good-run events"
-SAMPLE=$(awk '/^test:/ { gsub(/[;,]/, ""); printf "%s of %s good runs, %.2g events = %.1f%% of the Run 22 good-run events", $2, $9, $6, 100 * $15 }' "${REP}/projection.log")
+# with the all-events table (project_errors.py 4th argument) the fraction is of
+# all good-run events, on disk and tape (Sean 2026-11-11; the label just says "all")
+# the run count only when some good runs have no data (Sean 2026-11-11)
+SAMPLE=$(awk '/^test:/ { all = /full events: disk and tape/; gsub(/[;,]/, ""); runs = ($2 < $9) ? sprintf("%s of %s good runs, ", $2, $9) : ""; printf "%s%.2g events = %.1f%% of %sRun 22 good-run events", runs, $6, 100 * $15, all ? "all " : "the " }' "${REP}/projection.log")
 AN_YLO="${AN_YLO:--0.02}"; AN_YHI="${AN_YHI:-0.08}"; AN_XR="${AN_XR:-0.6}"
 AX="${AN_YLO},${AN_YHI},${AN_XR}"
 # bins with a statistical error above AN_ERRMAX are not drawn: default 0.022 =

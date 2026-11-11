@@ -17,7 +17,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 src() { if [ -e "${HERE}/$1" ]; then echo "${HERE}/$1"; else echo "${HERE}/../$1"; fi; }
 CODE="$OUTDIR/${NAME}_code"
 rm -rf "$CODE"; mkdir -p "$CODE"
-for f in smoke_report.sh report_job.sh AnAsymmetry.cpp AnPlots.cpp AnConfig.h plot_an.C plot_an_means.C mgg_peak.C plot_an_mass.C replot_report.sh project_errors.py estimate_resources.py run22_polarization.txt catalog_runs_local.txt; do
+for f in smoke_report.sh report_job.sh AnAsymmetry.cpp AnPlots.cpp AnConfig.h plot_an.C plot_an_means.C mgg_peak.C plot_an_mass.C replot_report.sh project_errors.py estimate_resources.py run22_polarization.txt catalog_runs_local.txt run22_run_events_all.txt; do
     cp "$(src $f)" "$CODE/"
 done
 # the repository's other files the report code includes or reads
