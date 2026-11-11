@@ -1,7 +1,7 @@
 # STAR FMS EM-jet A_N vs x_F by photon multiplicity, p+p 510 GeV (Run 17), STAR Preliminary
 # PoS(DIS2025)110 (W. Zhang) Fig. 1 right, read from the PDF vector paths (2026-11-11); not overlaid by default
 # set: label of the following points; shift <dx>: drawn dx to the right (overlaps); columns: x_F  A_N  stat error (systematics not included)
-set STAR FMS prelim., p+p 510 GeV (Run 17), N_{#gamma}=1,2
+set Run 17 FMS EM-jets, p^{#uparrow}+p #sqrt{s} = 510 GeV, 1 or 2 photons, preliminary
 0.0750 +0.00314 0.00064
 0.1250 +0.01101 0.0006   # bar hidden in the marker: error below this
 0.1750 +0.01459 0.0006   # bar hidden in the marker: error below this
@@ -9,7 +9,7 @@ set STAR FMS prelim., p+p 510 GeV (Run 17), N_{#gamma}=1,2
 0.2750 +0.02058 0.0006   # bar hidden in the marker: error below this
 0.3250 +0.02418 0.00076
 0.3750 +0.01778 0.00261
-set STAR FMS prelim., p+p 510 GeV (Run 17), N_{#gamma}=3
+set Run 17 FMS EM-jets, p^{#uparrow}+p #sqrt{s} = 510 GeV, 3 photons, preliminary
 0.0750 +0.00235 0.00066
 0.1250 +0.00475 0.0006   # bar hidden in the marker: error below this
 0.1750 +0.00729 0.0006   # bar hidden in the marker: error below this
@@ -17,7 +17,7 @@ set STAR FMS prelim., p+p 510 GeV (Run 17), N_{#gamma}=3
 0.2750 +0.01145 0.0006   # bar hidden in the marker: error below this
 0.3250 +0.01391 0.00084
 0.3750 +0.00777 0.00299
-set STAR FMS prelim., p+p 510 GeV (Run 17), N_{#gamma}=4,5
+set Run 17 FMS EM-jets, p^{#uparrow}+p #sqrt{s} = 510 GeV, 4 or 5 photons, preliminary
 0.0750 +0.00014 0.0006   # bar hidden in the marker: error below this
 0.1250 +0.00153 0.0006   # bar hidden in the marker: error below this
 0.1750 +0.00203 0.0006   # bar hidden in the marker: error below this

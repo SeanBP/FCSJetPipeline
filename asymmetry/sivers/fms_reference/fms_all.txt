@@ -1,6 +1,6 @@
 # STAR FMS EM-jet A_N vs x_F, all photon multiplicities, x_F > 0 (blue beam)
 # set: label of the following points; shift <dx>: drawn dx to the right (overlaps); columns: x_F  A_N  stat error (systematics not included)
-set STAR FMS, p+p 500 GeV (Run 11), PRD 103, 092009
+set Run 11 FMS EM-jets, p^{#uparrow}+p #sqrt{s} = 500 GeV, PRD 103, 092009
 # HEPData ins1837609, Table 4 from Fig 9 (points at the mean x_F)
 0.1447 0.0047 0.0048
 0.1627 0.004 0.0031

@@ -1,6 +1,6 @@
 # STAR FMS EM-jet A_N vs x_F, jets with 1 or 2 photons, x_F > 0
 # set: label of the following points; shift <dx>: drawn dx to the right (overlaps); columns: x_F  A_N  stat error (systematics not included)
-set STAR FMS prelim., p+p 510 GeV (Run 17), N_{#gamma}=1,2
+set Run 17 FMS EM-jets, p^{#uparrow}+p #sqrt{s} = 510 GeV, 1 or 2 photons, preliminary
 # PoS(DIS2025)110 (W. Zhang) Fig. 1 right and Fig. 3 left (identical), read from the PDF vector paths
 # (2026-11-11; points at the bin centres; the error is the bar-cap distance, or the marker radius when the bar is hidden)
 0.0750 +0.00314 0.00064

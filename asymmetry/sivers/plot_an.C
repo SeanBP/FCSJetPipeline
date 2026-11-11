@@ -210,10 +210,15 @@ void plot_an(const char *in_root, const char *out_png, const char *level = "all"
     double sref[4];
     int nref = 0;
     if (TString(ref) != "") nref = ReadRef(ref, gref, lref, sref, 4);
-    // open markers, larger than ours and in colours apart from blue/orange
-    const int rcol[4] = {kBlack, kRed + 1, kGreen + 3, kMagenta + 2}, rmk[4] = {24, 25, 26, 27};
+    // open markers, larger than ours and in colours apart from blue/orange; the
+    // style follows the data set's run, the same in every plot (Sean
+    // 2026-11-11): Run 11 FMS black open circle, Run 17 FMS red open square;
+    // any other set by its order in the file
+    int rcol[4] = {kGreen + 3, kMagenta + 2, kCyan + 3, kGray + 2}, rmk[4] = {26, 27, 32, 28};
     for (int r = 0; r < nref; r++)
     {
+        if (lref[r].Contains("Run 11")) { rcol[r] = kBlack; rmk[r] = 24; }
+        else if (lref[r].Contains("Run 17")) { rcol[r] = kRed + 1; rmk[r] = 25; }
         gref[r]->SetMarkerStyle(rmk[r]); gref[r]->SetMarkerSize(1.5);
         gref[r]->SetMarkerColor(rcol[r]); gref[r]->SetLineColor(rcol[r]); gref[r]->SetLineWidth(2);
         if (sref[r] != 0) lref[r] += Form(", shifted by %+.3g in x_{F}", sref[r]);

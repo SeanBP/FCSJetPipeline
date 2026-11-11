@@ -180,10 +180,10 @@ int main(int argc, char **argv)
         TLegend *lg = one ? new TLegend(0.06, 0.81, 0.98, 0.93) : new TLegend(0.15, 0.74, 0.97, 0.91); keep.push_back(lg);
         lg->SetBorderSize(0); lg->SetFillStyle(0); lg->SetTextSize(one ? 0.028 : 0.034);
         if (one) lg->SetNColumns(2);
-        if (!cones_only) lg->AddEntry(&gw, "pixel ring: average energy density per wedge choice", "pl");
+        if (!cones_only) lg->AddEntry(&gw, "#eta-weighted side wedges: average energy density per wedge", "pl");
         if (one || cones_only) { lg->AddEntry(&gc, "two cones at #pm#Delta#phi: average energy density per cone placement", "pl"); lg->AddEntry(&gstd, "two cones at #pm90#circ: the FMS standard", "p"); }
-        lg->AddEntry(lo, "ring wedges outside the 2R separation, average", "l");
-        lg->AddEntry(lc, "ring wedges from 2R to 150#circ, average", "l");
+        lg->AddEntry(lo, "wedges outside the 2R separation, average", "l");
+        lg->AddEntry(lc, "wedges from 2R to 150#circ, average", "l");
         lg->Draw();
         TLatex tt; tt.SetNDC(); tt.SetTextFont(42); tt.SetTextSize(0.036);
         if (one) tt.SetTextSize(0.03);

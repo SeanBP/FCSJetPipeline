@@ -1,7 +1,7 @@
 # STAR FMS non-isolated pi0 A_N vs x_F (pi0 x_F), x_F > 0: z_em < 0.9, M_gg 0-0.3 GeV, background subtracted; not overlaid yet
 # (for the z_pair binning of the next pass)
 # set: label of the following points; shift <dx>: drawn dx to the right (overlaps); columns: x_F  A_N  stat error (sys <= 0.0004, not included)
-set STAR FMS non-isolated #pi^{0} (z_{em}<0.9), p+p 500 GeV (Run 11), PRD 103, 092009
+set Run 11 FMS non-isolated #pi^{0} (z_{em} < 0.9), p^{#uparrow}+p #sqrt{s} = 500 GeV, PRD 103, 092009
 # HEPData ins1837609, Table 2 from Fig7 (points at the mean x_F)
 0.1619 -0.0035 0.0101
 0.1818 0.0029 0.0097

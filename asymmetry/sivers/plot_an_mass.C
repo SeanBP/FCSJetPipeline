@@ -46,6 +46,7 @@ void plot_an_mass(const char *in_root, const char *out_root, const char *out_png
     TFile *f[2] = {TFile::Open(in_root), TFile::Open(out_root)};
     const char *beam[2] = {"blue", "yellow"};
     const int col[2] = {kBlue + 1, kOrange + 1};
+    const int kMk[2][2] = {{20, 21}, {24, 25}};  // [inside, outside][blue, yellow]
     TGraphAsymmErrors *g[2][2];
     double ymin = 0, ymax = 0, xmax = 0;
     for (int w = 0; w < 2; w++)
@@ -75,7 +76,8 @@ void plot_an_mass(const char *in_root, const char *out_root, const char *out_png
                 if (hi > ymax) ymax = hi;
                 if (ax > xmax) xmax = ax;
             }
-            gg->SetMarkerStyle(w ? 24 : 20); gg->SetMarkerSize(1.0);
+            // as plot_an.C: blue circle, yellow square; inside filled, outside open
+            gg->SetMarkerStyle(kMk[w][b]); gg->SetMarkerSize(1.0);
             gg->SetMarkerColor(col[b]); gg->SetLineColor(col[b]); gg->SetLineWidth(2);
             g[w][b] = gg;
         }
@@ -146,7 +148,7 @@ void plot_an_mass(const char *in_root, const char *out_root, const char *out_png
     for (int k = 0; k < 4; k++)
     {
         const double y = ytop - 0.032 * k;
-        TMarker *m = new TMarker(0.0, 0.0, lw[k] ? 24 : 20);
+        TMarker *m = new TMarker(0.0, 0.0, kMk[lw[k]][lb[k]]);
         m->SetNDC(); m->SetX(xl + 0.008); m->SetY(y); m->SetMarkerColor(col[lb[k]]); m->SetMarkerSize(1.0); m->Draw();
         t.SetTextSize(0.024); t.DrawLatex(xl + 0.025, y, ltxt[k]);
     }

@@ -206,7 +206,7 @@ int main(int argc, char **argv)
             for (int row = 0; row < 2; row++)
             {
                 c.cd(1 + k + 3 * row);
-                gPad->SetGrid(); gPad->SetLeftMargin(0.13); gPad->SetBottomMargin(0.13);
+                gPad->SetLeftMargin(0.13); gPad->SetBottomMargin(0.13);
                 TH1D *fr = new TH1D(Form("fr%d%d%d", fam, k, row), Form(";offline %s / threshold (%g GeV);%s", fam ? "JP patch sum" : "ECal 4x4 sum",
                                     kTrgThresholdGeV[tr], row ? "purity" : "efficiency"), 10, 0.5, 2.5);
                 fr->SetMinimum(0); fr->SetMaximum(1.05);
@@ -252,7 +252,7 @@ int main(int argc, char **argv)
             for (int row = 0; row < 2; row++)
             {
                 c.cd(1 + k + 3 * row);
-                gPad->SetGrid(); gPad->SetLeftMargin(0.13); gPad->SetBottomMargin(0.13);
+                gPad->SetLeftMargin(0.13); gPad->SetBottomMargin(0.13);
                 TH1D *fr = new TH1D(Form("frv%d%d", k, row), Form(";HCal veto margin m (passes: 4m H_{4x4} #leq E_{4x4}, m = 0: none);%s",
                                     row ? "purity" : "efficiency"), 10, 0, 3);
                 fr->SetMinimum(0); fr->SetMaximum(1.05);
