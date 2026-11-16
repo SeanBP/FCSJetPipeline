@@ -17,11 +17,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 src() { if [ -e "${HERE}/$1" ]; then echo "${HERE}/$1"; else echo "${HERE}/../$1"; fi; }
 CODE="$OUTDIR/${NAME}_code"
 rm -rf "$CODE"; mkdir -p "$CODE"
-for f in smoke_report.sh report_job.sh AnAsymmetry.cpp AnPlots.cpp AnConfig.h plot_an.C plot_an_means.C mgg_peak.C plot_an_mass.C replot_report.sh project_errors.py estimate_resources.py run22_polarization.txt catalog_runs_local.txt run22_run_events_all.txt; do
+for f in smoke_report.sh report_job.sh AnAsymmetry.cpp AnPlots.cpp AnMerge.cpp AnRunTools.h AnConfig.h plot_an.C plot_an_means.C pi0_bgsub.C pi0_peak_runs.C replot_report.sh project_errors.py estimate_resources.py run22_polarization.txt catalog_runs_local.txt run22_run_events_all.txt; do
     cp "$(src $f)" "$CODE/"
 done
 # the repository's other files the report code includes or reads
-for f in $(grep -h -o '#include "[^"]*"' "$(src AnAsymmetry.cpp)" "$(src AnPlots.cpp)" "$(src AnConfig.h)" | sed 's/#include "\(.*\)"/\1/' | sort -u); do
+for f in $(grep -h -o '#include "[^"]*"' "$(src AnAsymmetry.cpp)" "$(src AnPlots.cpp)" "$(src AnMerge.cpp)" "$(src AnConfig.h)" | sed 's/#include "\(.*\)"/\1/' | sort -u); do
     [ -f "$(src $f)" ] && cp "$(src $f)" "$CODE/"
 done
 NFILES=$(find "$OUTDIR/hists" -maxdepth 1 -name 'an_hists_*.root' | wc -l)

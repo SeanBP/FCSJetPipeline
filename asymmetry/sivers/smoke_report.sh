@@ -7,10 +7,16 @@
 #                              jet once
 #   an_vs_xf_union.png         the union A_N vs x_F
 #   an_vs_xf_<JP level>.png    A_N per JP level and allJP
-#   mgg_peak.png               two-photon jets' pair mass, the fitted pi0 peak
-#   an_mass_in/out.root, .txt  AnAsymmetry -J -m in/out:<peak>:<sigma>: np2 rows =
-#                              the two-photon jets inside / outside peak +- 2 sigma
-#   an_vs_xf_mass.png          their A_N vs x_F, inside vs outside
+#   an_pi0_<iso|noniso|incl>_<sig|sb>.root, .txt  AnAsymmetry -J -I: FMS-style
+#                              pi0 candidates in the signal / sideband window
+#   an_pi0_<iso|noniso|incl>.root, .txt, _mass.png  pi0_bgsub.C: their
+#                              sideband-subtracted A_N vs pi0 x_F, mass fits
+#   an_vs_xf_pi0_<class>[_fms].png  those A_N (FMS isolated / non-isolated overlaid)
+#   pi0_peak_runs.png, .txt    the candidates' pi0 peak and width run by run
+#                              (scale factor check; PeakShift / Wide / LowStat flags)
+#   pi0_peak_runs_bad_runs.txt its flagged runs (D. Kapukchyan's format), masked in
+#                              every A_N above with AnAsymmetry -Q (with his list)
+#   pi0_peak_runs_scale_{global,per_period,per_run}.txt  pi0 scale tables for a rehist
 #   an_vs_xf.png               final A_N vs x_F, statistical errors
 #   an_projected.txt           the table with errors projected to the full
 #                              good-run sample (project_errors.py)
@@ -55,7 +61,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 src() { if [ -e "${HERE}/$1" ]; then echo "${HERE}/$1"; else echo "${HERE}/../$1"; fi; }
 REP="${OUTDIR}/${3:-report}"
 mkdir -p "${REP}/build"
-cp "$(src AnAsymmetry.cpp)" "$(src AnPlots.cpp)" "$(src AnConfig.h)" "$(src mgg_peak.C)" "${REP}/build/"
+cp "$(src AnAsymmetry.cpp)" "$(src AnPlots.cpp)" "$(src AnConfig.h)" "$(src AnRunTools.h)" "$(src AnMerge.cpp)" "$(src pi0_bgsub.C)" "$(src pi0_peak_runs.C)" "${REP}/build/"
 find -L "${OUTDIR}/hists" -maxdepth 1 -name 'an_hists_*.root' -mmin +10 | sort > "${REP}/yields.list"
 # jobs submitted so far, over all batches of the pass
 NJOBS=$(cat "${OUTDIR}"/run_params_*.txt 2>/dev/null | awk -F= '$1 == "nProcesses" && $2 > 0 { n += $2 } END { if (n) print n }')
@@ -68,23 +74,68 @@ container() {
 }
 
 if [ -z "${SMOKE_PLOTS_ONLY}" ]; then
-container "g++ -m64 -O2 build/AnAsymmetry.cpp -o build/AnAsymmetry \`root-config --cflags --libs\` -std=c++11 && g++ -m64 -O2 build/AnPlots.cpp -o build/AnPlots \`root-config --cflags --libs\` -std=c++11"
-container "./build/AnAsymmetry -r yields.list $(src run22_polarization.txt) an.root" > "${REP}/an_asymmetry.log"
+container "g++ -m64 -O2 build/AnAsymmetry.cpp -o build/AnAsymmetry \`root-config --cflags --libs\` -std=c++11 && g++ -m64 -O2 build/AnPlots.cpp -o build/AnPlots \`root-config --cflags --libs\` -std=c++11 && g++ -m64 -O2 build/AnMerge.cpp -o build/AnMerge \`root-config --cflags --libs\` -std=c++11"
+# Merged flow (Sean 2026-11-16, submit_an_merge.sh): when <outdir>/merge holds
+# the partial merges, the yields are not read again. AnMerge -a sums the
+# partials, the pi0 peak runs on the per-run spectra, AnMerge -x subtracts the
+# masked runs, and every A_N below reads the one masked file (AnAsymmetry -M).
+# All partials must be there (SMOKE_MERGE_PARTIAL=1 accepts fewer);
+# SMOKE_NO_MERGE=1 forces the per-file flow.
+MERGED=""
+if [ -z "${SMOKE_NO_MERGE}" ] && ls "${OUTDIR}"/merge/partial_*.root >/dev/null 2>&1; then
+    NPART=$(ls "${OUTDIR}"/merge/partial_*.root | wc -l)
+    NCHUNK=$(ls "${OUTDIR}"/merge/chunks/chunk_*.list 2>/dev/null | wc -l)
+    if [ "${NPART}" != "${NCHUNK}" ] && [ -z "${SMOKE_MERGE_PARTIAL}" ]; then
+        echo "ERROR: ${NPART} of ${NCHUNK} partial merges in ${OUTDIR}/merge (wait, or SMOKE_MERGE_PARTIAL=1)"; exit 1
+    fi
+    MERGED=1
+    ls "${OUTDIR}"/merge/partial_*.root > "${REP}/partials.list"
+    echo "merged flow: ${NPART} of ${NCHUNK} partial merges"
+    container "./build/AnMerge -a partials.list merged.root" > "${REP}/anmerge.log" 2>&1 || { tail "${REP}/anmerge.log"; exit 1; }
+    cat "${REP}/anmerge.log"
+fi
+PIN="yields.list"; [ -n "${MERGED}" ] && PIN="merged.root"
+# run-by-run pi0 peak first (Sean 2026-11-16): checks the energy scale factor and
+# flags runs; its bad-run list masks runs in every A_N below (-Q), together with
+# D. Kapukchyan's list, until his covers the whole run. SMOKE_NO_PI0_MASK=1 skips the mask.
+QOPT=""
+rm -f "${REP}/pi0_peak_runs_bad_runs.txt"
+container "root -b -q -l 'build/pi0_peak_runs.C+(\"${PIN}\",\"pi0_peak_runs\")'" > "${REP}/pi0_peak_runs.log" 2>&1
+grep "^pi0_peak_runs:" "${REP}/pi0_peak_runs.log" || true
+if [ -s "${REP}/pi0_peak_runs_bad_runs.txt" ] && [ -z "${SMOKE_NO_PI0_MASK}" ]; then
+    QOPT="-Q pi0_peak_runs_bad_runs.txt"
+    echo "pi0-peak bad runs masked: $(grep -c '^[0-9]' "${REP}/pi0_peak_runs_bad_runs.txt")"
+fi
+# the A_N input: the masked merged file, or the per-file yields with the run selection
+if [ -n "${MERGED}" ]; then
+    container "./build/AnMerge -x merged.root ${OUTDIR}/hists $(src run22_polarization.txt) masked.root ${QOPT}" > "${REP}/anmerge_mask.log" 2>&1 || { tail "${REP}/anmerge_mask.log"; exit 1; }
+    head -1 "${REP}/anmerge_mask.log"
+    ANIN="-M masked.root"
+else
+    ANIN="${QOPT} -r yields.list $(src run22_polarization.txt)"
+fi
+container "./build/AnAsymmetry ${ANIN} an.root" > "${REP}/an_asymmetry.log"
 grep -A20 "^all, all photon classes" "${REP}/an_asymmetry.log" || true
-container "./build/AnAsymmetry -J -r yields.list $(src run22_polarization.txt) an_union.root" > "${REP}/an_asymmetry_union.log"
-# two-photon jets in vs out of the pi0 mass window (fitted peak +- 2 sigma)
-container "root -b -q -l 'build/mgg_peak.C(\"yields.list\",\"mgg_peak.png\")'" > "${REP}/mgg_peak.log" 2>&1
-PEAK=$(sed -n 's/^peak=//p' "${REP}/mgg_peak.log" | tail -1)
-SIGMA=$(sed -n 's/^sigma=//p' "${REP}/mgg_peak.log" | tail -1)
-echo "pi0 peak: ${PEAK} GeV, sigma ${SIGMA} GeV"
-if [ -n "$PEAK" ] && [ "$PEAK" != "0" ]; then
-    container "./build/AnAsymmetry -J -m in:${PEAK}:${SIGMA} -r yields.list $(src run22_polarization.txt) an_mass_in.root" > "${REP}/an_asymmetry_mass_in.log"
-    container "./build/AnAsymmetry -J -m out:${PEAK}:${SIGMA} -r yields.list $(src run22_polarization.txt) an_mass_out.root" > "${REP}/an_asymmetry_mass_out.log"
+container "./build/AnAsymmetry -J ${ANIN} an_union.root" > "${REP}/an_asymmetry_union.log"
+# FMS-style pi0 isolation (Sean 2026-11-16; AnConfig.h): isolated (z_em > 0.98),
+# non-isolated (< 0.9) and all pi0 candidates, signal and sideband windows,
+# then the sideband-subtracted A_N (pi0_bgsub.C); yield files from 2026-11-16 on
+container "./build/AnAsymmetry -J -I incl:sig ${ANIN} an_pi0_incl_sig.root" > "${REP}/an_asymmetry_pi0_incl_sig.log" 2>&1 || true
+if ! grep -q "has no h_xFpi_" "${REP}/an_asymmetry_pi0_incl_sig.log"; then
+    for c in iso noniso incl; do
+        for w in sig sb; do
+            [ "${c}:${w}" = "incl:sig" ] && continue
+            container "./build/AnAsymmetry -J -I ${c}:${w} ${ANIN} an_pi0_${c}_${w}.root" > "${REP}/an_asymmetry_pi0_${c}_${w}.log"
+        done
+        container "root -b -q -l 'build/pi0_bgsub.C+(\"an_pi0_${c}_sig.root\",\"an_pi0_${c}_sb.root\",\"an_pi0_${c}\",\"all\",\"${c}\")'" > "${REP}/pi0_bgsub_${c}.log" 2>&1
+    done
+else
+    echo "no h_xFpi_* in the yield files (AnHistograms before 2026-11-16): no pi0 isolation A_N"
 fi
 else
-    # SMOKE_PLOTS_ONLY=1: an*.root, an.txt and mgg_peak.log are already in the
+    # SMOKE_PLOTS_ONLY=1: an*.root and an.txt are already in the
     # report folder (e.g. from condor jobs); redo the projection and the plots
-    PEAK=$(sed -n 's/^peak=//p' "${REP}/mgg_peak.log" | tail -1)
+    :
 fi
 
 # the full sample = all good-run events, disk and tape (run22_run_events_all.txt,
@@ -95,7 +146,12 @@ ALLEV="$(src run22_run_events_all.txt)"
 # later from the report folder alone
 "${HERE}/replot_report.sh" "${REP}"
 if [ -n "${SMOKE_PLOTS_ONLY}" ]; then echo "report plots redone in ${REP}"; exit 0; fi
-container "./build/AnPlots yields.list plots" > "${REP}/anplots.log" 2>&1 || { tail "${REP}/anplots.log"; exit 1; }
+if [ -f "${REP}/masked.root" ] && [ -z "${SMOKE_NO_MERGE}" ]; then
+    # merged flow: the summed pages show the masked sample (the runs in A_N); the per-run rows every run
+    container "./build/AnPlots -m masked.root plots" > "${REP}/anplots.log" 2>&1 || { tail "${REP}/anplots.log"; exit 1; }
+else
+    container "./build/AnPlots yields.list plots" > "${REP}/anplots.log" 2>&1 || { tail "${REP}/anplots.log"; exit 1; }
+fi
 
 "$(src estimate_resources.py)" "${OUTDIR}/timing" --runs "${GOOD}" > "${REP}/resources.txt"
 cat "${REP}/resources.txt"

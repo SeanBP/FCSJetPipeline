@@ -46,6 +46,11 @@
 // written to the output as TNamed "bad_runs". "none" uses no list. The runs
 // of AnConfig.h kSuppBadRuns (hot runs from the 20% pass QA) are left out in
 // every case.
+// Our own pi0-peak list (-Q <list>, Sean 2026-11-16): sivers/pi0_peak_runs.C's
+// <out>_bad_runs.txt, the same "Runnumber | Flag | Notes" format, with the
+// runs whose raw pi0 peak is shifted or wide. A run is masked if David's list
+// OR this one flags it, until David's list covers the whole run. Then it
+// replaces ours: drop -Q.
 //
 // x_F. Each point sits at the bin's mean corrected x_F (h_xfsum_* over the
 // summed yields; negative for yellow), its horizontal error bar spanning the
@@ -113,6 +118,17 @@
 // P_leadpair >= 0.5, else the leading point's (AnConfig.h kZCandPairMin). With
 // -z, -p must use the P_lead class edges 0, 0.5, 0.7, 0.85, 1.
 //
+// FMS-style pi0 candidates (-I <iso|noniso|incl>:<sig|sb>, Sean 2026-11-16;
+// AnConfig.h "FMS-style pi0 candidates"). The np1 rows (and all, np12) hold
+// pi0 candidates (photon pairs inside a default jet), binned in the pi0's own
+// x_F. They are read from AnHistograms' h_xFpi_* / h_abscospi_* / h_xfsumpi_*:
+//   - z_em class: iso z_em > 0.98, noniso z_em < 0.9, incl all;
+//   - mass window: sig M_gg 0-0.2 GeV, sb 0.2-0.3 GeV.
+// Each row's x_F vs M_gg spectrum of the class is written as pi0_mass_<row>.
+// sivers/pi0_bgsub.C combines a sig and an sb output into the background-
+// subtracted pi0 A_N, as the FMS did. Same restrictions as -p; excludes -m,
+// -p, -z.
+//
 // Outputs: <out.root> with the graphs and TNamed "bad_runs" (-r), and
 // <out.root minus .root>.txt, the table of every point (level, photon class,
 // beam, x_F bin, <x_F>, A_N, stat error, jets, <|cos phi|>, <P>).
@@ -131,7 +147,7 @@
 // in the table header and as TNamed "jet_sample". -E applies to either.
 //
 // Usage: ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] [-m in|out:<mean>:<sigma>] <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]
-//        ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] -r <yield file list> <run polarization table> <out.root> [rebin = 2]
+//        ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] [-Q <pi0 bad-run list>] -r <yield file list> <run polarization table> <out.root> [rebin = 2]
 //                         [bad-run list = kBadRunListDefault | none] [flagged | all]
 //   rebin 2 gives x_F bins of 0.05, as the FMS EM-jet analysis
 //   Prints, for each level, all and allJP, A_N per x_F bin of both beams
@@ -163,8 +179,8 @@
 #include <vector>
 
 #include "AnConfig.h"
+#include "AnRunTools.h"
 
-static const char *const kBadRunListDefault = "/star/u/dkap7827/Fcs2019/FcsAsymRun22/BadRuns.txt";
 
 enum Beam { kBeamBlue, kBeamYellow };
 static const char *const kBeamName[2] = {"blue", "yellow"};
@@ -213,16 +229,26 @@ struct Sums
     // -m: 0 off, 1 inside the mass window, 2 outside; np2 yields from h_xFm_*
     int mass_mode = 0;
     double mass_lo = 0, mass_hi = 0;
+    // -M (AnMerge output): the run-polarization-weighted yields are in these
+    // directories (Pblue / Pyellow); the per-beam P sums come from them, the
+    // other histograms from the top directory as from one file
+    TDirectory *wdir[2] = {0, 0};
     // the mass bins actually in the window and their width (written as TNamed
     // "mass_window" for plot_an_mass.C)
     double mass_bin_lo = 0, mass_bin_hi = 0, mass_bin_w = 0;
     // -p: P_lead range [plead_lo, plead_hi); np1 rows = all jets in it, other classes empty
     bool plead_mode = false, z_mode = false;
     double plead_lo = 0, plead_hi = 1, z_lo = 0, z_hi = 1;
+    // -I: FMS-style pi0 candidates (h_xFpi_*: x_F x M_gg x z_em). Uses the -p -z
+    // path with plead_lo/hi = the mass window, z_lo/hi = the z_em class; also
+    // sums the candidates' x_F vs M_gg spectra per level (pimass, for the
+    // signal fraction in pi0_bgsub.C)
+    bool pi0_mode = false;
+    std::map<std::string, TH2D *> pimass;
     static bool StartsWith(const std::string &a, const char *b) { return a.compare(0, std::strlen(b), b) == 0; }
     // -p: a yield (h_xF_<l>_<cls>_<side>_<spin>) or sum (h_abscos_ / h_xfsum_<l>_<cls>)
     // of the jets in the P_lead range for cls np1, zero for the other classes
-    TH1D *ReadPlead(TFile &f, const std::string &name, bool jp_only)
+    TH1D *ReadPlead(TDirectory &f, const std::string &name, bool jp_only)
     {
         TH1D *a = new TH1D((name + "_rdp").c_str(), "", kNXfBins, kXfMin, kXfMax);
         a->SetDirectory(0);
@@ -230,7 +256,7 @@ struct Sums
         if (!yield) a->Sumw2();
         if (name.find("_np1") == std::string::npos) return a;
         TString n(name.c_str());
-        const char *tag = z_mode ? "Pz_" : "P_";
+        const char *tag = pi0_mode ? "pi_" : z_mode ? "Pz_" : "P_";
         if (yield) { n.ReplaceAll("h_xF_", TString("h_xF") + tag); n.ReplaceAll("_np1_", "_"); }
         else { n.ReplaceAll("h_abscos_", TString("h_abscos") + tag); n.ReplaceAll("h_xfsum_", TString("h_xfsum") + tag); n.ReplaceAll("_np1", ""); }
         if (jp_only) n += "_jponly";
@@ -265,7 +291,7 @@ struct Sums
     }
     bool InWindow(double m) const { return m >= mass_lo && m <= mass_hi; }
     // np2 yield of one (level, side, spin) from the x_F vs mass yields
-    TH1D *ReadMass(TFile &f, const std::string &name, bool jp_only)
+    TH1D *ReadMass(TDirectory &f, const std::string &name, bool jp_only)
     {
         // name = h_xF_<level>_np2_<side>_<spin>
         TString n(name.c_str());
@@ -288,7 +314,7 @@ struct Sums
     }
     // -m: per x_F bin, the fraction of a file's two-photon jets of level l in
     // (out of) the mass window: window yield / all np2 yield, 0 where empty
-    TH1D *WindowFraction(TFile &f, int l, bool jp_only, bool &have_hie)
+    TH1D *WindowFraction(TDirectory &f, int l, bool jp_only, bool &have_hie)
     {
         int k2 = -1;
         for (int k = 0; k < kNPhotonClasses; k++)
@@ -336,7 +362,7 @@ struct Sums
         return v;
     }
     static bool IsJpName(const std::string &name) { return name.find("_JP") != std::string::npos; }
-    TH1D *Read(TFile &f, const std::string &name, bool &have_hie, bool jp_only = false)
+    TH1D *Read(TDirectory &f, const std::string &name, bool &have_hie, bool jp_only = false)
     {
         if (mass_mode && name.compare(0, 5, "h_xF_") == 0 && name.find("_np2_") != std::string::npos)
             return ReadMass(f, name, jp_only);
@@ -361,7 +387,7 @@ struct Sums
         return a;
     }
     // adds one file's histograms, its jets weighted by pol[beam]; false if any is missing
-    bool Add(TFile &f, const double pol[2])
+    bool Add(TDirectory &f, const double pol[2])
     {
         // files without "spin_convention" were filled with the old Spin_config
         // mapping (AnConfig.h), whose state p is the physical state 3 - p
@@ -376,12 +402,42 @@ struct Sums
             std::cerr << "ERROR: " << f.GetName() << " has no h_xFm_* (or old spin labels); -m needs yield files from 2026-11-05 on" << std::endl;
             return false;
         }
-        if (z_mode && (!f.Get("h_xFPz_EM0_xpos_BuYu") || f.Get("pz_missing")))
+        if (pi0_mode && !f.Get("h_xFpi_EM0_xpos_BuYu"))
+        {
+            std::cerr << "ERROR: " << f.GetName() << " has no h_xFpi_* (AnHistograms before 2026-11-16); -I needs newer yield files" << std::endl;
+            return false;
+        }
+        if (pi0_mode)
+            for (int l = 0; l < kNTrgLevels; l++)
+                for (int o = 0; o < (IsJpLevel(l) ? 2 : 1); o++)
+                    for (int s = 0; s < kNSides; s++)
+                        for (int p = 0; p < kNSpinStates; p++)
+                        {
+                            TH3D *m3 = (TH3D *)f.Get(TString::Format("h_xFpi_%s_%s_%s%s", kTrgLevelName[l], kSideName[s], kSpinStateName[p], o ? "_jponly" : ""));
+                            if (!m3) { std::cerr << "ERROR: " << f.GetName() << " misses an h_xFpi_* histogram" << std::endl; return false; }
+                            const std::string key = std::string(kTrgLevelName[l]) + (o ? "#jponly" : "");
+                            TH2D *&mm = pimass[key];
+                            if (!mm)
+                            {
+                                mm = new TH2D(("pimass_" + key).c_str(), ";#pi^{0} x_{F};M_{#gamma#gamma} (GeV)", m3->GetNbinsX(), m3->GetXaxis()->GetXbins()->GetArray(),
+                                              m3->GetNbinsY(), m3->GetYaxis()->GetXbins()->GetArray());
+                                mm->SetDirectory(0);
+                            }
+                            for (int bz = 1; bz <= m3->GetNbinsZ(); bz++)
+                            {
+                                const double cz = m3->GetZaxis()->GetBinCenter(bz);
+                                if (cz < z_lo || cz >= z_hi) continue;
+                                for (int bx = 1; bx <= m3->GetNbinsX(); bx++)
+                                    for (int by = 1; by <= m3->GetNbinsY(); by++)
+                                        mm->AddBinContent(mm->GetBin(bx, by), m3->GetBinContent(bx, by, bz));
+                            }
+                        }
+        if (!pi0_mode && z_mode && (!f.Get("h_xFPz_EM0_xpos_BuYu") || f.Get("pz_missing")))
         {
             std::cerr << "ERROR: " << f.GetName() << " has no filled h_xFPz_* (jet files without reco_pi0_lead_z1, or an older AnHistograms); -z needs yield files from 2026-11-10 on" << std::endl;
             return false;
         }
-        if (plead_mode && (old_labels || !f.Get("h_xFP_EM0_xpos_BuYu") || f.Get("plead_missing")))
+        if (!pi0_mode && plead_mode && (old_labels || !f.Get("h_xFP_EM0_xpos_BuYu") || f.Get("plead_missing")))
         {
             std::cerr << "ERROR: " << f.GetName() << " has no filled h_xFP_* (jet files without reco_pi0_lead_prob, or an older AnHistograms); -p needs yield files from 2026-11-10 on" << std::endl;
             return false;
@@ -485,7 +541,17 @@ struct Sums
                     for (int b = 0; b < 2; b++)
                     {
                         if (!w[b][l][k]) { w[b][l][k] = (TH1D *)n->Clone(TString::Format("pw%s_%d_%d_%d", o ? "o" : "", b, l, k)); w[b][l][k]->SetDirectory(0); w[b][l][k]->Reset(); }
-                        w[b][l][k]->Add(n, pol[b]);
+                        if (!wdir[b]) { w[b][l][k]->Add(n, pol[b]); continue; }
+                        // merged: sum of P_run x yield, already weighted
+                        bool hh = true;
+                        for (int s = 0; s < kNSides; s++)
+                            for (int p = 0; p < kNSpinStates; p++)
+                            {
+                                TH1D *r = Read(*wdir[b], YieldName(l, k, s, p).Data(), hh, o == 1);
+                                if (!r) { std::cerr << "ERROR: no weighted " << YieldName(l, k, s, p) << " in " << wdir[b]->GetName() << std::endl; std::exit(1); }
+                                w[b][l][k]->Add(r);
+                                delete r;
+                            }
                     }
                     delete n;
                 }
@@ -494,43 +560,6 @@ struct Sums
         return true;
     }
 };
-
-// Bad-run list: run -> flag ("" when the flag column is empty); false if unreadable
-static bool ReadBadRuns(const std::string &path, std::map<int, std::string> &bad)
-{
-    std::ifstream in(path.c_str());
-    if (!in) return false;
-    std::string line;
-    while (std::getline(in, line))
-    {
-        std::istringstream is(line);
-        int run = 0;
-        if (!(is >> run) || run <= 0) continue;  // header, blank
-        std::string rest, flag;
-        std::getline(is, rest);
-        const size_t a = rest.find('|');
-        if (a != std::string::npos)
-        {
-            const size_t b = rest.find('|', a + 1);
-            flag = rest.substr(a + 1, b == std::string::npos ? std::string::npos : b - a - 1);
-            const size_t f0 = flag.find_first_not_of(" \t"), f1 = flag.find_last_not_of(" \t");
-            flag = f0 == std::string::npos ? "" : flag.substr(f0, f1 - f0 + 1);
-        }
-        bad[run] = flag;
-    }
-    return true;
-}
-
-// the run of an AnHistograms file (its "runs" entry), 0 if it holds none or several
-static int RunOf(TFile &f)
-{
-    TNamed *r = (TNamed *)f.Get("runs");
-    if (!r) return 0;
-    std::istringstream is(r->GetTitle());
-    int run = 0, extra = 0;
-    if (!(is >> run) || (is >> extra)) return 0;
-    return run;
-}
 
 int main(int argc, char **argv)
 {
@@ -541,7 +570,7 @@ int main(int argc, char **argv)
     // "all"; -V: add the EM jets failing only the veto margin
     bool hi_e = false, comp_only = false, comp_add = false, jp_in_all = false, add_veto = false;
     double factor_em = kEmCutFactor, factor_jp = kJpCutFactor;
-    std::string mass_opt, plead_opt, z_opt;
+    std::string mass_opt, plead_opt, z_opt, pi0_opt, pi0_bad_path;
     {
         int m = 1;
         for (int i = 1; i < argc; i++)
@@ -558,6 +587,8 @@ int main(int argc, char **argv)
             if (a == "-m" && i + 1 < argc) { mass_opt = argv[++i]; continue; }
             if (a == "-p" && i + 1 < argc) { plead_opt = argv[++i]; continue; }
             if (a == "-z" && i + 1 < argc) { z_opt = argv[++i]; continue; }
+            if (a == "-I" && i + 1 < argc) { pi0_opt = argv[++i]; continue; }
+            if (a == "-Q" && i + 1 < argc) { pi0_bad_path = argv[++i]; continue; }
             argv[m++] = argv[i];
         }
         argc = m;
@@ -573,6 +604,19 @@ int main(int argc, char **argv)
     }
     if (comp_only && comp_add) { std::cerr << "ERROR: -C and -A exclude each other" << std::endl; return 1; }
     const bool per_run = argc > 1 && std::string(argv[1]) == "-r";
+    // -M <merged.root> <out.root> [rebin]: an AnMerge output (masked, with the
+    // run-polarization-weighted yields); rewritten into the single-file form
+    const bool merged = argc > 1 && std::string(argv[1]) == "-M";
+    static char kOne[] = "1", kTwo[] = "2";
+    char *margv[6];
+    if (merged)
+    {
+        if (argc < 4) { std::cerr << "Usage: " << argv[0] << " [options] -M <merged.root> <out.root> [rebin = 2]" << std::endl; return 1; }
+        if (!pi0_bad_path.empty()) { std::cerr << "ERROR: -Q does not apply to -M (AnMerge -x did the masking)" << std::endl; return 1; }
+        if (!mass_opt.empty()) { std::cerr << "ERROR: -m needs the per-file yields (its <|cos|> uses per-file window fractions); not with -M" << std::endl; return 1; }
+        margv[0] = argv[0]; margv[1] = argv[2]; margv[2] = argv[3]; margv[3] = kOne; margv[4] = kOne; margv[5] = argc > 4 ? argv[4] : kTwo;
+        argv = margv; argc = 6;
+    }
     if (argc < 5)
     {
         std::cerr << "Usage: " << argv[0] << " [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] <yields.root> <out.root> <P_blue> <P_yellow> [rebin = 2]\n"
@@ -587,7 +631,11 @@ int main(int argc, char **argv)
                   << "  -m in:<mean>:<sigma> | out:<mean>:<sigma>: np2 rows = two-photon jets with pair mass inside / outside mean +- 2 sigma (GeV;\n"
                   << "     in:<peak> / out:<peak>: 0.5-1.5 x <peak>)\n"
                   << "  -p <lo>:<hi>: np1 rows (and all, np12) = every jet with leading-point pi0 probability P_lead in [lo, hi)\n"
-                  << "  -z <lo>:<hi>: the same rows, jets whose pi0 candidate carries a jet energy fraction z in [lo, hi) (with -p: class edges 0, 0.5, 0.7, 0.85, 1)" << std::endl;
+                  << "  -z <lo>:<hi>: the same rows, jets whose pi0 candidate carries a jet energy fraction z in [lo, hi) (with -p: class edges 0, 0.5, 0.7, 0.85, 1)\n"
+                  << "  -I <iso|noniso|incl>:<sig|sb>: np1 rows (and all, np12) = FMS-style pi0 candidates (z_em > 0.98 / < 0.9 / all) in the signal\n"
+                  << "     (M_gg 0-0.2) or sideband (0.2-0.3) window, binned in pi0 x_F; background subtraction: pi0_bgsub.C\n"
+                  << "  -Q <list>: (-r) also mask the runs flagged in this pi0-peak bad-run list (pi0_peak_runs.C <out>_bad_runs.txt)\n"
+                  << "  -M <merged.root> <out.root> [rebin]: read one AnMerge output (sums, masked runs subtracted, P-weighted yields) instead of -r" << std::endl;
         return 1;
     }
     const int rebin = argc > 5 ? std::atoi(argv[5]) : 2;
@@ -656,6 +704,32 @@ int main(int argc, char **argv)
         mass_note = TString::Format("np2 = two-photon jets with M_gg %s %s (bins %.3f-%.3f GeV); <|cos|>, <x_F>, P of all np2", w == "in" ? "inside" : "outside", wtext.c_str(), lo, hi).Data();
         std::printf("AnAsymmetry: %s\n", mass_note.c_str());
     }
+    if (!pi0_opt.empty())
+    {
+        const size_t c = pi0_opt.find(':');
+        const std::string cls = pi0_opt.substr(0, c), win = c == std::string::npos ? "" : pi0_opt.substr(c + 1);
+        if ((cls != "iso" && cls != "noniso" && cls != "incl") || (win != "sig" && win != "sb"))
+        {
+            std::cerr << "ERROR: -I takes <iso|noniso|incl>:<sig|sb>" << std::endl;
+            return 1;
+        }
+        if (!mass_opt.empty() || !plead_opt.empty() || !z_opt.empty()) { std::cerr << "ERROR: -I excludes -m, -p and -z" << std::endl; return 1; }
+        if (hi_e || comp_only || comp_add || add_veto || std::fabs(factor_em - 1.3) > 1e-6 || std::fabs(factor_jp - 1.3) > 1e-6)
+        {
+            std::cerr << "ERROR: -I works with the default jets only (no -E, -C, -A, -V; factors 1.3)" << std::endl;
+            return 1;
+        }
+        sums.pi0_mode = sums.plead_mode = sums.z_mode = true;
+        sums.plead_lo = win == "sig" ? kPi0SigLo : kPi0SbLo;
+        sums.plead_hi = win == "sig" ? kPi0SigHi : kPi0SbHi;
+        // z_em classes by bin centre (AnConfig.h kPi0ZEdges: 0-0.9, 0.9-0.98, 0.98-1)
+        sums.z_lo = cls == "iso" ? kPi0ZEdges[2] : 0;
+        sums.z_hi = cls == "noniso" ? kPi0ZEdges[1] : kPi0ZEdges[kNPi0ZCls];
+        mass_note = TString::Format("np1 rows (all, np12) = FMS-style pi0 candidates (pi0 x_F), %s (z_em %s), M_gg %s window %.2f-%.2f GeV; other photon classes empty",
+                                    cls.c_str(), cls == "iso" ? "> 0.98" : cls == "noniso" ? "< 0.9" : "all", win == "sig" ? "signal" : "sideband",
+                                    sums.plead_lo, sums.plead_hi).Data();
+        std::printf("AnAsymmetry: %s\n", mass_note.c_str());
+    }
     if (!z_opt.empty() && plead_opt.empty()) plead_opt = "0:1";
     if (!plead_opt.empty())
     {
@@ -699,8 +773,21 @@ int main(int argc, char **argv)
         const double pol[2] = {std::atof(argv[3]), std::atof(argv[4])};
         if (!(pol[0] > 0 && pol[1] > 0)) { std::cerr << "ERROR: bad polarization" << std::endl; return 1; }
         TFile in(argv[1]);
-        if (in.IsZombie() || !sums.Add(in, pol)) return 1;
-        pol_note = TString::Format("P_blue %.3f, P_yellow %.3f", pol[0], pol[1]).Data();
+        if (in.IsZombie()) return 1;
+        if (merged)
+        {
+            TNamed *mi = (TNamed *)in.Get("merge_info");
+            TNamed *ms = (TNamed *)in.Get("masked");
+            if (!mi || !ms) { std::cerr << "ERROR: " << argv[1] << " is not a masked AnMerge output (AnMerge -x)" << std::endl; return 1; }
+            sums.wdir[0] = (TDirectory *)in.Get("Pblue");
+            sums.wdir[1] = (TDirectory *)in.Get("Pyellow");
+            if (!sums.wdir[0] || !sums.wdir[1]) { std::cerr << "ERROR: no Pblue / Pyellow in " << argv[1] << std::endl; return 1; }
+            TNamed *br = (TNamed *)in.Get("bad_runs");
+            bad_note = br ? br->GetTitle() : "unknown (no bad_runs in the merged file)";
+            pol_note = std::string("per-run P (merged: ") + mi->GetTitle() + ")";
+        }
+        else pol_note = TString::Format("P_blue %.3f, P_yellow %.3f", pol[0], pol[1]).Data();
+        if (!sums.Add(in, pol)) return 1;
     }
     else
     {
@@ -733,6 +820,15 @@ int main(int argc, char **argv)
         }
         else bad_note = "no bad-run list";
         bad_note += TString::Format(" + %d runs of AnConfig.h kSuppBadRuns", kNSuppBadRuns).Data();
+        // our pi0-peak list (-Q): every run in it with a flag is masked
+        std::map<int, std::string> bad_pi0;
+        if (!pi0_bad_path.empty())
+        {
+            if (!ReadBadRuns(pi0_bad_path, bad_pi0)) { std::cerr << "ERROR: cannot read the pi0-peak bad-run list " << pi0_bad_path << std::endl; return 1; }
+            int nf = 0;
+            for (std::map<int, std::string>::const_iterator b = bad_pi0.begin(); b != bad_pi0.end(); ++b) nf += !b->second.empty();
+            bad_note += TString::Format(" + pi0-peak list %s: %d flagged runs", pi0_bad_path.c_str(), nf).Data();
+        }
         std::printf("AnAsymmetry: bad runs: %s\n", bad_note.c_str());
         std::ifstream list(argv[2]);
         std::string f;
@@ -759,6 +855,12 @@ int main(int argc, char **argv)
                 bad_removed.push_back(TString::Format("%d%s%s", run, bi->second.empty() ? "" : " ", bi->second.c_str()).Data());
                 continue;
             }
+            std::map<int, std::string>::const_iterator qi = bad_pi0.find(run);
+            if (qi != bad_pi0.end() && !qi->second.empty())
+            {
+                bad_removed.push_back(TString::Format("%d %s (pi0 peak)", run, qi->second.c_str()).Data());
+                continue;
+            }
             const double pol[2] = {it->second.first, it->second.second};
             if (!sums.Add(in, pol)) return 1;
             n_used++;
@@ -778,16 +880,17 @@ int main(int argc, char **argv)
     if (sums.n_old_labels > 0)
         std::printf("AnAsymmetry: %d yield file(s) without spin_convention (old Spin_config mapping): spin states relabelled p -> 3 - p\n", sums.n_old_labels);
     TFile out(argv[per_run ? 4 : 2], "RECREATE");
-    if (per_run) TNamed("bad_runs", bad_note.c_str()).Write();
+    if (per_run || merged) TNamed("bad_runs", bad_note.c_str()).Write();
     TNamed("high_E_jets", hie_note.c_str()).Write();
     TNamed("jet_sample", sample_note.c_str()).Write();
     TNamed("trigger_selection", trg_note.c_str()).Write();
+    if (sums.pi0_mode) TNamed("pi0_selection", mass_note.c_str()).Write();
     if (sums.mass_mode) TNamed("mass_window", TString::Format("%.4f %.4f %.4f", sums.mass_bin_lo, sums.mass_bin_hi, sums.mass_bin_w).Data()).Write();
     const std::string table_name = std::string(argv[per_run ? 4 : 2]).substr(0, std::string(argv[per_run ? 4 : 2]).rfind(".root")) + ".txt";
     FILE *table = std::fopen(table_name.c_str(), "w");
     std::fprintf(table, "# A_N = eps / (<P> <|cos phi|>), %s; stat = statistical error only\n", pol_note.c_str());
     std::fprintf(table, "# %s; %s; %s\n", hie_note.c_str(), sample_note.c_str(), trg_note.c_str());
-    if (per_run) std::fprintf(table, "# bad runs: %s\n", bad_note.c_str());
+    if (per_run || merged) std::fprintf(table, "# bad runs: %s\n", bad_note.c_str());
     std::fprintf(table, "# level class beam xF_lo xF_hi <xF> A_N stat jets <|cos|> <P>\n");
     for (int L = 0; L <= kNTrgLevels + 1; L++)
     {
@@ -846,6 +949,20 @@ int main(int argc, char **argv)
             for (int b = 0; b < 2; b++) mpol[b][k]->Divide(n[k]);
         }
         const int nb = y[0][0][0]->GetNbinsX();
+        // -I: the candidates' x_F vs M_gg spectrum of this row (pi0_bgsub.C), x_F rebinned as the yields
+        if (sums.pi0_mode)
+        {
+            TH2D *ms = 0;
+            for (int ll = l0; ll < l1; ll++)
+            {
+                const bool jpo = L == kNTrgLevels && IsJpLevel(ll);
+                std::map<std::string, TH2D *>::iterator it = sums.pimass.find(std::string(kTrgLevelName[ll]) + (jpo ? "#jponly" : ""));
+                if (it == sums.pimass.end()) continue;
+                if (!ms) { ms = (TH2D *)it->second->Clone(TString::Format("pi0_mass_%s", lname)); ms->SetDirectory(0); }
+                else ms->Add(it->second);
+            }
+            if (ms) { ms->RebinX(rebin); out.cd(); ms->Write(); delete ms; }
+        }
 
         for (int k = 0; k < nK; k++)
         {

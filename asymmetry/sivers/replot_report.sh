@@ -6,9 +6,9 @@
 # without rerunning AnAsymmetry over the yields.
 #
 # Usage: ./replot_report.sh <report dir>
-#   Reads, in <report dir>: an.root, an.txt, an_union.root, an_mass_in.root,
-#   an_mass_out.root (if there), projection.log (the error scale and the
-#   sample line: made by project_errors.py) and mgg_peak.log (the pi0 peak).
+#   Reads, in <report dir>: an.root, an.txt, an_union.root, an_pi0_<iso|noniso|incl>.root
+#   (if there), and projection.log (the error scale and the sample line: made
+#   by project_errors.py).
 #   Writes the plots (.png and .pdf) and plot_an.log there; the macros used
 #   are copied to <report dir>/build first.
 #   AN_YLO, AN_YHI, AN_XR (environment): the common axes of every A_N plot,
@@ -29,7 +29,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # code directory has them all side by side)
 src() { if [ -e "${HERE}/$1" ]; then echo "${HERE}/$1"; else echo "${HERE}/../$1"; fi; }
 mkdir -p "${REP}/build"
-cp "$(src plot_an.C)" "$(src plot_an_means.C)" "$(src plot_an_mass.C)" "${REP}/build/"
+cp "$(src plot_an.C)" "$(src plot_an_means.C)" "${REP}/build/"
 # the FMS results to overlay (fms_reference/README.md), if this code has them
 FMSREF="$(src fms_reference)"
 [ -d "${FMSREF}" ] && { mkdir -p "${REP}/build/fms_reference"; cp "${FMSREF}"/*.txt "${REP}/build/fms_reference/"; }
@@ -41,8 +41,6 @@ container() {
 }
 
 SCALE=$(grep '^scale=' "${REP}/projection.log" | cut -d= -f2)
-PEAK=$(sed -n 's/^peak=//p' "${REP}/mgg_peak.log" 2>/dev/null | tail -1)
-SIGMA=$(sed -n 's/^sigma=//p' "${REP}/mgg_peak.log" 2>/dev/null | tail -1)
 # what the plots show: "<test runs> of <good runs> good runs, <events> events = <percent> of the Run 22 good-run events"
 # with the all-events table (project_errors.py 4th argument) the fraction is of
 # all good-run events, on disk and tape (Sean 2026-11-11; the label just says "all")
@@ -78,14 +76,14 @@ AN_ERRMAX="${AN_ERRMAX:-0.022}"
         p an_union.root an_vs_xf_union_fms.png all all 1 0 build/fms_reference/fms_all.txt
         p an_union.root an_vs_xf_union_np12_fms.png all np12 1 0 build/fms_reference/fms_np12.txt
         p an_union.root an_vs_xf_union_np3plus_fms.png all np3plus 1 0 build/fms_reference/fms_np3plus.txt
-        # two-photon jets in the pi0 mass window vs the FMS isolated pi0
-        # (z_em > 0.98; Sean 2026-11-11, until the z_pair binning of the next pass)
-        [ -f "${REP}/an_mass_in.root" ] && p an_mass_in.root an_vs_xf_mass_in_fms.png all np2 1 0 build/fms_reference/fms_iso_pi0.txt
+        # FMS-style isolated / non-isolated pi0 vs the FMS (Sean 2026-11-16)
+        [ -f "${REP}/an_pi0_iso.root" ] && p an_pi0_iso.root an_vs_xf_pi0_iso_fms.png all pi0 1 0 build/fms_reference/fms_iso_pi0.txt
+        [ -f "${REP}/an_pi0_noniso.root" ] && p an_pi0_noniso.root an_vs_xf_pi0_noniso_fms.png all pi0 1 0 build/fms_reference/fms_noniso_pi0.txt
     fi
+    for c in iso noniso incl; do
+        [ -f "${REP}/an_pi0_${c}.root" ] && p "an_pi0_${c}.root" "an_vs_xf_pi0_${c}.png" all pi0
+    done
     echo "root -b -q -l 'build/plot_an_means.C(\"an.txt\",\"an_means.png\",\"all\",\"${SAMPLE}\",${AN_XR})' || exit 1"
-    if [ -f "${REP}/an_mass_in.root" ] && [ -f "${REP}/an_mass_out.root" ] && [ -n "${PEAK}" ]; then
-        echo "root -b -q -l 'build/plot_an_mass.C(\"an_mass_in.root\",\"an_mass_out.root\",\"an_vs_xf_mass.png\",${PEAK},\"${SAMPLE}\",${AX},${AN_ERRMAX},${SIGMA:-0})' || exit 1"
-    fi
 } > "${REP}/plot_an.csh"
 container "tcsh plot_an.csh" > "${REP}/plot_an.log" 2>&1 || { tail "${REP}/plot_an.log"; exit 1; }
 # the yield and sanity pages (plots/), from the sums AnPlots saved when it read the yields

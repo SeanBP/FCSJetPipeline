@@ -10,9 +10,21 @@
 set -e
 OUTDIR="$1"; GOOD="$2"; NAME="$3"; CODE="$4"
 SCR="${_CONDOR_SCRATCH_DIR:-${SCRATCH:-$(pwd)}}/rep"
-mkdir -p "$SCR/pass/hists"
 echo "start $(date) on $(hostname), scratch $SCR"
 t0=$(date +%s)
+# merged flow (submit_an_merge.sh): the partial merges hold the sums, so the
+# yield files are not copied; the report runs on the pass directory itself and
+# reads only the masked runs' yield files (AnMerge -x)
+if [ -z "${SMOKE_NO_MERGE}" ] && ls "$OUTDIR"/merge/partial_*.root >/dev/null 2>&1; then
+    echo "merged flow: $(ls "$OUTDIR"/merge/partial_*.root | wc -l) partial merges, no yield copy"
+    set +e
+    "$CODE/smoke_report.sh" "$OUTDIR" "$GOOD" "$NAME"
+    RC=$?
+    rm -rf "${OUTDIR:?}/${NAME:?}/build"
+    echo "done $(date), $(( $(date +%s) - t0 )) s, smoke_report exit ${RC}"
+    exit 0
+fi
+mkdir -p "$SCR/pass/hists"
 # yield files: copy, keeping times (smoke_report skips files younger than 10 min)
 find "$OUTDIR/hists" -maxdepth 1 -name 'an_hists_*.root' -mmin +10 > "$SCR/src.list"
 xargs -a "$SCR/src.list" cp -p -t "$SCR/pass/hists/"

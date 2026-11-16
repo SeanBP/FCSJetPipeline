@@ -1,0 +1,10 @@
+# pi0 energy scale table for AnHistograms (FMS-style pi0 candidates; AnConfig.h
+# "FMS-style pi0 candidates"). Shipped by an_job.xml and rehist_job.xml as
+# ./pi0_scale.txt. Each factor multiplies the pi0 energy, so M_gg, pT and x_F
+# move with it; z_em and the trigger cut stay raw.
+#   default <factor>   for every run not listed (no line: AnConfig.h kPi0EnergyScale)
+#   <run> <factor>     one run
+# Sean 2026-11-16: the pass runs with the global factor. After it,
+# sivers/pi0_peak_runs.C writes per-run and per-period versions of this file
+# (<out>_scale_per_run.txt, <out>_scale_per_period.txt); copy the chosen one
+# here (or pass it with submit_rehist.sh -s) and rehist.

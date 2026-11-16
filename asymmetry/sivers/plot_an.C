@@ -120,6 +120,8 @@ TString ClassText(const char *cls)
 {
     TString c = cls;
     if (c == "all") return "all jets";
+    // pi0_bgsub.C output (FMS-style pi0 candidates, background subtracted)
+    if (c == "pi0") return "#pi^{0} candidates (FMS selection), background subtracted, #pi^{0} x_{F}";
     if (c == "np5plus") return "jets with #geq 5 photons";
     if (c == "np3plus") return "jets with > 2 photons";
     if (c == "np12") return "jets with 1 or 2 photons";
@@ -188,7 +190,7 @@ void plot_an(const char *in_root, const char *out_png, const char *level = "all"
     // EM + JP (the union) is the default and is not named (Sean 2026-11-11);
     // a title names the trigger only when the plot isolates some
     // (the pi0 mass-window files an_mass_in/out are -J union output too)
-    const bool is_union = TString(in_root).Contains("union") || TString(in_root).Contains("mass_");
+    const bool is_union = TString(in_root).Contains("union") || TString(in_root).Contains("mass_") || TString(in_root).Contains("pi0_");
     if (TString(level) == "all") lname = is_union ? "" : "EM0 + EM1 + EM2";
     if (TString(level) == "allJP") lname = "JP0 + JP1 + JP2";
     // no title (Sean 2026-11-11: as the FMS paper's figures); the data set
@@ -239,6 +241,10 @@ void plot_an(const char *in_root, const char *out_png, const char *level = "all"
     // pi0 mass window, the fitted peak +- 2 sigma): say so
     if (TString(in_root).Contains("mass_in")) ctext += ", pair mass within 2#sigma of the fitted #pi^{0} peak";
     if (TString(in_root).Contains("mass_out")) ctext += ", pair mass outside the #pi^{0} window";
+    // pi0_bgsub.C outputs an_pi0_<iso|noniso|incl>.root
+    if (TString(in_root).Contains("pi0_iso")) ctext = "isolated #pi^{0} (z_{em} > 0.98; FMS selection), background subtracted, #pi^{0} x_{F}";
+    if (TString(in_root).Contains("pi0_noniso")) ctext = "non-isolated #pi^{0} (z_{em} < 0.9; FMS selection), background subtracted, #pi^{0} x_{F}";
+    if (TString(in_root).Contains("pi0_incl")) ctext = "#pi^{0} in jets, all z_{em} (FMS selection), background subtracted, #pi^{0} x_{F}";
     TString notes[4];
     int nn = 0;
     notes[nn++] = ctext;

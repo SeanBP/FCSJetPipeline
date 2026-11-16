@@ -52,6 +52,7 @@
         cp underlying_event/* .
         cp jet_calibration/ApplyCorrections_em_only.cpp .
         cp asymmetry/AnConfig.h asymmetry/AnHistograms.cpp .
+        cp asymmetry/{{PI0SCALE}} pi0_scale.txt
         cp asymmetry/collins/CollinsConfig.h asymmetry/collins/CollinsHistograms.h .
         cp asymmetry/jes/{{CALIB_NAME}} calib.json
         cp -r data_to_jet/hcal_gain_corrections .
@@ -62,6 +63,9 @@
         @ mycount = $RANGE[2]
         @ line_end = ${line_start} + ${mycount} - 1
         sed -n "${line_start},${line_end}p" {{LISTFILE}} > my_lines.list
+        # each file's disk node (catalog_query.sh nodes; "unknown" without a map),
+        # for the bad-node check below
+        sed -n "${line_start},${line_end}p" {{NODEFILE}} > my_nodes.list
         set RUN = `head -1 my_lines.list | grep -oE '_[0-9]{8}_(raw_)?[0-9]{7}\.MuDst' | cut -c2-9`
         set TAG = ${RUN}_${JOBINDEX}
         set TIMING = timing_${TAG}.txt
@@ -98,6 +102,18 @@
             set FILEURL = `echo ${RAWLINE} | rev | cut -d'/' -f2- | rev`
             set NEVCAT = `echo ${RAWLINE} | rev | cut -d'/' -f1 | rev`
             set LOCALFILE = `basename ${FILEURL}`
+            set NODE = `sed -n "${i}p" my_nodes.list`
+            if ( "${NODE}" == "" ) set NODE = unknown
+            # Bad-node check (Sean 2026-11-16): a node with {{NODE_FAIL_LIMIT}} failed
+            # fetches in this pass is flagged ({{NODEDIR}}/flagged/NODE); its
+            # remaining files are skipped and left for a recovery pass
+            # (recovery.sh) once the node serves again
+            if ( "${NODE}" != "unknown" &amp;&amp; -e {{NODEDIR}}/flagged/${NODE} ) then
+                echo "SKIP: ${FILEURL} is on flagged node ${NODE}"
+                echo "nodeskip ${LOCALFILE} ${NEVCAT} 0 0 0 0 0 0" >> ${TIMING}
+                @ i++
+                continue
+            endif
             set urlprefix = `echo ${FILEURL} | awk -v l="$xrdnchar" '{print substr($0,0,l)}'`
 
             if ( "$xrdname" == "$urlprefix" ) then
@@ -120,6 +136,14 @@
                 echo "ERROR: could not obtain ${FILEURL} (status ${FETCHSTATUS}), skipping"
                 echo "fetchfail ${LOCALFILE} ${NEVCAT} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
                 rm -f ${LOCALFILE}
+                if ( "${NODE}" != "unknown" ) then
+                    mkdir -p {{NODEDIR}}/fail {{NODEDIR}}/flagged
+                    touch {{NODEDIR}}/fail/${NODE}__${LOCALFILE}
+                    set NFAILNODE = `ls {{NODEDIR}}/fail | grep -c "^${NODE}__"`
+                    if ( ${NFAILNODE} &gt;= {{NODE_FAIL_LIMIT}} &amp;&amp; ! -e {{NODEDIR}}/flagged/${NODE} ) then
+                        echo "`date '+%F %T'` ${NODE}: ${NFAILNODE} failed fetches; flagged by job ${JOBID}" &gt;! {{NODEDIR}}/flagged/${NODE}
+                    endif
+                endif
                 @ i++
                 continue
             endif
@@ -133,6 +157,7 @@
             set NAFTER = `ls SimpleTree_mudst_*.root | grep -c '\.root$'`
             if ( ${NAFTER} &lt;= ${NBEFORE} ) then
                 echo "ERROR: runMudst.C produced no new SimpleTree for ${FILEURL}, skipping"
+                echo "mudstfail ${LOCALFILE} ${NEVCAT} 0 0 0 0 0 0" >> ${TIMING}
                 tail -20 mudst.log
                 @ i++
                 continue
@@ -151,6 +176,7 @@
             echo "jets ${STFILE} 0 ${INKB} `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
             if ( ${JETSTATUS} != 0 || ! -f jet_output.root ) then
                 echo "ERROR: RecoJets failed on ${STFILE}, skipping"
+                echo "jetfail ${LOCALFILE} ${NEVCAT} 0 0 0 0 0 0" >> ${TIMING}
                 tail -20 recojets.log
                 rm -f ${STFILE} jet_output.root
                 @ i++
@@ -164,12 +190,15 @@
             rm -f ${STFILE}
             if ( ${UESTATUS} != 0 ) then
                 echo "ERROR: UnderlyingEvent failed on ${STFILE}, skipping"
+                echo "jetfail ${LOCALFILE} ${NEVCAT} 0 0 0 0 0 0" >> ${TIMING}
                 tail -20 ue.log
                 rm -f jet_output_${SUFFIX}.root
                 @ i++
                 continue
             endif
             echo "jet_output_${SUFFIX}.root" >> jet_files.list
+            # this file is in the job's yields (recovery.sh: done once the job's an_hists exists)
+            echo "done ${LOCALFILE} ${NEVCAT} 0 0 0 0 0 0" >> ${TIMING}
             @ i++
         end
 
@@ -210,7 +239,7 @@
         foreach f ( `cat jet_files.list` )
             rm -f ${f}
         end
-        rm -f my_lines.list simpletree_files.list single_file.list ue_pairs.list jet_files.list stage.time modules_ld.txt
+        rm -f my_lines.list my_nodes.list simpletree_files.list single_file.list ue_pairs.list jet_files.list stage.time modules_ld.txt
         cat ${TIMING}
 
     </command>
@@ -236,6 +265,7 @@
             <File>file:./jet_calibration/ApplyCorrections_em_only.cpp</File>
             <File>file:./asymmetry/AnConfig.h</File>
             <File>file:./asymmetry/AnHistograms.cpp</File>
+            <File>file:./asymmetry/{{PI0SCALE}}</File>
             <File>file:./asymmetry/collins/CollinsConfig.h</File>
             <File>file:./asymmetry/collins/CollinsHistograms.h</File>
             <File>file:./asymmetry/jes/{{CALIB_NAME}}</File>

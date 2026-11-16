@@ -62,6 +62,20 @@
 // h_abscosPz_<level>[_jponly] / h_xfsumPz_<level>[_jponly] (the same axes,
 // weighted with |cos phi| / x_F, summed over sides and spin states), for
 // AnAsymmetry -p ... -z.
+// FMS-style pi0 candidates (AnConfig.h "FMS-style pi0 candidates"): every
+// photon pair of a default jet (the A_N jet cuts, E <= sqrt(s)/2), with
+// Z_gg < 0.7, both photons half a tower inside the ECal, pT > 2 GeV (scaled) and
+// pT >= 1.3 x the threshold of the level it fills (the host jet's level),
+// M_gg < 0.3 GeV and pi0 x_F > 0, fills
+//   h_xFpi_<level>_<side>_<spin state>[_jponly]
+// (TH3D: the pi0's x_F (h_xF_* binning), M_gg in 5 MeV bins to 0.3, both on
+// the pi0 energy scale (pi0_scale.txt table, else AnConfig.h kPi0EnergyScale;
+// TNamed "pi0_scale" records the factor per run), z_em =
+// E_pair / raw jet E in the classes 0-0.9-0.98-1). _jponly: pi0s passing a JP
+// level but not an EM level (the EM + JP union per pi0). It also fills
+// h_abscospi_<level>[_jponly] and h_xfsumpi_<level>[_jponly], with the same
+// axes, weighted with the pair's |cos phi| and x_F. Side and phi are the
+// pair's own. These feed AnAsymmetry -I and sivers/pi0_bgsub.C.
 // Also written:
 //   h_cutflow                    jets (and events) at each cut
 //   h_events_<level>             events per spin state, by the highest listed
@@ -113,8 +127,10 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <string>
@@ -126,6 +142,45 @@
 #include "CollinsHistograms.h"
 
 // The run number in a jet_output_<run>_<file>.root name, 0 if none
+// pi0 energy scale table (Sean 2026-11-16: global, per run or per period,
+// chosen after a pass and applied by a rehist): $PI0_SCALE_TABLE, else
+// ./pi0_scale.txt (shipped by an_job / rehist_job). Lines "default <factor>"
+// and "<run> <factor>", '#' comments. Runs not listed take the table's default,
+// else AnConfig.h kPi0EnergyScale; with no table, everything takes
+// kPi0EnergyScale.
+struct Pi0Scale
+{
+    std::map<int, double> run;
+    double dflt = kPi0EnergyScale;
+    std::string source = "AnConfig.h kPi0EnergyScale (no table)";
+    void Load()
+    {
+        const char *env = std::getenv("PI0_SCALE_TABLE");
+        const std::string path = env && *env ? env : "pi0_scale.txt";
+        std::ifstream in(path.c_str());
+        if (!in) return;
+        std::string line;
+        int n = 0;
+        while (std::getline(in, line))
+        {
+            const size_t h = line.find('#');
+            if (h != std::string::npos) line = line.substr(0, h);
+            std::istringstream is(line);
+            std::string key;
+            double f = 0;
+            if (!(is >> key >> f) || !(f > 0)) continue;
+            if (key == "default") dflt = f;
+            else { run[std::atoi(key.c_str())] = f; n++; }
+        }
+        source = path + TString::Format(" (%d runs, default %.5f)", n, dflt).Data();
+    }
+    double Of(int r) const
+    {
+        std::map<int, double>::const_iterator it = run.find(r);
+        return it == run.end() ? dflt : it->second;
+    }
+};
+
 static int RunFromFileName(const std::string &path)
 {
     const std::string base = path.substr(path.find_last_of('/') + 1);
@@ -312,6 +367,12 @@ int main(int argc, char **argv)
         t.SetBranchAddress("reco_pi0_lead_pair", &pleadpair);
     }
     else std::cerr << "Warning: no reco_pi0_lead_gup in the jet files; h_xFg_* stay empty" << std::endl;
+    // the vertex the jets were made from (pi0 photon positions at z_proj); 0 in
+    // trees before 2026-11-16 (jets from the origin)
+    Float_t vx_used = 0, vy_used = 0, vz_used = 0;
+    if (t.GetBranch("reco_vz_used")) t.SetBranchAddress("reco_vz_used", &vz_used);
+    if (t.GetBranch("reco_vx_used")) t.SetBranchAddress("reco_vx_used", &vx_used);
+    if (t.GetBranch("reco_vy_used")) t.SetBranchAddress("reco_vy_used", &vy_used);
     const bool have_z = have_gup && t.GetBranch("reco_pi0_lead_z1") != 0;
     if (have_z) t.SetBranchAddress("reco_pi0_lead_z1", &z1);
     else std::cerr << "Warning: no reco_pi0_lead_z1 in the jet files; h_xFPz_* stay empty" << std::endl;
@@ -332,6 +393,8 @@ int main(int argc, char **argv)
     static CollinsHistograms collins;
     // A_N vs P_lead class vs z: [0] default, [1] _jponly
     static TH3D *h_pz[2][kNTrgLevels][kNSides][kNSpinStates], *h_pzcos[2][kNTrgLevels], *h_pzxfs[2][kNTrgLevels];
+    // FMS-style pi0 candidates, x_F x M_gg x z_em class: [0] default, [1] _jponly
+    static TH3D *h_pi[2][kNTrgLevels][kNSides][kNSpinStates], *h_picos[2][kNTrgLevels], *h_pixfs[2][kNTrgLevels];
     const char *const msfx[4] = {"", "_t115", kCompSuffix, "_jponly"};
     TH1D *h_events[kNTrgLevels], *h_pt[kNTrgLevels], *h_ptraw[kNTrgLevels], *h_ratio[kNTrgLevels];
     for (int l = 0; l < kNTrgLevels; l++)
@@ -390,6 +453,20 @@ int main(int argc, char **argv)
                 h_pzcos[mg][l] = new TH3D(zn, zn + ";x_{F};P_{lead};z", kNXfBins, xa, kNPleadClsZ, kPleadEdgesZ, kNZBinsA, za);
                 zn = TString::Format("h_xfsumPz_%s", kTrgLevelName[l]) + msfx[m];
                 h_pzxfs[mg][l] = new TH3D(zn, zn + ";x_{F};P_{lead};z", kNXfBins, xa, kNPleadClsZ, kPleadEdgesZ, kNZBinsA, za);
+                // FMS-style pi0 candidates
+                double ma[kNPi0MassBins + 1];
+                for (int i = 0; i <= kNPi0MassBins; i++) ma[i] = i * kPi0MassMax / kNPi0MassBins;
+                const char *ax = ";#pi^{0} x_{F};M_{#gamma#gamma} (GeV);z_{em}";
+                for (int s = 0; s < kNSides; s++)
+                    for (int p = 0; p < kNSpinStates; p++)
+                    {
+                        TString pn = TString::Format("h_xFpi_%s_%s_%s", kTrgLevelName[l], kSideName[s], kSpinStateName[p]) + msfx[m];
+                        h_pi[mg][l][s][p] = new TH3D(pn, pn + ax, kNXfBins, xa, kNPi0MassBins, ma, kNPi0ZCls, kPi0ZEdges);
+                    }
+                TString pn = TString::Format("h_abscospi_%s", kTrgLevelName[l]) + msfx[m];
+                h_picos[mg][l] = new TH3D(pn, pn + ax, kNXfBins, xa, kNPi0MassBins, ma, kNPi0ZCls, kPi0ZEdges);
+                pn = TString::Format("h_xfsumpi_%s", kTrgLevelName[l]) + msfx[m];
+                h_pixfs[mg][l] = new TH3D(pn, pn + ax, kNXfBins, xa, kNPi0MassBins, ma, kNPi0ZCls, kPi0ZEdges);
             }
             collins.Book(mg, l, msfx[m]);
         }
@@ -429,6 +506,10 @@ int main(int argc, char **argv)
     h_cut->GetXaxis()->SetBinLabel(kNCuts + 1, "events read");
 
     std::set<int> runs;
+    Pi0Scale pi0sc;
+    pi0sc.Load();
+    std::map<int, double> pi0_used;
+    std::cout << "AnHistograms: pi0 energy scale from " << pi0sc.source << std::endl;
     int tree_number = -1, file_run = 0;
     const Long64_t n = t.GetEntries();
     for (Long64_t i = 0; i < n; i++)
@@ -438,6 +519,8 @@ int main(int argc, char **argv)
         if (t.GetTreeNumber() != tree_number) file_run = RunFromFileName(t.GetFile()->GetName());
         tree_number = t.GetTreeNumber();
         const int cur_run = have_run && event_run > 0 ? event_run : file_run;
+        const double pi0_scale = pi0sc.Of(cur_run);
+        pi0_used[cur_run] = pi0_scale;
         runs.insert(cur_run);
         h_cut->Fill(kNCuts);
         // listed levels; for JP0/JP1 the listed regions' patch masks
@@ -484,6 +567,13 @@ int main(int argc, char **argv)
         qa_lvl[0][level].njet->Fill(nj);
         // the two constituents of each two-photon jet: pair mass and orientation (-1 if none)
         std::vector<double> mass(nj, -1), pang(nj, -1);
+        // every jet's constituents (for the FMS-style pi0 pairs)
+        std::vector<std::vector<int> > cons(nj);
+        for (size_t c = 0; c < c_jet->size(); c++)
+        {
+            const int jj = (*c_jet)[c];
+            if (jj >= 0 && jj < (int)nj) cons[jj].push_back(c);
+        }
         {
             std::vector<int> first(nj, -1), second(nj, -1);
             for (size_t c = 0; c < c_jet->size(); c++)
@@ -639,6 +729,62 @@ int main(int argc, char **argv)
                     if (jp_dflt && !em_dflt) zfill(1, jpL[j]);
                 }
             }
+            // FMS-style pi0 candidates: every photon pair of a default jet (and _jponly)
+            if ((em_dflt || jp_dflt) && !hi && (*e_raw)[j] > 0)
+            {
+                const std::vector<int> &cj = cons[j];
+                // photon at the ECal face (z_proj), from the vertex the jets were made from;
+                // inside the ECal rectangle by half a tower
+                std::vector<char> fid(cj.size(), 0);
+                for (size_t a = 0; a < cj.size(); a++)
+                {
+                    const int c = cj[a];
+                    if (!((*c_pz)[c] > 0)) continue;
+                    const double sc = (z_proj - vz_used) / (*c_pz)[c];
+                    const double px_ = vx_used + sc * (*c_px)[c], py_ = vy_used + sc * (*c_py)[c];
+                    const FiducialRect &rr = kFiducialRectEcal;
+                    fid[a] = std::fabs(px_) >= rr.x_inner + kPi0EdgeMargin && std::fabs(px_) <= rr.x_outer - kPi0EdgeMargin &&
+                             py_ >= rr.y_min + kPi0EdgeMargin && py_ <= rr.y_max - kPi0EdgeMargin;
+                }
+                for (size_t a = 0; a < cj.size(); a++)
+                    for (size_t b = a + 1; b < cj.size(); b++)
+                    {
+                        if (!fid[a] || !fid[b]) continue;
+                        const int ca = cj[a], cb = cj[b];
+                        const double ea = (*c_e)[ca], eb = (*c_e)[cb];
+                        if (!(ea > 0 && eb > 0) || std::fabs(ea - eb) / (ea + eb) >= kPi0ZggMax) continue;
+                        const double ppx = (*c_px)[ca] + (*c_px)[cb], ppy = (*c_py)[ca] + (*c_py)[cb], ppz = (*c_pz)[ca] + (*c_pz)[cb], pe = ea + eb;
+                        const double m2 = pe * pe - ppx * ppx - ppy * ppy - ppz * ppz;
+                        // mass, pT and x_F on the pi0 energy scale (AnConfig.h
+                        // kPi0EnergyScale or the pi0_scale.txt table: the data peak moved to the pi0 mass); raw
+                        // pT for the trigger cut (the trigger value is uncorrected)
+                        const double mgg = pi0_scale * (m2 > 0 ? std::sqrt(m2) : 0);
+                        if (mgg >= kPi0MassMax) continue;
+                        const double ppt_raw = std::hypot(ppx, ppy), ppt = pi0_scale * ppt_raw;
+                        if (ppt <= kPi0PtMin) continue;
+                        const double pxf = 2 * pi0_scale * ppz / sqrt_s;
+                        if (!(pxf > 0)) continue;
+                        // raw over raw: one scale for all points cancels
+                        const double zem = pe / (*e_raw)[j];
+                        const int pside = computeSide(vx_used + (z_proj - vz_used) * ppx / ppz) > 0 ? 1 : 0;
+                        const double pcos = std::fabs(ppx) / ppt;
+                        auto pifill = [&](int mg, int l)
+                        {
+                            h_pi[mg][l][pside][spin]->Fill(pxf, mgg, zem);
+                            h_picos[mg][l]->Fill(pxf, mgg, zem, pcos);
+                            h_pixfs[mg][l]->Fill(pxf, mgg, zem, pxf);
+                        };
+                        // the pi0 itself above the level's cut (FMS: pi0 pT above the
+                        // trigger threshold; Sean 2026-11-16: factor x threshold, as the
+                        // host jet's trigger value). The union (_jponly) is per pi0:
+                        // JP pi0s that do not pass in EM
+                        const bool em_ok = em_dflt && ppt_raw >= kEmCutFactor * kTrgThresholdGeV[emL[j]];
+                        const bool jp_ok = jp_dflt && ppt_raw >= kJpCutFactor * kTrgThresholdGeV[jpL[j]];
+                        if (em_ok) pifill(0, emL[j]);
+                        if (jp_ok) pifill(0, jpL[j]);
+                        if (jp_ok && !em_ok) pifill(1, jpL[j]);
+                    }
+            }
             // Collins yields: default jets (EM and JP levels) and JP-not-EM (_jponly)
             const double gg = have_gup && j < gup->size() ? (*gup)[j] : -9;
             const double plp = have_gup && j < pleadpair->size() ? (*pleadpair)[j] : -1;
@@ -669,6 +815,13 @@ int main(int argc, char **argv)
     for (std::set<int>::const_iterator r = runs.begin(); r != runs.end(); ++r) rs << (r == runs.begin() ? "" : " ") << *r;
     TNamed("runs", rs.str().c_str()).Write();
     TNamed("spin_convention", kSpinConventionTag).Write();
+    {
+        // the pi0 energy scale used: "<source>; <run>=<factor> ..." (pi0_peak_runs.C reads it)
+        std::ostringstream ps;
+        ps << pi0sc.source << ";";
+        for (std::map<int, double>::const_iterator r = pi0_used.begin(); r != pi0_used.end(); ++r) ps << " " << r->first << "=" << TString::Format("%.6f", r->second).Data();
+        TNamed("pi0_scale", ps.str().c_str()).Write();
+    }
     if (!have_plead) TNamed("plead_missing", "jet files without reco_pi0_lead_prob: h_xFP_* empty").Write();
     if (!have_gup) TNamed("collins_missing", "jet files without reco_pi0_lead_gup: h_xFg_* empty").Write();
     if (!have_z) TNamed("pz_missing", "jet files without reco_pi0_lead_z1: h_xFPz_* empty").Write();

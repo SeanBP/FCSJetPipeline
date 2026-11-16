@@ -248,4 +248,58 @@ static const double kPleadEdgesZ[kNPleadClsZ + 1] = {0.0, 0.5, 0.7, 0.85, 1.0001
 static const int kNZBinsA = 10;
 static const double kZMaxA = 1.0001;
 
+// ------------------ FMS-style pi0 candidates and isolation ------------------
+// Sean 2026-11-16: isolated / non-isolated pi0 as the FMS does them (STAR PRD
+// 103, 092009, Run 11 500 GeV, Secs. II.3 and IV.2; arXiv:2012.11428). This
+// replaces the two-photon jets inside the pi0 mass window:
+//   - candidates: every pair of photons inside the same jet. Photons are
+//     points >= 1 GeV, the FMS 500 GeV cluster threshold
+//     (JetParameters.h point_energy_min).
+//   - Z_gg = |E1 - E2| / (E1 + E2) < 0.7
+//   - each photon at least half a tower from the ECal edges (FMS: half a
+//     tower from the inner and outer edges)
+//   - pi0 pT > 2 GeV
+//   - signal window M_gg 0-0.2 GeV, sideband 0.2-0.3 GeV. The background is
+//     subtracted with the sideband asymmetry and the signal fraction from a
+//     mass fit (sivers/pi0_bgsub.C).
+//   - z_em = E_pi0 / E_jet: isolated z_em > 0.98, non-isolated z_em < 0.9.
+//     The gap is left out of both classes but kept in "incl".
+//   - A_N binned in the pi0's own x_F (2 p_z / sqrt(s))
+// FCS choices (not in the paper):
+//   - E_jet is the raw jet energy: the sum of the points, as for the FMS
+//     photon jets (no UE or JES). Sean 2026-11-16: raw, not UE-subtracted. The
+//     FMS EM-jet code subtracts UE from the jet pT only, and the paper does not
+//     say which energy z_em uses.
+//   - Trigger (Sean 2026-11-16): the host jet passes the default A_N jet
+//     selection, so the cuts stay uniform across all A_N plots. That includes
+//     its trigger value >= 1.3 x a fired level's threshold, so the trigger
+//     fired in this jet's region. The pi0 itself must also reach pT >= 1.3 x
+//     that level's threshold, the FMS requirement of the pi0 pT above the
+//     trigger threshold; both pT and the trigger value are uncorrected.
+//     The jet fiducial cut (axis 20 cm inside, at jet finding) stays,
+//     stricter than the FMS photon cut of half a tower.
+//   - pi0 energy scale (Sean 2026-11-16): one factor, kPi0EnergyScale = 0.135 /
+//     data peak, scales the pi0's energy, so M_gg, pT and x_F move with it. The
+//     FMS windows and cuts then apply on a pi0-calibrated scale, as for the FMS
+//     clusters. Not applied:
+//       - to z_em (raw / raw: one scale for all points cancels);
+//       - to the trigger cut (raw pT, against the uncorrected trigger value).
+//     It is data only: run on simulation, set it to 1, or to sim's own peak.
+// Data peak 0.1248 GeV: the FMS-style candidates themselves, with the cuts
+// above (including the pi0 pT trigger cut). Measured on one file, run 23087036
+// (plead_smoke_v3), all z_em, pi0_bgsub.C global fit (Gaussian + quadratic,
+// 2026-11-16). The two-photon jets of the run22_full_v2 report peak lower,
+// at 0.1150 (all pT, no pi0 pT cut), so the selection matters. Check against
+// pi0_bgsub.C's global fit after the next pass: it should sit at 0.135; if not,
+// update this and rerun AnHistograms.
+static const double kPi0EnergyScale = 0.135 / 0.1248;
+static const double kPi0ZggMax = 0.7;
+static const double kPi0PtMin = 2.0;
+static const double kPi0EdgeMargin = 0.5 * 5.542;  // half an ECal tower (cm) at z_proj
+static const int kNPi0MassBins = 60;                // 5 MeV
+static const double kPi0MassMax = 0.3;
+static const double kPi0SigLo = 0.0, kPi0SigHi = 0.2, kPi0SbLo = 0.2, kPi0SbHi = 0.3;
+static const int kNPi0ZCls = 3;                     // non-isolated, gap, isolated
+static const double kPi0ZEdges[kNPi0ZCls + 1] = {0.0, 0.9, 0.98, 1.0001};
+
 #endif

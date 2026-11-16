@@ -37,8 +37,13 @@
 // draws the pages again from that file alone, in seconds, for cosmetic
 // changes.
 //
+// Merged flow (2026-11-16): -m reads one AnMerge output instead of the yield
+// files. Its summed histograms are the masked sample, the runs that enter A_N
+// (AnMerge -x); its per-run rows have every run (TTree "runs").
+//
 // Usage: ./AnPlots <yield file list> <out dir>      read the yields, save qa_sums.root, draw
 //        ./AnPlots -s <qa_sums.root> <out dir>      draw from a saved qa_sums.root
+//        ./AnPlots -m <merged.root> <out dir>       read an AnMerge output, save qa_sums.root, draw
 // Build: g++ -m64 -O2 AnPlots.cpp -o AnPlots `root-config --cflags --libs` -std=c++11
 
 #include <TCanvas.h>
@@ -53,6 +58,7 @@
 #include <TStyle.h>
 #include <TSystem.h>
 #include <TTree.h>
+#include "AnRunTools.h"
 
 #include <cmath>
 #include <cstdio>
@@ -104,7 +110,7 @@ static void AddTo(const std::string &name, TH1 *o)
     }
 }
 
-static void AddFile(TFile &f)
+static void AddFile(TDirectory &f)
 {
     // files without spin_convention used the old Spin_config mapping: the
     // yields of state p belong to physical state 3 - p (AnConfig.h)
@@ -179,22 +185,23 @@ static void HalfSqrtSLine(const std::string &var)
 int main(int argc, char **argv)
 {
     const bool from_sums = argc > 3 && std::string(argv[1]) == "-s";
-    if (argc < 3 || (std::string(argv[1]) == "-s" && argc < 4))
+    const bool from_merged = argc > 3 && std::string(argv[1]) == "-m";
+    if (argc < 3 || ((std::string(argv[1]) == "-s" || std::string(argv[1]) == "-m") && argc < 4))
     {
-        std::cerr << "Usage: " << argv[0] << " <yield file list> <out dir>\n       " << argv[0] << " -s <qa_sums.root> <out dir>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <yield file list> <out dir>\n       " << argv[0] << " -s <qa_sums.root> <out dir>\n       "
+                  << argv[0] << " -m <merged.root> <out dir>" << std::endl;
         return 1;
     }
-    const char *in_arg = from_sums ? argv[2] : argv[1];
-    gOut = from_sums ? argv[3] : argv[2];
+    const char *in_arg = (from_sums || from_merged) ? argv[2] : argv[1];
+    gOut = (from_sums || from_merged) ? argv[3] : argv[2];
     gSystem->mkdir(gOut.c_str(), true);
     gStyle->SetOptStat(0);
     gStyle->SetPalette(55);
     gStyle->SetTitleFontSize(0.05);
 
-    // per-run quantities, filled file by file
-    struct RunRow { double ev_read, ev_pass, jets, xpos, xneg, spin[kNSpinStates], lvl[kNTrgLevels], esum, en; };
+    // per-run quantities, filled file by file (AnRunTools.h)
     std::map<int, RunRow> rows;
-    std::ifstream list(from_sums ? "" : in_arg);
+    std::ifstream list((from_sums || from_merged) ? "" : in_arg);
     std::string fn;
     int nfiles = 0, n_supp = 0;
     if (from_sums)
@@ -210,20 +217,21 @@ int main(int argc, char **argv)
         }
         TNamed *nf = (TNamed *)in.Get("n_files");
         nfiles = nf ? std::atoi(nf->GetTitle()) : 0;
-        TTree *t = (TTree *)in.Get("runs");
-        if (t)
-        {
-            int run; RunRow r;
-            t->SetBranchAddress("run", &run);
-            t->SetBranchAddress("ev_read", &r.ev_read); t->SetBranchAddress("ev_pass", &r.ev_pass);
-            t->SetBranchAddress("jets", &r.jets); t->SetBranchAddress("xpos", &r.xpos); t->SetBranchAddress("xneg", &r.xneg);
-            t->SetBranchAddress("spin", r.spin); t->SetBranchAddress("lvl", r.lvl);
-            t->SetBranchAddress("esum", &r.esum); t->SetBranchAddress("en", &r.en);
-            for (Long64_t i = 0; i < t->GetEntries(); i++) { t->GetEntry(i); rows[run] = r; }
-        }
+        ReadRunRows(in, rows);
         printf("AnPlots: from %s (%d files, %zu runs, %zu histograms)\n", in_arg, nfiles, rows.size(), gSum.size());
     }
-    while (!from_sums && list >> fn)
+    if (from_merged)
+    {
+        // an AnMerge output: its summed histograms as one file, its per-run rows
+        TFile in(in_arg);
+        if (in.IsZombie() || !in.Get("merge_info")) { std::cerr << "ERROR: " << in_arg << " is not an AnMerge output" << std::endl; return 1; }
+        AddFile(in);
+        TNamed *nf = (TNamed *)in.Get("n_files");
+        nfiles = nf ? std::atoi(nf->GetTitle()) : 0;
+        ReadRunRows(in, rows);
+        printf("AnPlots: from merged %s (%d files, %zu runs, %zu histograms)\n", in_arg, nfiles, rows.size(), gSum.size());
+    }
+    while (!from_sums && !from_merged && list >> fn)
     {
         TFile f(fn.c_str());
         if (f.IsZombie()) { std::cerr << "WARNING: cannot open " << fn << std::endl; continue; }
@@ -234,62 +242,17 @@ int main(int argc, char **argv)
         if (SuppBadRunReason(run)) n_supp++;
         else AddFile(f);
         nfiles++;
-        RunRow &r = rows[run];
-        TH1 *cut = (TH1 *)f.Get("h_cutflow");
-        if (cut) r.ev_read += cut->GetBinContent(cut->GetNbinsX());
-        for (int l = 0; l < kNTrgLevels; l++)
-        {
-            TH1 *he = (TH1 *)f.Get(TString::Format("h_events_%s", kTrgLevelName[l]));
-            if (!he) continue;
-            // files without spin_convention used the old mapping: state p is physical 3 - p
-            const bool old_labels = !f.Get("spin_convention");
-            for (int p = 0; p < kNSpinStates; p++)
-            {
-                r.spin[old_labels ? kNSpinStates - 1 - p : p] += he->GetBinContent(p + 1);
-                r.ev_pass += he->GetBinContent(p + 1);
-            }
-            for (int k = 0; k < kNPhotonClasses; k++)
-                for (int s = 0; s < kNSides; s++)
-                    for (int p = 0; p < kNSpinStates; p++)
-                    {
-                        double n = 0;
-                        for (int g = 0; g < kNTrgSlices; g++)
-                        {
-                            if (kTrgSliceEdge[g] < CutFactor(l) - 1e-9) continue;
-                            // JP levels: only jets not firing EM at the default factor (each jet once)
-                            for (int tg = 0; tg < (IsJpLevel(l) ? kNEmTags : 1); tg++)
-                            {
-                                if (IsJpLevel(l) && tg > 0 && kTrgSliceEdge[tg - 1] >= kEmCutFactor - 1e-9) continue;
-                                TH1 *hy = (TH1 *)f.Get(TString::Format("h_xF_%s_%s_%s_%s%s%s", kTrgLevelName[l], PhotonClassName(k), kSideName[s], kSpinStateName[p],
-                                                                       kTrgSliceSuffix[g], IsJpLevel(l) ? kEmTagSuffix[tg] : ""));
-                                if (hy) n += hy->Integral();
-                            }
-                        }
-                        r.jets += n; r.lvl[l] += n;
-                        (s ? r.xpos : r.xneg) += n;
-                    }
-        }
-        TH1 *ec = (TH1 *)f.Get("qa_Ecorr_sel");
-        if (ec) { r.esum += ec->GetMean() * ec->GetEntries(); r.en += ec->GetEntries(); }
+        AddRunRow(f, rows[run]);
     }
     if (nfiles == 0) { std::cerr << "ERROR: no files" << std::endl; return 1; }
     if (!from_sums)
     {
-        printf("AnPlots: %d files, %zu runs; %d files of AnConfig.h kSuppBadRuns runs only in the per-run rows\n", nfiles, rows.size(), n_supp);
+        if (!from_merged) printf("AnPlots: %d files, %zu runs; %d files of AnConfig.h kSuppBadRuns runs only in the per-run rows\n", nfiles, rows.size(), n_supp);
         // save what the pages use, so they can be redrawn with -s
         TFile out((gOut + "/qa_sums.root").c_str(), "RECREATE");
         for (std::map<std::string, TH1 *>::const_iterator it = gSum.begin(); it != gSum.end(); ++it) it->second->Write(it->first.c_str());
         TNamed("n_files", TString::Format("%d", nfiles).Data()).Write();
-        TTree t("runs", "per-run rows of AnPlots");
-        int run; RunRow r;
-        t.Branch("run", &run, "run/I");
-        t.Branch("ev_read", &r.ev_read, "ev_read/D"); t.Branch("ev_pass", &r.ev_pass, "ev_pass/D");
-        t.Branch("jets", &r.jets, "jets/D"); t.Branch("xpos", &r.xpos, "xpos/D"); t.Branch("xneg", &r.xneg, "xneg/D");
-        t.Branch("spin", r.spin, TString::Format("spin[%d]/D", kNSpinStates));
-        t.Branch("lvl", r.lvl, TString::Format("lvl[%d]/D", kNTrgLevels));
-        t.Branch("esum", &r.esum, "esum/D"); t.Branch("en", &r.en, "en/D");
-        for (std::map<int, RunRow>::const_iterator it = rows.begin(); it != rows.end(); ++it) { run = it->first; r = it->second; t.Fill(); }
-        t.Write();
+        WriteRunRows(rows);
         out.Close();
         printf("AnPlots: wrote %s/qa_sums.root\n", gOut.c_str());
     }

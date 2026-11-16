@@ -4,7 +4,7 @@
 # Usage:
 #   ./submit_an_job.sh -f <listfile> -o <outdir> [-n <files_per_job>] \
 #       [-c <calib json>] [-t <triggers>] [-l <label>] [-k <0|1>] [-J <N>]
-#       [-S <seed>] [-N]
+#       [-S <seed>] [-s <pi0 scale table>] [-L <node fail limit>] [-K] [-N]
 #
 #   -f  MakeRunList.pl-format list ("<url or path>/<events>" per line)
 #   -o  output directory; histograms go to <outdir>/hists/, timing tables
@@ -33,6 +33,12 @@
 #   -S  shuffle the job order with this seed (condor starts jobs roughly in
 #       order, so the jobs finished at any time are then a random spread over
 #       the runs, not the earliest runs; 0 = run order, default)
+#   -s  pi0 energy scale table (asymmetry/pi0_scale.txt format), default
+#       asymmetry/pi0_scale.txt (empty: AnConfig.h kPi0EnergyScale for all runs)
+#   -L  failed fetches after which a disk node is flagged and its remaining
+#       files are skipped (<outdir>/nodes/flagged/), default 3; they are left for
+#       a recovery pass (recovery.sh)
+#   -K  no catalog node map (every file's node "unknown": no node flagging)
 #   -N  write the XML and job layout, do not submit
 #
 #   The output directory also gets code_<label>.patch (git diff HEAD of the
@@ -51,8 +57,11 @@ KEEPLOGS=0
 KEEP_JETS=0
 DRYRUN=0
 SHUFFLE_SEED=0
+PI0_TABLE=""
+NODE_FAIL_LIMIT=3
+NO_NODEMAP=0
 
-while getopts "f:o:n:c:t:l:k:J:S:Nh" opt; do
+while getopts "f:o:n:c:t:l:k:J:S:s:L:KNh" opt; do
   case $opt in
     f) LISTFILE="$OPTARG" ;;
     o) OUTDIR="$OPTARG" ;;
@@ -63,8 +72,11 @@ while getopts "f:o:n:c:t:l:k:J:S:Nh" opt; do
     k) KEEPLOGS="$OPTARG" ;;
     J) KEEP_JETS="$OPTARG" ;;
     S) SHUFFLE_SEED="$OPTARG" ;;
+    s) PI0_TABLE="$OPTARG" ;;
+    L) NODE_FAIL_LIMIT="$OPTARG" ;;
+    K) NO_NODEMAP=1 ;;
     N) DRYRUN=1 ;;
-    h|*) sed -n '2,36p' "$0"; exit 0 ;;
+    h|*) sed -n '2,42p' "$0"; exit 0 ;;
   esac
 done
 
@@ -93,6 +105,14 @@ mkdir -p "${OUTDIR}/hists" "${OUTDIR}/timing"
 [ "$KEEP_JETS" != "0" ] && mkdir -p "${OUTDIR}/jets"
 CALIB_NAME=$(basename "$CALIB")
 cp -p "$CALIB" "${SCRIPT_DIR}/jes/${CALIB_NAME}"
+# pi0 energy scale table (-s): copied into asymmetry/pi0_scale/ for the SandBox
+PI0SCALE="pi0_scale.txt"
+if [ -n "$PI0_TABLE" ]; then
+    [ -f "$PI0_TABLE" ] || { echo "Error: -s ${PI0_TABLE} not found"; exit 1; }
+    mkdir -p "${SCRIPT_DIR}/pi0_scale"
+    cp -p "$PI0_TABLE" "${SCRIPT_DIR}/pi0_scale/${LABEL}.txt"
+    PI0SCALE="pi0_scale/${LABEL}.txt"
+fi
 
 # Job layout as submit_data_to_jet.sh: order by run, then by the file's
 # sequence number; cut each run into jobs of at most -n consecutive files
@@ -118,6 +138,21 @@ if [ "$SHUFFLE_SEED" != "0" ]; then
         | sort -k1,1 | cut -d' ' -f2- > "${RANGEFILE}.tmp" && mv "${RANGEFILE}.tmp" "${RANGEFILE}"
     echo "Job order shuffled (seed ${SHUFFLE_SEED})"
 fi
+# each file's disk node, aligned with the sorted list (catalog_query.sh nodes),
+# for the in-job bad-node check; flags and per-node failures go to <outdir>/nodes
+NODEFILE="${SORTEDLIST%.list}.nodes"
+NODEDIR="${OUTDIR}/nodes"
+mkdir -p "${NODEDIR}/fail" "${NODEDIR}/flagged"
+# nodes already known to be down (bad_nodes.txt) start flagged, so their files
+# are recorded as skipped (and recoverable) rather than silently missing
+for nd in $(grep -v '^#' "${SCRIPT_DIR}/bad_nodes.txt" 2>/dev/null | awk 'NF { print $1 }'); do
+    [ -e "${NODEDIR}/flagged/${nd}" ] || echo "$(date '+%F %T') ${nd}: listed in bad_nodes.txt at submission" > "${NODEDIR}/flagged/${nd}"
+done
+[[ "$NODE_FAIL_LIMIT" =~ ^[1-9][0-9]*$ ]] || { echo "Error: -L must be a positive integer"; exit 1; }
+if [ "$NO_NODEMAP" = "1" ] || ! "${SCRIPT_DIR}/catalog_query.sh" nodes "${SORTEDLIST}" "${NODEFILE}"; then
+    echo "No node map (-K or the catalog query failed): node flagging off"
+    awk '{ print "unknown" }' "${SORTEDLIST}" > "${NODEFILE}"
+fi
 NPROC=$(wc -l < "${RANGEFILE}")
 echo "Job layout: $(wc -l < "${SORTEDLIST}") files in ${NPROC} jobs of at most ${FILES_PER_JOB} consecutive files of one run"
 
@@ -139,6 +174,10 @@ sed -e "s#{{LISTFILE}}#${SORTEDLIST}#g" \
     -e "s#{{OUTDIR}}#${OUTDIR}#g" \
     -e "s#{{STDOUT_URL}}#${STDOUT_URL}#g" \
     -e "s#{{STDERR_URL}}#${STDERR_URL}#g" \
+    -e "s#{{PI0SCALE}}#${PI0SCALE}#g" \
+    -e "s#{{NODEFILE}}#${NODEFILE}#g" \
+    -e "s#{{NODEDIR}}#${NODEDIR}#g" \
+    -e "s/{{NODE_FAIL_LIMIT}}/${NODE_FAIL_LIMIT}/g" \
     "${SCRIPT_DIR}/an_job.xml" > "${OUTXML}"
 echo "Generated ${OUTXML}"
 
@@ -156,8 +195,12 @@ trigger_filter=${TRIGGER_FILTER}
 keep_logs=${KEEPLOGS}
 keep_jets_every=${KEEP_JETS}
 shuffle_seed=${SHUFFLE_SEED}
+pi0_scale_table=asymmetry/${PI0SCALE}${PI0_TABLE:+ (from ${PI0_TABLE})}
+node_fail_limit=${NODE_FAIL_LIMIT}
+node_file=${NODEFILE}
 code_uncommitted_files=$(git -C "${PIPELINE_ROOT}" status --porcelain 2>/dev/null | grep -c . || true)
 EOF
+cp -p "${SCRIPT_DIR}/${PI0SCALE}" "${OUTDIR}/pi0_scale_${LABEL}.txt"
 git -C "${PIPELINE_ROOT}" diff HEAD > "${OUTDIR}/code_${LABEL}.patch" 2>/dev/null || true
 git -C "${PIPELINE_ROOT}" status --short > "${OUTDIR}/code_${LABEL}_status.txt" 2>/dev/null || true
 

@@ -11,6 +11,9 @@
 #   ./catalog_query.sh filter <in.list> <out.list>
 #       an existing list without the files on the nodes in bad_nodes.txt (one
 #       catalog query for the whole production, ~4 min)
+#   ./catalog_query.sh nodes <in.list> <out.nodes>
+#       the disk node of each line of a list, aligned line by line ("unknown"
+#       if not on disk), for the in-job bad-node check (submit_an_job.sh)
 #
 # bad_nodes.txt (next to this script): distributed-disk nodes whose xrootd
 # does not serve data, one per line (# comments). Their files have no other
@@ -58,7 +61,7 @@ case "$1" in
         ;;
     filter)
         IN="$2"; OUT="$3"
-        [ -f "$IN" ] && [ -n "$OUT" ] || { sed -n '2,24p' "$0"; exit 1; }
+        [ -f "$IN" ] && [ -n "$OUT" ] || { sed -n '2,28p' "$0"; exit 1; }
         MAP=$(mktemp)
         star "get_file_list.pl -keys 'filename,node' -cond '${COND},storage=local' -limit 0" \
             | awk -F'::' -v bad="$(bad_re)" '$2 ~ bad { print $1 }' > "$MAP"
@@ -66,6 +69,19 @@ case "$1" in
         echo "$(wc -l < "$IN") -> $(wc -l < "$OUT") files -> $OUT ($(wc -l < "$MAP") catalog files on bad nodes: $(bad_re))"
         rm -f "$MAP"
         ;;
+    nodes)
+        # the disk node of every line of a list, one per line, aligned with it
+        # ("unknown" if the catalog has no local copy), for the jobs' bad-node
+        # check (an_job.xml, recovery.sh). One catalog query, ~4 min.
+        IN="$2"; OUT="$3"
+        [ -f "$IN" ] && [ -n "$OUT" ] || { sed -n '2,28p' "$0"; exit 1; }
+        MAP=$(mktemp)
+        star "get_file_list.pl -keys 'filename,node' -cond '${COND},storage=local' -limit 0" > "$MAP"
+        awk -F'::' 'NR == FNR { if (!($1 in nd)) nd[$1] = $2; next }
+                    { n = split($0, p, "/"); f = p[n - 1]; print (f in nd ? nd[f] : "unknown") }' "$MAP" "$IN" > "$OUT"
+        echo "$(wc -l < "$IN") files -> $OUT ($(grep -c '^unknown$' "$OUT" || true) without a node; $(sort -u "$OUT" | wc -l) nodes)"
+        rm -f "$MAP"
+        ;;
     *)
-        sed -n '2,24p' "$0"; exit 1 ;;
+        sed -n '2,28p' "$0"; exit 1 ;;
 esac
