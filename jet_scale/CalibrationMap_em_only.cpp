@@ -38,7 +38,23 @@
 // the direct fits), <out>.chi2_smoothed.csv (the same points against the
 // smoothed map) and <out>.direct_fits.csv (the unsmoothed per-position fits).
 //
-// Usage: ./CalibrationMap_em_only <bins.root> <out.json> [sample] [k] [tune] [commit]
+// Full (ECAL+HCAL) jets (2026-11-16): argv[7] "full" masks to the full-jet
+// fiducial region (HCAL rectangle clipped to the ECAL, 20 cm buffer;
+// JetParameters.h kFiducialRectFull) instead of the ECAL one; the model is
+// the same log-cubic (Sean: as EM-only, no Gaussian term). The JSON records
+// "jet_type".
+//
+// Which parameters can be face-wide: <out>.uniformity.txt compares nested
+// models on the same points, by how many of A, B, C, D are free per position
+// (the rest face-wide): A only; A, B (the map's choice); A, B, C; all four.
+// Each is an exact linear least-squares fit (no start values). Per model:
+// chi2, ndof, and the F-test of each step against the next (the extra
+// per-position parameters' chi2 drop per extra parameter over the larger
+// model's chi2/ndof, which absorbs the points' excess scatter).
+// <out>.free_fits.csv: the all-free per-position fits (positions with at
+// least 6 points), to map how C and D vary.
+//
+// Usage: ./CalibrationMap_em_only <bins.root> <out.json> [sample] [k] [tune] [commit] [em|full]
 //        (filled in by submit_jet_scale_em_only.sh; "unknown" if left out)
 // Build: g++ -m64 -O2 CalibrationMap_em_only.cpp -o CalibrationMap_em_only `root-config --cflags --libs` -std=c++11
 
@@ -96,13 +112,20 @@ const double ANCHOR_E[2] = {3.0, 30.0};
 const float cut_x_inner_ecal = 20.53604584f, cut_x_outer_ecal = 137.59500000f;
 const float cut_y_min_ecal = -96.72439178f, cut_y_max_ecal = 86.25565167f;
 const float reco_fiducial_buffer_ecal = 20.0f;
+// Full jets (kFiducialRectFull: the HCAL rectangle clipped to the ECAL one)
+const float cut_x_inner_full = 24.15591212f, cut_x_outer_full = 131.82035143f;
+const float cut_y_min_full = -83.19687629f, cut_y_max_full = 86.25565167f;
+const float reco_fiducial_buffer_full = 20.0f;
+bool g_full_jets = false; // argv[7] "full"
 
 inline bool pass_fiducial_cut(float jetXE, float jetYE)
 {
-    const float buffer = reco_fiducial_buffer_ecal;
+    const float buffer = g_full_jets ? reco_fiducial_buffer_full : reco_fiducial_buffer_ecal;
+    const float xi = g_full_jets ? cut_x_inner_full : cut_x_inner_ecal, xo = g_full_jets ? cut_x_outer_full : cut_x_outer_ecal;
+    const float y0 = g_full_jets ? cut_y_min_full : cut_y_min_ecal, y1 = g_full_jets ? cut_y_max_full : cut_y_max_ecal;
     const float ax = std::fabs(jetXE);
-    const bool in_x = ax >= (cut_x_inner_ecal + buffer) && ax <= (cut_x_outer_ecal - buffer);
-    const bool in_y = jetYE >= (cut_y_min_ecal + buffer) && jetYE <= (cut_y_max_ecal - buffer);
+    const bool in_x = ax >= (xi + buffer) && ax <= (xo - buffer);
+    const bool in_y = jetYE >= (y0 + buffer) && jetYE <= (y1 - buffer);
     return in_x && in_y;
 }
 
@@ -330,6 +353,194 @@ std::vector<FitRow> fit_cells(const std::vector<Cell> &cells, double C, double D
         fits.push_back(f);
     }
     return fits;
+}
+
+// Solves the n x n system M x = v (n <= 4) by Gaussian elimination with
+// partial pivoting; false if singular
+bool solve_small(int n, double M[4][4], const double v[4], double x[4])
+{
+    double a[4][5];
+    for (int i = 0; i < n; i++) { for (int j = 0; j < n; j++) a[i][j] = M[i][j]; a[i][n] = v[i]; }
+    for (int c = 0; c < n; c++)
+    {
+        int piv = c;
+        for (int r = c + 1; r < n; r++) if (std::fabs(a[r][c]) > std::fabs(a[piv][c])) piv = r;
+        if (!(std::fabs(a[piv][c]) > 1e-300)) return false;
+        for (int j = 0; j <= n; j++) std::swap(a[c][j], a[piv][j]);
+        for (int r = 0; r < n; r++)
+        {
+            if (r == c) continue;
+            const double f = a[r][c] / a[c][c];
+            for (int j = c; j <= n; j++) a[r][j] -= f * a[c][j];
+        }
+    }
+    for (int i = 0; i < n; i++) x[i] = a[i][n] / a[i][i];
+    return true;
+}
+
+// Nested model with the first k of (A, B, C, D) free per position and the
+// rest face-wide: the face-wide ones from the profiled normal equations
+// (per position, the residual projector of its free columns), then the free
+// ones per position. Returns chi2 and ndof; glob gets the face-wide values.
+bool fit_nested(const std::vector<Cell> &cells, int k, double &chi2, long &ndof, double glob[4])
+{
+    const int g = 4 - k;
+    double S[4][4] = {{0}}, t[4] = {0};
+    long n_points = 0;
+    std::vector<std::vector<double>> Gs;
+    for (const Cell &c : cells)
+    {
+        double G[5][5];
+        cell_sums(c, G);
+        n_points += (long)c.l.size();
+        // u^T M v with M the projector off the first k columns
+        double Gkk[4][4], inv[4][4];
+        for (int a = 0; a < k; a++) for (int b = 0; b < k; b++) Gkk[a][b] = G[a][b];
+        for (int col = 0; col < k; col++)
+        {
+            double e[4] = {0, 0, 0, 0}, x[4];
+            e[col] = 1;
+            double tmp[4][4];
+            for (int a = 0; a < k; a++) for (int b = 0; b < k; b++) tmp[a][b] = Gkk[a][b];
+            if (!solve_small(k, tmp, e, x)) return false;
+            for (int a = 0; a < k; a++) inv[a][col] = x[a];
+        }
+        auto uMv = [&](int u, int v)
+        {
+            double r = G[u][v];
+            for (int a = 0; a < k; a++) for (int b = 0; b < k; b++) r -= G[u][a] * inv[a][b] * G[b][v];
+            return r;
+        };
+        for (int a = 0; a < g; a++)
+        {
+            for (int b = 0; b < g; b++) S[a][b] += uMv(k + a, k + b);
+            t[a] += uMv(k + a, 4);
+        }
+    }
+    double gv[4] = {0, 0, 0, 0};
+    if (g > 0 && !solve_small(g, S, t, gv)) return false;
+    for (int a = 0; a < 4; a++) glob[a] = a < k ? NAN : gv[a - k];
+    // per position: the free ones with the face-wide ones held, then chi2
+    chi2 = 0;
+    for (const Cell &c : cells)
+    {
+        double M[4][4] = {{0}}, v[4] = {0}, x[4] = {0};
+        for (size_t i = 0; i < c.l.size(); i++)
+        {
+            const double l = c.l[i], col[4] = {1.0, l, l * l, l * l * l};
+            double r = c.y[i];
+            for (int a = k; a < 4; a++) r -= gv[a - k] * col[a];
+            for (int a = 0; a < k; a++) { v[a] += c.w[i] * col[a] * r; for (int b = 0; b < k; b++) M[a][b] += c.w[i] * col[a] * col[b]; }
+        }
+        if (k > 0 && !solve_small(k, M, v, x)) return false;
+        for (size_t i = 0; i < c.l.size(); i++)
+        {
+            const double l = c.l[i], col[4] = {1.0, l, l * l, l * l * l};
+            double m = 0;
+            for (int a = 0; a < 4; a++) m += (a < k ? x[a] : gv[a - k]) * col[a];
+            chi2 += c.w[i] * (c.y[i] - m) * (c.y[i] - m);
+        }
+    }
+    ndof = n_points - (long)k * (long)cells.size() - g;
+    return true;
+}
+
+// The uniformity test (see the header): nested models on the positions with
+// at least 6 points (so all four can be free everywhere), and the all-free fits
+void write_uniformity(const std::vector<Cell> &all_cells, const std::string &txt, const std::string &csv)
+{
+    std::vector<Cell> cells;
+    for (const Cell &c : all_cells) if ((int)c.l.size() >= 6) cells.push_back(c);
+    std::ofstream out(txt);
+    const char *nm[5] = {"", "A per position; B, C, D face-wide", "A, B per position; C, D face-wide (the map)",
+                         "A, B, C per position; D face-wide", "A, B, C, D per position"};
+    double chi[5]; long nd[5]; bool ok[5];
+    out << "Positions with >= 6 points: " << cells.size() << " (of " << all_cells.size() << " fitted)\n";
+    for (int k = 1; k <= 4; k++)
+    {
+        double glob[4];
+        ok[k] = fit_nested(cells, k, chi[k], nd[k], glob);
+        char line[400];
+        if (!ok[k]) { std::snprintf(line, sizeof line, "%-48s singular\n", nm[k]); out << line; continue; }
+        std::snprintf(line, sizeof line, "%-48s chi2/ndof = %.1f/%ld = %.3f", nm[k], chi[k], nd[k], chi[k] / nd[k]);
+        out << line;
+        for (int a = k; a < 4; a++) { std::snprintf(line, sizeof line, "  %c = %.6g", "ABCD"[a], glob[a]); out << line; }
+        out << "\n";
+    }
+    out << "\nF-tests (each step's chi2 drop per extra parameter / the larger model's chi2/ndof):\n";
+    for (int k = 1; k < 4; k++)
+    {
+        if (!ok[k] || !ok[k + 1]) continue;
+        const long dn = nd[k] - nd[k + 1];
+        const double F = ((chi[k] - chi[k + 1]) / dn) / (chi[k + 1] / nd[k + 1]);
+        char line[300];
+        std::snprintf(line, sizeof line, "  free %c per position: chi2 drop %.1f for %ld parameters, F = %.2f\n", "ABCD"[k], chi[k] - chi[k + 1], dn, F);
+        out << line;
+    }
+    out << "(F near 1: the extra per-position freedom fits noise; well above 1: the parameter varies over the face)\n";
+    // what it does to the scale: per position, the RMS over its points of
+    // (all-free - shared-C,D) / shared, against the points' median relative error
+    {
+        double glob[4], ch; long nd2;
+        if (ok[2] && fit_nested(cells, 2, ch, nd2, glob))
+        {
+            std::vector<FitRow> shared = fit_cells(cells, glob[2], glob[3]);
+            std::vector<double> rms, relerr;
+            for (size_t ci = 0; ci < cells.size(); ci++)
+            {
+                const Cell &c = cells[ci];
+                double M[4][4] = {{0}}, v[4] = {0}, x[4];
+                for (size_t i = 0; i < c.l.size(); i++)
+                {
+                    const double l = c.l[i], col[4] = {1.0, l, l * l, l * l * l};
+                    for (int q = 0; q < 4; q++) { v[q] += c.w[i] * col[q] * c.y[i]; for (int r = 0; r < 4; r++) M[q][r] += c.w[i] * col[q] * col[r]; }
+                }
+                if (!solve_small(4, M, v, x)) continue;
+                double s2 = 0;
+                for (size_t i = 0; i < c.l.size(); i++)
+                {
+                    const double l = c.l[i];
+                    const double pf = x[0] + l * (x[1] + l * (x[2] + l * x[3]));
+                    const double ps = shared[ci].A + l * (shared[ci].B + l * (glob[2] + l * glob[3]));
+                    s2 += (pf - ps) * (pf - ps) / (ps * ps);
+                    relerr.push_back(1.0 / std::sqrt(c.w[i]) / c.y[i]);
+                }
+                rms.push_back(std::sqrt(s2 / c.l.size()));
+            }
+            auto q = [](std::vector<double> v, double f) { if (v.empty()) return 0.0; std::sort(v.begin(), v.end()); return v[(size_t)(f * (v.size() - 1))]; };
+            char line[400];
+            std::snprintf(line, sizeof line, "\nScale change from freeing C and D per position (RMS over each position's points, relative):\n"
+                          "  median %.2f%%, 90%% of positions below %.2f%%, max %.2f%%; the points' median relative error is %.2f%%\n",
+                          100 * q(rms, 0.5), 100 * q(rms, 0.9), 100 * q(rms, 1.0), 100 * q(relerr, 0.5));
+            out << line;
+        }
+    }
+    out.close();
+    // all-free fits per position
+    std::ofstream cf(csv);
+    cf << "x_center,y_center,npoints,A,B,C,D,chi2,ndof\n";
+    for (const Cell &c : cells)
+    {
+        double M[4][4] = {{0}}, v[4] = {0}, x[4];
+        for (size_t i = 0; i < c.l.size(); i++)
+        {
+            const double l = c.l[i], col[4] = {1.0, l, l * l, l * l * l};
+            for (int a = 0; a < 4; a++) { v[a] += c.w[i] * col[a] * c.y[i]; for (int b = 0; b < 4; b++) M[a][b] += c.w[i] * col[a] * col[b]; }
+        }
+        if (!solve_small(4, M, v, x)) continue;
+        double ch = 0;
+        for (size_t i = 0; i < c.l.size(); i++)
+        {
+            const double l = c.l[i];
+            const double d = c.y[i] - (x[0] + l * (x[1] + l * (x[2] + l * x[3])));
+            ch += c.w[i] * d * d;
+        }
+        char line[300];
+        std::snprintf(line, sizeof line, "%.3f,%.3f,%zu,%.6g,%.6g,%.6g,%.6g,%.3f,%d\n", c.x_center, c.y_center, c.l.size(), x[0], x[1], x[2], x[3], ch, (int)c.l.size() - 4);
+        cf << line;
+    }
+    std::cout << "Uniformity test: " << txt << std::endl;
+    std::ifstream back(txt); std::string ln; while (std::getline(back, ln)) std::cout << "  " << ln << std::endl;
 }
 
 Grid2D make_nan_grid(int nx, int ny)
@@ -598,6 +809,7 @@ void write_calibration_json(
     out << "{\n";
     // Evaluators refuse a map without this tag (earlier forms)
     out << "  \"model\": \"logcubic\",\n";
+    out << "  \"jet_type\": \"" << (g_full_jets ? "full" : "em") << "\",\n";
     for (int i = 0; i < 4; i++)
         out << "  \"" << MAP_INFO_KEY[i] << "\": \"" << map_info[i] << "\",\n";
     out << "  \"C\": ";
@@ -723,6 +935,8 @@ int main(int argc, char **argv)
         output_file = argv[2];
     for (int i = 0; i < 4 && i + 3 < argc; i++)
         map_info[i] = argv[i + 3];
+    g_full_jets = argc > 7 && std::string(argv[7]) == "full";
+    std::cout << "Jet type: " << (g_full_jets ? "full (ECAL+HCAL)" : "EM-only") << std::endl;
 
     std::cout << "Loading " << input_file << " ..." << std::endl;
     std::vector<BinRow> rows = load_bins(input_file);
@@ -755,6 +969,7 @@ int main(int argc, char **argv)
     write_chi2_csv(fits, output_file + ".chi2.csv");
     write_chi2_smoothed_csv(cells, C, D, As, Bs, xs, ys, output_file + ".chi2_smoothed.csv");
     write_direct_fits_csv(fits, C, D, output_file + ".direct_fits.csv");
+    write_uniformity(cells, output_file + ".uniformity.txt", output_file + ".free_fits.csv");
 
     return 0;
 }

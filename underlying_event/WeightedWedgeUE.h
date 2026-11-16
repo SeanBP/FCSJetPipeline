@@ -28,6 +28,12 @@
 // Truth needs no vertex: particle directions are momenta, which already point
 // from the true vertex, and the truth areas are exact in eta-phi.
 //
+// Full (ECAL+HCAL) jets (2026-11-16): UeGeometry::em_only = false tiles the
+// full-jet rectangle (JetParameters.h kFiducialRectFull) instead of the ECal;
+// UnderlyingEvent.cpp then feeds ECal and HCal tower hits and the full-jet truth
+// particles. The live-area treatment is the EM one; not yet validated for
+// full jets.
+//
 // Chosen on FMS Run 15 and FCS simulation, 2026-10 (UnderlyingEventPlayground/
 // in_event): the azimuthal scans put the jet's edge at about 2R and the
 // recoil rise from about 120-130 deg; on the FMS the FCS-like wedges sit within
@@ -80,9 +86,11 @@ struct UeResult
     double pt() const { return rho_pt >= 0 ? rho_pt * area : -1; }
 };
 
-// The ECal as tiles: kUeTile squares over both halves, with sub-tile areas
+// The ECal (or, for full jets, the full-jet rectangle) as tiles: kUeTile
+// squares over both halves, with sub-tile areas
 struct UeGeometry
 {
+    bool em_only = true;   // false: the full-jet rectangle (set before Build)
     struct Tile { float eta, phi; };
     struct Sub { float eta, phi, area; };
     std::vector<Tile> tiles;
@@ -94,7 +102,7 @@ struct UeGeometry
     {
         vz = vertex_z; vx = vertex_x; vy = vertex_y;
         const double dz = z_proj - vz;
-        const FiducialRect &r = kFiducialRectEcal;
+        const FiducialRect &r = JetFiducialRect(em_only);
         nx = (int)std::ceil((r.x_outer - r.x_inner) / kUeTile); ny = (int)std::ceil((r.y_max - r.y_min) / kUeTile);
         dx = (r.x_outer - r.x_inner) / nx; dy = (r.y_max - r.y_min) / ny;
         tiles.clear(); sub.clear();
@@ -123,7 +131,7 @@ struct UeGeometry
     // tile of an ECal position (cm at z_proj), -1 outside
     int TileOf(double x, double y) const
     {
-        const FiducialRect &r = kFiducialRectEcal;
+        const FiducialRect &r = JetFiducialRect(em_only);
         const int side = x > 0 ? 1 : 0;
         const int i = (int)std::floor((std::fabs(x) - r.x_inner) / dx), j = (int)std::floor((y - r.y_min) / dy);
         if (i < 0 || i >= nx || j < 0 || j >= ny) return -1;

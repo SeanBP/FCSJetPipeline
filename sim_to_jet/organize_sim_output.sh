@@ -2,6 +2,7 @@
 # Splits a finished sim_to_jet output folder into per-ptHat-bin subfolders
 # (file names unchanged); log/ and run_params_*.txt stay in place:
 #   <outdir>/jet_output/pt<N>/jet_output_<gen>_<tune>_pt<N>_<job>.root
+#   <outdir>/jet_full/pt<N>/jet_full_<gen>_<tune>_pt<N>_<job>.root (-J)
 #   <outdir>/SimpleTree/pt<N>/SimpleTree_<gen>_<tune>_pt<N>_<job>.root
 # Never overwrites (mv -n), so it is safe to rerun. Run only after every job
 # has finished.
@@ -16,7 +17,7 @@ if [ -z "$OUTDIR" ] || [ ! -d "$OUTDIR" ]; then
 fi
 
 n_moved=0; n_skipped=0
-for kind in jet_output SimpleTree; do
+for kind in jet_output jet_full SimpleTree; do
     while IFS= read -r f; do
         base=$(basename "$f")
         bin=$(echo "$base" | sed -n -e 's/^.*_\(pt[0-9]*\)_[0-9]*\.root$/\1/p')
@@ -31,6 +32,6 @@ for kind in jet_output SimpleTree; do
     done < <(find "$OUTDIR" -maxdepth 1 -type f -name "${kind}_*.root")
 done
 echo "moved $n_moved files, skipped $n_skipped"
-for kind in jet_output SimpleTree; do
+for kind in jet_output jet_full SimpleTree; do
     [ -d "$OUTDIR/$kind" ] && echo "$kind/: $(find "$OUTDIR/$kind" -mindepth 1 -maxdepth 1 -type d | wc -l) ptHat-bin folders, $(find "$OUTDIR/$kind" -type f | wc -l) files"
 done

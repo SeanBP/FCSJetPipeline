@@ -54,6 +54,9 @@
       {{PI0_DUMP}}          -D: 1 = also write pi0dump_*.root (truth-labelled
                              point jets, Pi0Playground/pi0_prob/pi0_jet_dump.cpp,
                              with sigma_job/N_job) from every job's SimpleTree
+      {{FULL_JETS}}         -J: 1 = also write jet_full_*.root (ECAL+HCAL jets from
+                             ECAL points + HCAL clusters, full-jet cuts) from the
+                             same SimpleTree
       RESOURCE_USAGE         -R: an explicit condor memory request (MB), or none
       {{OUTDIR}}            absolute output directory
       {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
@@ -115,6 +118,7 @@
         echo "Calib sample   = {{CALIB_SAMPLE}}"
         echo "vz sigma       = {{VZ_SIGMA}} cm"
         echo "pi0 dump       = {{PI0_DUMP}}"
+        echo "Full jets      = {{FULL_JETS}}"
         echo "nevents        = {{NEVENTS}}"
         echo "Save SimpleTree = {{SAVE_SIMPLETREE}}"
         echo "JOBINDEX       = ${JOBINDEX}"
@@ -167,12 +171,21 @@
         ./JetMatcher single_file.list "${TRIGGER_FILTER}" {{EM_ONLY}} {{USE_POINTS}} ${jet_pt_cuts}
         mv jet_output.root jet_output_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
 
+        # Full (ECAL+HCAL) jets from ECAL points + HCAL clusters, from the same SimpleTree (-J)
+        if ( {{FULL_JETS}} == 1 ) then
+            ./JetMatcher single_file.list "${TRIGGER_FILTER}" 0 1 ${jet_pt_cuts}
+            mv jet_output.root jet_full_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root
+        endif
+
         # In-job underlying event (reco_ue_* and truth_ue_* branches: the
         # in-event eta-weighted wedges); must run before the SimpleTree is renamed
         echo "Compiling UnderlyingEvent..."
         g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent \
             `root-config --cflags --libs` -std=c++11
         echo "jet_output_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root SimpleTree_mudst.root" > ue_pairs.list
+        if ( {{FULL_JETS}} == 1 ) then
+            echo "jet_full_{{GENERATOR}}_{{TUNE_PARAM}}_pt${ptcut}_${run_number}.root SimpleTree_mudst.root" >> ue_pairs.list
+        endif
         ./UnderlyingEvent ue_pairs.list
 
         # In-job truth-labelled point jets for the pi0 probability calibration
@@ -242,5 +255,6 @@
     <output fromScratch="SimpleTree_*.root" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="MuDst_*.MuDst.root" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="pi0dump_*.root" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="jet_full_*.root" toURL="file:{{OUTDIR}}/" />
 
 </job>

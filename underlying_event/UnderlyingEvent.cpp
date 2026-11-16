@@ -29,6 +29,13 @@
 // geometry use z - vz, so the wedges and the jet cone's area match the jet
 // axis. Truth needs nothing (momenta, exact areas).
 //
+// Full (ECAL+HCAL) jets (2026-11-16): a jet file with reco_em_only = 0 (sim_to_jet
+// -J jet_full_*.root, or RecoJets in full mode) gets the same wedges over the
+// full-jet rectangle (WeightedWedgeUE.h), with the reco jets' own inputs
+// (reco_from_points = 1: ECal points + HCal clusters; 0: ECal and HCal tower
+// hits above the jet finders' MIP thresholds) and, in simulation, the full-jet truth particles (first-vertex
+// particles in the full-jet eta band, as JetMatcher). Not yet validated for full jets.
+//
 // Build (job folder):
 //   g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent `root-config --cflags --libs` -std=c++11
 // from this folder:
@@ -38,6 +45,8 @@
 #include <TFile.h>
 #include <TTree.h>
 #include <TSystem.h>
+#include <TBranch.h>
+#include <TLeaf.h>
 
 #include <algorithm>
 #include <cmath>
@@ -95,6 +104,7 @@ int main(int argc, char **argv)
 
     UeGeometry geo;
     geo.Build();
+    const int MAX_HITS = 5000; // matches StSimpleReaderMaker.h's Cal_hit_* array size
     const TruthWeightedWedges truth_wedges;
     const int MAX_MC = 10000; // matches JetMatcher.cpp's mcpart_* array size
     const int MAX_PTS = 200;  // matches StSimpleReaderMaker.h's Cal_pt_* array size
@@ -111,7 +121,7 @@ int main(int argc, char **argv)
         TTree *jt = (fin && !fin->IsZombie()) ? (TTree *)fin->Get("jetTree") : 0;
         TTree *st = (fs && !fs->IsZombie()) ? (TTree *)fs->Get("data") : 0;
         const bool has_entry = jt && jt->GetBranch("simpletree_entry");
-        if (!jt || !st || !st->GetBranch("Cal_npts") || (!has_entry && jt->GetEntries() != st->GetEntries()))
+        if (!jt || !st || (!st->GetBranch("Cal_npts") && !st->GetBranch("Cal_nhits")) || (!has_entry && jt->GetEntries() != st->GetEntries()))
         {
             std::cerr << "ERROR: cannot use " << jet_file << " with " << simple_file
                       << " (unreadable, no points, or no simpletree_entry branch and differing entry counts); left as it is" << std::endl;
@@ -141,21 +151,63 @@ int main(int argc, char **argv)
         if (jt->GetBranch("reco_vz_used")) jt->SetBranchAddress("reco_vz_used", &reco_vz_used);
         if (jt->GetBranch("reco_vx_used")) jt->SetBranchAddress("reco_vx_used", &reco_vx_used);
         if (jt->GetBranch("reco_vy_used")) jt->SetBranchAddress("reco_vy_used", &reco_vy_used);
+        // jet type and reco inputs of this file (absent: EM-only point jets, as before)
+        Int_t file_em_only = 1, file_from_points = 1;
+        if (jt->GetEntries() > 0)
+        {
+            if (TBranch *b = jt->GetBranch("reco_em_only")) { b->GetEntry(0); file_em_only = (Int_t)jt->GetLeaf("reco_em_only")->GetValue(); }
+            if (TBranch *b = jt->GetBranch("reco_from_points")) { b->GetEntry(0); file_from_points = (Int_t)jt->GetLeaf("reco_from_points")->GetValue(); }
+        }
+        const bool em_jets = file_em_only != 0, from_points = file_from_points != 0;
+        if (geo.em_only != em_jets) { geo.em_only = em_jets; geo.Build(geo.vz, geo.vx, geo.vy); }
         const bool has_truth = jt->GetBranch("truth_eta") && st->GetBranch("mcpart_num");
         if (has_truth) { jt->SetBranchAddress("truth_eta", &truth_eta); jt->SetBranchAddress("truth_phi", &truth_phi); }
 
-        Int_t Cal_npts = 0, mcpart_num = 0;
-        Float_t Cal_pt_energy[MAX_PTS], Cal_pt_x[MAX_PTS], Cal_pt_y[MAX_PTS], Cal_pt_z[MAX_PTS];
-        Int_t Cal_pt_detid[MAX_PTS];
+        // reco inputs: ECal points, or (from_points = 0) tower hits
+        Int_t Cal_npts = 0, mcpart_num = 0, Cal_nhits = 0;
+        static Float_t Cal_pt_energy[MAX_PTS], Cal_pt_x[MAX_PTS], Cal_pt_y[MAX_PTS], Cal_pt_z[MAX_PTS];
+        static Int_t Cal_pt_detid[MAX_PTS];
+        static Float_t Cal_hit_energy[MAX_HITS], Cal_hit_posx[MAX_HITS], Cal_hit_posy[MAX_HITS], Cal_hit_posz[MAX_HITS];
+        static Int_t Cal_detid[MAX_HITS];
+        const int MAX_CLUS = 100; // StSimpleReaderMaker.h Cal_clus_* size
+        Int_t Cal_nclus = 0;
+        static Float_t Cal_clus_energy[MAX_CLUS], Cal_clus_x[MAX_CLUS], Cal_clus_y[MAX_CLUS], Cal_clus_z[MAX_CLUS];
+        static Int_t Cal_clus_detid[MAX_CLUS];
+        const bool with_clusters = from_points && !em_jets && st->GetBranch("Cal_nclus");
         st->SetBranchStatus("*", 0);
-        const char *pb[] = {"Cal_npts", "Cal_pt_energy", "Cal_pt_x", "Cal_pt_y", "Cal_pt_z", "Cal_pt_detid"};
-        for (int i = 0; i < 6; i++) st->SetBranchStatus(pb[i], 1);
-        st->SetBranchAddress("Cal_npts", &Cal_npts);
-        st->SetBranchAddress("Cal_pt_energy", Cal_pt_energy);
-        st->SetBranchAddress("Cal_pt_x", Cal_pt_x);
-        st->SetBranchAddress("Cal_pt_y", Cal_pt_y);
-        st->SetBranchAddress("Cal_pt_z", Cal_pt_z);
-        st->SetBranchAddress("Cal_pt_detid", Cal_pt_detid);
+        if (from_points)
+        {
+            const char *pb[] = {"Cal_npts", "Cal_pt_energy", "Cal_pt_x", "Cal_pt_y", "Cal_pt_z", "Cal_pt_detid"};
+            for (int i = 0; i < 6; i++) st->SetBranchStatus(pb[i], 1);
+            st->SetBranchAddress("Cal_npts", &Cal_npts);
+            st->SetBranchAddress("Cal_pt_energy", Cal_pt_energy);
+            st->SetBranchAddress("Cal_pt_x", Cal_pt_x);
+            st->SetBranchAddress("Cal_pt_y", Cal_pt_y);
+            st->SetBranchAddress("Cal_pt_z", Cal_pt_z);
+            st->SetBranchAddress("Cal_pt_detid", Cal_pt_detid);
+            if (with_clusters)
+            {
+                const char *cb[] = {"Cal_nclus", "Cal_clus_energy", "Cal_clus_x", "Cal_clus_y", "Cal_clus_z", "Cal_clus_detid"};
+                for (int i = 0; i < 6; i++) st->SetBranchStatus(cb[i], 1);
+                st->SetBranchAddress("Cal_nclus", &Cal_nclus);
+                st->SetBranchAddress("Cal_clus_energy", Cal_clus_energy);
+                st->SetBranchAddress("Cal_clus_x", Cal_clus_x);
+                st->SetBranchAddress("Cal_clus_y", Cal_clus_y);
+                st->SetBranchAddress("Cal_clus_z", Cal_clus_z);
+                st->SetBranchAddress("Cal_clus_detid", Cal_clus_detid);
+            }
+        }
+        else
+        {
+            const char *hb[] = {"Cal_nhits", "Cal_hit_energy", "Cal_hit_posx", "Cal_hit_posy", "Cal_hit_posz", "Cal_detid"};
+            for (int i = 0; i < 6; i++) st->SetBranchStatus(hb[i], 1);
+            st->SetBranchAddress("Cal_nhits", &Cal_nhits);
+            st->SetBranchAddress("Cal_hit_energy", Cal_hit_energy);
+            st->SetBranchAddress("Cal_hit_posx", Cal_hit_posx);
+            st->SetBranchAddress("Cal_hit_posy", Cal_hit_posy);
+            st->SetBranchAddress("Cal_hit_posz", Cal_hit_posz);
+            st->SetBranchAddress("Cal_detid", Cal_detid);
+        }
         if (has_truth)
         {
             const char *mb[] = {"mcpart_num", "mcpart_px", "mcpart_py", "mcpart_pz", "mcpart_E", "mcpart_geid", "mcpart_idVtx",
@@ -190,14 +242,43 @@ int main(int argc, char **argv)
                 if (nr > 0 && (std::fabs(reco_vz_used - geo.vz) > 1e-3 || std::fabs(reco_vx_used - geo.vx) > 1e-5 || std::fabs(reco_vy_used - geo.vy) > 1e-5))
                     geo.Build(reco_vz_used, reco_vx_used, reco_vy_used);
                 p_eta.clear(); p_phi.clear(); p_E.clear(); p_tile.clear();
-                for (int i = 0; i < std::min((int)Cal_npts, MAX_PTS) && nr > 0; i++)
+                const int nin = nr == 0 ? 0 : from_points ? std::min((int)Cal_npts, MAX_PTS) : std::min((int)Cal_nhits, MAX_HITS);
+                for (int i = 0; i < nin; i++)
                 {
-                    if (Cal_pt_detid[i] != 0 && Cal_pt_detid[i] != 1) continue;
-                    if (!pass_point_energy_cut(Cal_pt_energy[i])) continue;
-                    const double px = Cal_pt_x[i] - geo.vx, py = Cal_pt_y[i] - geo.vy;
+                    float e, x, y, z;
+                    if (from_points)
+                    {
+                        if (Cal_pt_detid[i] != 0 && Cal_pt_detid[i] != 1) continue;
+                        if (!pass_point_energy_cut(Cal_pt_energy[i])) continue;
+                        e = Cal_pt_energy[i]; x = Cal_pt_x[i]; y = Cal_pt_y[i]; z = Cal_pt_z[i];
+                    }
+                    else
+                    {
+                        // the jet finders' hit selection (JetMatcher.cpp / RecoJets.cpp)
+                        const int det = Cal_detid[i];
+                        if (em_jets && (det == 2 || det == 3)) continue;
+                        e = Cal_hit_energy[i];
+                        if (!(((det == 0 || det == 1) && e > mip_threshold * ecal_mip) ||
+                              ((det == 2 || det == 3) && e > mip_threshold * hcal_mip))) continue;
+                        x = Cal_hit_posx[i]; y = Cal_hit_posy[i]; z = Cal_hit_posz[i];
+                    }
+                    const double px = x - geo.vx, py = y - geo.vy;
                     const double rho = std::sqrt(px * px + py * py);
-                    p_eta.push_back(std::asinh((Cal_pt_z[i] - geo.vz) / rho)); p_phi.push_back(std::atan2(py, px));
-                    p_E.push_back(Cal_pt_energy[i]); p_tile.push_back(geo.TileOf(Cal_pt_x[i], Cal_pt_y[i]));
+                    p_eta.push_back(std::asinh((z - geo.vz) / rho)); p_phi.push_back(std::atan2(py, px));
+                    p_E.push_back(e); p_tile.push_back(geo.TileOf(x, y));
+                }
+                // full point jets: plus the HCal clusters, as in the jet finders
+                for (int i = 0; with_clusters && nr > 0 && i < std::min((int)Cal_nclus, MAX_CLUS); i++)
+                {
+                    if (Cal_clus_detid[i] != 2 && Cal_clus_detid[i] != 3) continue;
+                    const float e = Cal_clus_energy[i];
+                    if (!(e > 0)) continue;
+                    const double px = Cal_clus_x[i] - geo.vx, py = Cal_clus_y[i] - geo.vy;
+                    const double rho = std::sqrt(px * px + py * py);
+                    p_eta.push_back(std::asinh((Cal_clus_z[i] - geo.vz) / rho)); p_phi.push_back(std::atan2(py, px));
+                    // tiles live at the ECal front plane (z_proj): project the deeper HCal cluster there
+                    const double sc = (z_proj - geo.vz) / (Cal_clus_z[i] - geo.vz);
+                    p_E.push_back(e); p_tile.push_back(geo.TileOf(geo.vx + px * sc, geo.vy + py * sc));
                 }
                 for (size_t j = 0; j < nr; j++)
                 {
@@ -206,20 +287,22 @@ int main(int argc, char **argv)
                     n_reco++;
                     if (r.rho < 0) n_reco_none++; else sum_reco += r.E();
                 }
-                // truth: the EM-only photons the truth jets are built from, full azimuth
+                // truth: the particles the truth jets are built from, full azimuth
+                // (EM-only: the EM truth photons; full: first-vertex particles, as JetMatcher)
                 if (nt > 0)
                 {
                     p_eta.clear(); p_phi.clear(); p_E.clear();
                     float vx = 0, vy = 0, vz = 0;
                     const int nmc = std::min((int)mcpart_num, MAX_MC);
-                    if (FindEmTruthPrimaryVertex(nmc, &mc_idVtx[0], &mc_vx[0], &mc_vy[0], &mc_vz[0], vx, vy, vz))
+                    const bool have_vtx = !em_jets || FindEmTruthPrimaryVertex(nmc, &mc_idVtx[0], &mc_vx[0], &mc_vy[0], &mc_vz[0], vx, vy, vz);
+                    if (have_vtx)
                         for (int i = 0; i < nmc; i++)
                         {
-                            if (!IsEmTruthParticle(mc_geid[i], mc_vx[i], mc_vy[i], mc_vz[i], vx, vy, vz)) continue;
+                            if (em_jets ? !IsEmTruthParticle(mc_geid[i], mc_vx[i], mc_vy[i], mc_vz[i], vx, vy, vz) : mc_idVtx[i] != 1) continue;
                             const double pt = std::sqrt((double)mc_px[i] * mc_px[i] + (double)mc_py[i] * mc_py[i]);
                             if (!(pt > 0)) continue;
                             const double eta = std::asinh(mc_pz[i] / pt);
-                            if (!InTruthParticleEtaRange(eta)) continue;
+                            if (!InTruthParticleEtaRange(eta, em_jets)) continue;
                             p_eta.push_back(eta); p_phi.push_back(std::atan2(mc_py[i], mc_px[i])); p_E.push_back(mc_E[i]);
                         }
                     for (size_t j = 0; j < nt; j++)

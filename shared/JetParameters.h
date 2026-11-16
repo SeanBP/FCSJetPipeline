@@ -99,6 +99,21 @@ static const double truth_particle_eta_margin_em = 1.5 * R;
 // truth-level UE (underlying_event/UnderlyingEvent.cpp).
 static const double em_truth_displacement_max = 0.01;
 
+// ------------------ Full (ECAL+HCAL) jets ------------------
+// Analogous to the EM-only cuts above (Sean 2026-11-16), on the region both
+// calorimeters cover (kFiducialRectFull below: the HCAL footprint at the ECAL
+// front plane, cut_* above, clipped to the ECAL rectangle; only y_max moves,
+// by 0.16 cm).
+// Reco jet margin inside that rectangle, cm: as EM-only's 20 cm until the
+// full-jet JES test shows where the fits degrade (was 10 cm on the HCAL
+// rectangle).
+static const float reco_fiducial_buffer_full = 20.0f;
+// Truth jets: axis within R/2 in eta-phi of the reco fiducial region, as EM-only.
+static const float truth_jet_margin_full = 0.5f * (float)R;
+// Truth particles: a full-azimuth eta band 1.5R wide around that region's eta
+// range, as EM-only (FiducialEtaRange() below).
+static const double truth_particle_eta_margin_full = 1.5 * R;
+
 // Geant3 particle code of the photon
 static const int kGeant3Photon = 1;
 
@@ -367,6 +382,19 @@ struct FiducialRect { float x_inner, x_outer, y_min, y_max; };
 
 static const FiducialRect kFiducialRect     = { cut_x_inner,      cut_x_outer,      cut_y_min,      cut_y_max };
 static const FiducialRect kFiducialRectEcal = { cut_x_inner_ecal, cut_x_outer_ecal, cut_y_min_ecal, cut_y_max_ecal };
+// Full (ECAL+HCAL) jets: the HCAL rectangle clipped to the ECAL rectangle
+static const FiducialRect kFiducialRectFull = {
+    cut_x_inner > cut_x_inner_ecal ? cut_x_inner : cut_x_inner_ecal,
+    cut_x_outer < cut_x_outer_ecal ? cut_x_outer : cut_x_outer_ecal,
+    cut_y_min > cut_y_min_ecal ? cut_y_min : cut_y_min_ecal,
+    cut_y_max < cut_y_max_ecal ? cut_y_max : cut_y_max_ecal};
+
+// The reco fiducial rectangle, inset buffer (cm), truth-jet eta-phi margin and
+// truth-particle eta margin of a jet type (em_only: ECAL-only; else ECAL+HCAL)
+inline const FiducialRect &JetFiducialRect(bool em_only) { return em_only ? kFiducialRectEcal : kFiducialRectFull; }
+inline float JetFiducialBuffer(bool em_only) { return em_only ? reco_fiducial_buffer_ecal : reco_fiducial_buffer_full; }
+inline float TruthJetMargin(bool em_only) { return em_only ? truth_jet_margin_em : truth_jet_margin_full; }
+inline double TruthParticleEtaMargin(bool em_only) { return em_only ? truth_particle_eta_margin_em : truth_particle_eta_margin_full; }
 
 // Acceptance with an eta-phi margin from the boundary of rect inset by
 // cmBuffer. A positive margin requires the jet to clear the boundary by that
@@ -394,12 +422,12 @@ inline bool pass_fiducial_cut(float jetXE, float jetYE, float buffer,
     return in_x && in_y;
 }
 
-// Eta range of the EM-only reco fiducial region (ECAL rectangle minus
-// reco_fiducial_buffer_ecal), from its nearest and farthest points to the beam
-inline void EmFiducialEtaRange(double &eta_lo, double &eta_hi)
+// Eta range of a jet type's reco fiducial region (its rectangle minus its
+// buffer), from its nearest and farthest points to the beam
+inline void FiducialEtaRange(bool em_only, double &eta_lo, double &eta_hi)
 {
-    const FiducialRect &r = kFiducialRectEcal;
-    const double b = reco_fiducial_buffer_ecal;
+    const FiducialRect &r = JetFiducialRect(em_only);
+    const double b = JetFiducialBuffer(em_only);
     const double x_lo = r.x_inner + b, x_hi = r.x_outer - b, y_lo = r.y_min + b, y_hi = r.y_max - b;
     const double y_near = std::min(std::max(0.0, y_lo), y_hi);
     const double r_min = std::sqrt(x_lo * x_lo + y_near * y_near);
@@ -408,11 +436,15 @@ inline void EmFiducialEtaRange(double &eta_lo, double &eta_hi)
     eta_hi = std::asinh(z_proj / r_min);
 }
 
-inline bool InTruthParticleEtaRange(double eta)
+inline void EmFiducialEtaRange(double &eta_lo, double &eta_hi) { FiducialEtaRange(true, eta_lo, eta_hi); }
+
+// Truth particles kept for a jet type's truth jets (and truth UE)
+inline bool InTruthParticleEtaRange(double eta, bool em_only = true)
 {
     double lo, hi;
-    EmFiducialEtaRange(lo, hi);
-    return eta >= lo - truth_particle_eta_margin_em && eta <= hi + truth_particle_eta_margin_em;
+    FiducialEtaRange(em_only, lo, hi);
+    const double m = TruthParticleEtaMargin(em_only);
+    return eta >= lo - m && eta <= hi + m;
 }
 
 #endif

@@ -57,6 +57,7 @@
         echo "========================================"
         echo "JetTrees input dir = ${INDIR}"
         echo "Output JSON name   = {{JSON_NAME}}"
+        echo "Jet type           = {{JET_TYPE}}"
         echo "========================================"
 
         echo "Compiling JetEnergyScaleFineGrid_em_only..."
@@ -66,14 +67,14 @@
 
         echo "Running JetEnergyScaleFineGrid_em_only..."
         # Gaussian-core mean where n_eff >= 50 and the fit is good, else the kernel peak
-        ./JetEnergyScaleFineGrid_em_only "${INDIR}" "" "" "" "" "" "" 50
+        ./JetEnergyScaleFineGrid_em_only "${INDIR}" "" "" "" "" "" "" 50 {{JET_TYPE}}
 
         echo "Compiling CalibrationMap_em_only..."
         g++ -m64 CalibrationMap_em_only.cpp -o CalibrationMap_em_only \
             `root-config --cflags --libs` -std=c++11
 
         echo "Running CalibrationMap_em_only..."
-        ./CalibrationMap_em_only jet_calibration.root {{JSON_NAME}} "{{MAP_SAMPLE}}" "{{MAP_K}}" "{{MAP_TUNE}}" "{{MAP_COMMIT}}"
+        ./CalibrationMap_em_only jet_calibration.root {{JSON_NAME}} "{{MAP_SAMPLE}}" "{{MAP_K}}" "{{MAP_TUNE}}" "{{MAP_COMMIT}}" {{JET_TYPE}}
 
         # Closure on the same UE-subtracted jets (Gaussian core or kernel peak of
         # E_corr / E_truth, and the map against the points it was fitted to)
@@ -118,6 +119,8 @@
     <output fromScratch="{{JSON_NAME}}.direct_fits.csv" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="{{JSON_NAME}}.chi2.csv" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="{{JSON_NAME}}.chi2_smoothed.csv" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="{{JSON_NAME}}.uniformity.txt" toURL="file:{{OUTDIR}}/" />
+    <output fromScratch="{{JSON_NAME}}.free_fits.csv" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="jes_closure.txt" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="jes_closure.root" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="jes_closure.png" toURL="file:{{OUTDIR}}/" />

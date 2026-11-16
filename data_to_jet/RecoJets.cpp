@@ -33,8 +33,9 @@ int main(int argc, char** argv) {
         cerr << "           ECAL-only fiducial boundary. 0/omit = use both ECAL+HCAL." << endl;
         cerr << "  use_points: 1 = build reco jets from FCS points (StMuFcsPoint, the" << endl;
         cerr << "              single-photon-candidate level) instead of raw tower hits." << endl;
-        cerr << "              0/omit = hits. HCAL produces no points, so this is" << endl;
-        cerr << "              ECAL-only input regardless of em_only when enabled." << endl;
+        cerr << "              0/omit = hits. With em_only = 0, the HCAL (no points)" << endl;
+        cerr << "              enters as its clusters: full jets from ECAL points +" << endl;
+        cerr << "              HCAL clusters." << endl;
         return 1;
     }
 
@@ -242,6 +243,11 @@ int main(int argc, char** argv) {
     Int_t Cal_npts;
     Float_t Cal_pt_energy[MAX_PTS], Cal_pt_x[MAX_PTS], Cal_pt_y[MAX_PTS], Cal_pt_z[MAX_PTS];
     Int_t Cal_pt_detid[MAX_PTS];
+    // HCAL clusters: the HCAL inputs of full point jets (use_points, !em_only)
+    const int MAX_CLUS = 100; // StSimpleReaderMaker.h Cal_clus_* size
+    Int_t Cal_nclus = 0;
+    Float_t Cal_clus_energy[MAX_CLUS], Cal_clus_x[MAX_CLUS], Cal_clus_y[MAX_CLUS], Cal_clus_z[MAX_CLUS];
+    Int_t Cal_clus_detid[MAX_CLUS];
 
     Float_t trg_e2x2[2][16][10], trg_h2x2[2][10][6];
     FcsTrgGeom trg_geom;
@@ -306,6 +312,20 @@ int main(int argc, char** argv) {
         } else if (use_points) {
             cerr << "Warning: use_points=1 but file has no Cal_npts branch -- "
                  << "0 reco jets will be built for this file." << endl;
+        }
+        Cal_nclus = 0;
+        if ( use_points && !em_only ) {
+            if ( tree->GetBranch("Cal_nclus") ) {
+                tree->SetBranchAddress("Cal_nclus", &Cal_nclus);
+                tree->SetBranchAddress("Cal_clus_energy", Cal_clus_energy);
+                tree->SetBranchAddress("Cal_clus_x", Cal_clus_x);
+                tree->SetBranchAddress("Cal_clus_y", Cal_clus_y);
+                tree->SetBranchAddress("Cal_clus_z", Cal_clus_z);
+                tree->SetBranchAddress("Cal_clus_detid", Cal_clus_detid);
+            } else {
+                cerr << "Warning: full point jets need HCAL clusters but the file has no Cal_nclus branch -- "
+                     << "ECAL points only for this file." << endl;
+            }
         }
 
         fcs_tcu_bits = 0; fcs_tcu_source = 0;
@@ -421,6 +441,23 @@ int main(int argc, char** argv) {
                 reco_particles.back().set_user_index(reco_detid.size() - 1);
             }
 
+            // Full point jets: ECAL points (above) plus HCAL clusters (Sean
+            // 2026-11-16; the HCAL has no points). No energy cut beyond the
+            // clustering's own (1 GeV seed, reclustered as for the points).
+            if (use_points && !em_only) {
+                for (int i = 0; i < std::min((int)Cal_nclus, MAX_CLUS); i++) {
+                    const int cdet = Cal_clus_detid[i];
+                    if (cdet != 2 && cdet != 3) continue;
+                    const float e = Cal_clus_energy[i];
+                    if (!(e > 0)) continue;
+                    float x = Cal_clus_x[i] - reco_vx_used, y = Cal_clus_y[i] - reco_vy_used, z = Cal_clus_z[i] - reco_vz_used;
+                    const float norm = sqrt(x*x + y*y + z*z);
+                    reco_particles.emplace_back(e*x/norm, e*y/norm, e*z/norm, e);
+                    reco_detid.push_back(cdet);
+                    reco_particles.back().set_user_index(reco_detid.size() - 1);
+                }
+            }
+
             ClusterSequenceArea cs_reco(reco_particles, JetDefinition(antikt_algorithm, R), JetAreaDefinition());
             vector<PseudoJet> reco_jets_selected;
 
@@ -428,9 +465,7 @@ int main(int argc, char** argv) {
             for (auto &jet : cs_reco.inclusive_jets(em_only ? reco_jet_pt_min_em : 0.0)) {
                 float jetXE = reco_vx_used + (z_proj - reco_vz_used)*jet.px()/jet.pz();
                 float jetYE = reco_vy_used + (z_proj - reco_vz_used)*jet.py()/jet.pz();
-                bool passesFiducial = em_only
-                    ? pass_fiducial_cut(jetXE, jetYE, reco_fiducial_buffer_ecal, kFiducialRectEcal)
-                    : pass_fiducial_cut(jetXE, jetYE, reco_fiducial_buffer);
+                bool passesFiducial = pass_fiducial_cut(jetXE, jetYE, JetFiducialBuffer(em_only), JetFiducialRect(em_only));
                 if (passesFiducial) reco_jets_selected.push_back(jet);
             }
 

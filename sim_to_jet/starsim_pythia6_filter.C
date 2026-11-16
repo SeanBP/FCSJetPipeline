@@ -105,7 +105,7 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t t
 
   gROOT->ProcessLine(".L bfc.C");
   {
-    TString simple = "y2023 geant gstar usexgeom agml ";
+    TString simple = "y2022b geant gstar usexgeom agml ";
     bfc(0, simple );
   }
 
@@ -135,7 +135,9 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t t
   Pythia6( "pp:minbias", ckin3, tune, ckin4, fmsTune );
   command("call gstar_part");
 
-  geometry("y2023");
+  // Geometry: y2022b, the Run 22 production tag (Sean 2026-11-16; was y2023,
+  // whose FCS is the same). y2022c (more FST support) is not merged yet.
+  geometry("y2022b");
 
   // FCS forward energy flux filter (generator-agnostic, same as pythia8)
   filter = new FcsJetFilter();

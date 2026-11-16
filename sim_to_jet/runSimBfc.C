@@ -1,6 +1,7 @@
 TString input_dir   = "./";
 TString output_dir  = "./";
-TString input_chain = "y2023,AgML,USExgeom,fzin,geant,FieldOn,logger,MakeEvent,fcsSim,fcsWFF,fcsCluster,fcsPoint,cmudst";
+// Geometry y2022b, the Run 22 production tag (Sean 2026-11-16; was y2023)
+TString input_chain = "y2022b,AgML,USExgeom,fzin,geant,FieldOn,logger,MakeEvent,fcsSim,fcsWFF,fcsCluster,fcsPoint,cmudst";
 class StFmsSimulatorMaker;
 
 // Fallback for RunNumberToDateTime(): Run 22 run number (YYDDDnnnnn) to

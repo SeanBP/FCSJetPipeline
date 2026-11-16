@@ -16,9 +16,15 @@
 // a kernel density (GaussCoreKernelPeak). The bins tree records which (branch
 // "estimator": 1 Gaussian core, 2 kernel peak).
 //
+// Full (ECAL+HCAL) jets (2026-11-16): argv[9] "full" uses the full-jet
+// fiducial rectangle and buffer (JetParameters.h kFiducialRectFull,
+// reco_fiducial_buffer_full) on sim_to_jet -J output (jet_full_*.root); every
+// file's reco_em_only branch must match the mode. Their UE (in-job, the same
+// wedges over the full-jet rectangle) is not yet validated; noue skips it.
+//
 // Usage: JetEnergyScaleFineGrid_em_only <jettrees_dir/> [match_radius_cm]
 //        [E0_GeV] [Emax_GeV] [noue] [match_radius_high_cm] [E_high_pool_GeV]
-//        [gauss_min_neff]
+//        [gauss_min_neff] [em|full]
 //        (an empty string "" keeps that slot's default)
 
 #include <TFile.h>
@@ -291,8 +297,11 @@ int main(int argc, char** argv)
                               : "No underlying-event subtraction (noue)") << std::endl;
     long n_pairs = 0, n_no_ue = 0;
 
-    const FiducialRect &rect = kFiducialRectEcal;
-    float fid_buffer = reco_fiducial_buffer_ecal;
+    //   argv[9]: jet type, "em" (default) or "full" (ECAL+HCAL)
+    const bool em_jets = !(argc > 9 && std::string(argv[9]) == "full");
+    std::cout << "Jet type: " << (em_jets ? "EM-only (ECAL rectangle)" : "full ECAL+HCAL (full-jet rectangle)") << std::endl;
+    const FiducialRect &rect = JetFiducialRect(em_jets);
+    float fid_buffer = JetFiducialBuffer(em_jets);
 
     x_min = rect.x_inner + cut_buffer;
     x_max = rect.x_outer - cut_buffer;
@@ -374,6 +383,20 @@ int main(int argc, char** argv)
             f->Close();
             delete f;
             continue;
+        }
+        // the file's jets must be of the requested type
+        if (tree->GetBranch("reco_em_only"))
+        {
+            Int_t file_em = -1;
+            tree->SetBranchAddress("reco_em_only", &file_em);
+            tree->GetEntry(0);
+            tree->ResetBranchAddresses();
+            if (file_em >= 0 && (file_em == 1) != em_jets)
+            {
+                std::cerr << "ERROR: " << root_files[fidx] << " has reco_em_only = " << file_em << " but the jet type is "
+                          << (em_jets ? "em" : "full") << std::endl;
+                return 1;
+            }
         }
 
         std::vector<float> *reco_E = nullptr;

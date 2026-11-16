@@ -12,6 +12,9 @@
 #   -s  1 = keep intermediate jet_calibration.root, 0 = discard, default 0
 #   -l  short label for the generated XML's filename, default "run"
 #   -k  1 = save stdout/stderr under <outdir>/log/, 0 = discard, default 0
+#   -t  jet type: em (default) or full (ECAL+HCAL jets, sim_to_jet -J
+#       jet_full_*.root): the full-jet fiducial region in the grid, the map
+#       mask and the closure; same log-cubic model, grid and pooling
 #
 # Example:
 #   ./submit_jet_scale_em_only.sh -i /star/data01/pwg/seanp/pipeline_output/em_only_production \
@@ -26,8 +29,9 @@ JSON_NAME="JetEnergyScale_lookup_em_only.json"
 SAVE_CALIBRATION_ROOT="0"
 LABEL="run"
 KEEPLOGS=0
+JET_TYPE="em"
 
-while getopts "i:o:n:s:l:k:h" opt; do
+while getopts "i:o:n:s:l:k:t:h" opt; do
   case $opt in
     i) JETTREES_DIR="$OPTARG" ;;
     o) OUTDIR="$OPTARG" ;;
@@ -35,8 +39,9 @@ while getopts "i:o:n:s:l:k:h" opt; do
     s) SAVE_CALIBRATION_ROOT="$OPTARG" ;;
     l) LABEL="$OPTARG" ;;
     k) KEEPLOGS="$OPTARG" ;;
+    t) JET_TYPE="$OPTARG" ;;
     h|*)
-      sed -n '2,19p' "$0"
+      sed -n '2,22p' "$0"
       exit 0
       ;;
   esac
@@ -85,6 +90,10 @@ MAP_TUNE="$(param generator) PyTune $(param tune_param)"
 MAP_COMMIT=$(git -C "${PIPELINE_ROOT}" rev-parse HEAD 2>/dev/null || echo unknown)
 git -C "${PIPELINE_ROOT}" diff --quiet HEAD -- jet_scale shared 2>/dev/null || MAP_COMMIT="${MAP_COMMIT}-dirty"
 
+if [ "$JET_TYPE" != "em" ] && [ "$JET_TYPE" != "full" ]; then
+    echo "Error: -t must be em or full (got '$JET_TYPE')"
+    exit 1
+fi
 sed -e "s#{{JETTREES_DIR}}#${JETTREES_DIR}#g" \
     -e "s#{{OUTDIR}}#${OUTDIR}#g" \
     -e "s/{{JSON_NAME}}/${JSON_NAME}/g" \
@@ -95,6 +104,7 @@ sed -e "s#{{JETTREES_DIR}}#${JETTREES_DIR}#g" \
     -e "s#{{MAP_K}}#${MAP_K:-unknown}#g" \
     -e "s#{{MAP_TUNE}}#${MAP_TUNE}#g" \
     -e "s#{{MAP_COMMIT}}#${MAP_COMMIT}#g" \
+    -e "s#{{JET_TYPE}}#${JET_TYPE}#g" \
     "${SCRIPT_DIR}/jet_scale_em_only.xml" > "${OUTXML}"
 
 echo "Generated ${OUTXML}"

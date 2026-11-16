@@ -5,7 +5,7 @@
 #       -n <nevents> -s <N> -o <outdir> [-P <ptcutmax>] [-j <nprocesses>] \
 #       [-l <label>] [-k <0|1>] [-f <triggers>] [-c <run_number>] \
 #       [-e <filter_ethr>] [-q <filter_cone_pt>] [-E <0|1>] [-T <tune_pp>] [-F <0|1>] [-M <0|1>]
-#       [-C <0|1>] [-m <0|1>] [-K <k>] [-S <seed base>] [-Z <vz sigma>] [-D <0|1>] [-R <MB>]
+#       [-C <0|1>] [-m <0|1>] [-K <k>] [-S <seed base>] [-Z <vz sigma>] [-D <0|1>] [-J <0|1>] [-R <MB>]
 #
 #   -g  generator: pythia8 or pythia6
 #   -t  tune/PDF: pythia8 PDF:pSet (8=CTEQ6L1, 5=MSTW2008LO, 3=MRST LO*,
@@ -75,6 +75,11 @@
 #   -D  1 = also write each job's pi0dump_*.root: truth-labelled point jets for
 #       the pi0 probability calibration (Pi0Playground/pi0_prob/pi0_jet_dump.cpp),
 #       carrying sigma_job/N_job, so it needs no SimpleTree. 0/omit = off.
+#   -J  1 = also write each job's jet_full_*.root: ECAL+HCAL jets from ECAL
+#       points + HCAL clusters (Sean 2026-11-16) with the full-jet cuts (JetParameters.h kFiducialRectFull), from
+#       the same SimpleTree as the main jet_output_*.root (normally the EM-only
+#       point jets, -E 1 -F 1), so one simulation gives both JES samples. The
+#       in-job UE step runs on both (full-jet UE not yet validated). 0/omit = off.
 #   -R  condor memory request per job, MB (ResourceUsage MinMemory). Omit =
 #       star-submit's default (~1 GB).
 #
@@ -111,9 +116,10 @@ ECAL_SCALE=0.947
 SEED_BASE=0
 VZ_SIGMA=49.79
 PI0_DUMP=0
+FULL_JETS=0
 MEMORY_MB=""
 
-while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:q:E:T:F:M:C:m:K:S:Z:D:R:h" opt; do
+while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:q:E:T:F:M:C:m:K:S:Z:D:J:R:h" opt; do
   case $opt in
     g) GENERATOR="$OPTARG" ;;
     t) TUNE_PARAM="$OPTARG" ;;
@@ -140,6 +146,7 @@ while getopts "g:t:p:P:n:s:o:j:w:l:k:f:c:e:q:E:T:F:M:C:m:K:S:Z:D:R:h" opt; do
     S) SEED_BASE="$OPTARG" ;;
     Z) VZ_SIGMA="$OPTARG" ;;
     D) PI0_DUMP="$OPTARG" ;;
+    J) FULL_JETS="$OPTARG" ;;
     R) MEMORY_MB="$OPTARG" ;;
     h|*)
       sed -n '2,78p' "$0"
@@ -234,6 +241,10 @@ if [ "$PI0_DUMP" != "0" ] && [ "$PI0_DUMP" != "1" ]; then
     echo "Error: -D must be 0 or 1 (got '$PI0_DUMP')"
     exit 1
 fi
+if [ "$FULL_JETS" != "0" ] && [ "$FULL_JETS" != "1" ]; then
+    echo "Error: -J must be 0 or 1 (got '$FULL_JETS')"
+    exit 1
+fi
 if [ -n "$MEMORY_MB" ] && { ! [[ "$MEMORY_MB" =~ ^[0-9]+$ ]] || [ "$MEMORY_MB" -lt 500 ] || [ "$MEMORY_MB" -gt 8000 ]; }; then
     echo "Error: -R must be a memory request in MB, 500-8000 (got '$MEMORY_MB')"
     exit 1
@@ -276,7 +287,7 @@ fi
 
 export XML_IN="${SCRIPT_DIR}/sim_to_jet.xml"
 export XML_OUT="${OUTXML}"
-export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR FILTER_CONEPT EM_ONLY PP_TUNE USE_POINTS FMS_TUNE CALIB_SAMPLE SAVE_MUDST ECAL_SCALE SEED_BASE VZ_SIGMA PI0_DUMP MEMORY_MB
+export GENERATOR TUNE_PARAM PTCUT PTCUTMAX NEVENTS SAVE_SIMPLETREE OUTDIR NPROC PTCUT_JSON STDOUT_URL STDERR_URL TRIGGER_FILTER CALIB_RUN FILTER_ETHR FILTER_CONEPT EM_ONLY PP_TUNE USE_POINTS FMS_TUNE CALIB_SAMPLE SAVE_MUDST ECAL_SCALE SEED_BASE VZ_SIGMA PI0_DUMP FULL_JETS MEMORY_MB
 
 python3 << 'PYEOF'
 import json
@@ -340,6 +351,7 @@ xml = xml.replace("{{ECAL_SCALE}}", os.environ.get("ECAL_SCALE", "1.0"))
 xml = xml.replace("{{SEED_BASE}}", os.environ.get("SEED_BASE", "0"))
 xml = xml.replace("{{VZ_SIGMA}}", os.environ.get("VZ_SIGMA", "30"))
 xml = xml.replace("{{PI0_DUMP}}", os.environ.get("PI0_DUMP", "0"))
+xml = xml.replace("{{FULL_JETS}}", os.environ.get("FULL_JETS", "0"))
 mem = os.environ.get("MEMORY_MB", "")
 xml = xml.replace("{{RESOURCE_USAGE}}",
     "    <ResourceUsage><Memory><MinMemory>{}</MinMemory></Memory></ResourceUsage>".format(mem) if mem else "")
@@ -350,9 +362,9 @@ PYEOF
 
 echo "Generated ${OUTXML}"
 if [ -n "$PTCUT_JSON" ]; then
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} filter_conept=${FILTER_CONEPT} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE} calib_sample=${CALIB_SAMPLE} ecal_scale=${ECAL_SCALE} seed_base=${SEED_BASE} vz_sigma=${VZ_SIGMA} pi0_dump=${PI0_DUMP} memory_mb=${MEMORY_MB:-default}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut_json=${PTCUT_JSON} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} filter_conept=${FILTER_CONEPT} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE} calib_sample=${CALIB_SAMPLE} ecal_scale=${ECAL_SCALE} seed_base=${SEED_BASE} vz_sigma=${VZ_SIGMA} pi0_dump=${PI0_DUMP} full_jets=${FULL_JETS} memory_mb=${MEMORY_MB:-default}"
 else
-    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} filter_conept=${FILTER_CONEPT} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE} calib_sample=${CALIB_SAMPLE} ecal_scale=${ECAL_SCALE} seed_base=${SEED_BASE} vz_sigma=${VZ_SIGMA} pi0_dump=${PI0_DUMP} memory_mb=${MEMORY_MB:-default}"
+    echo "Generator=${GENERATOR} tune/pdf=${TUNE_PARAM} ptcut=${PTCUT} ptcutmax=${PTCUTMAX} nevents=${NEVENTS} save_simpletree=${SAVE_SIMPLETREE} outdir=${OUTDIR} nProcesses=${NPROC} keep_logs=${KEEPLOGS} trigger_filter=${TRIGGER_FILTER:-<none>} calib_run=${CALIB_RUN} filter_ethr=${FILTER_ETHR} filter_conept=${FILTER_CONEPT} em_only=${EM_ONLY} pp_tune=${PP_TUNE} use_points=${USE_POINTS} fms_tune=${FMS_TUNE} calib_sample=${CALIB_SAMPLE} ecal_scale=${ECAL_SCALE} seed_base=${SEED_BASE} vz_sigma=${VZ_SIGMA} pi0_dump=${PI0_DUMP} full_jets=${FULL_JETS} memory_mb=${MEMORY_MB:-default}"
 fi
 
 mkdir -p "${OUTDIR}"
@@ -401,6 +413,7 @@ ecal_scale=${ECAL_SCALE}
 seed_base=${SEED_BASE}
 vz_sigma=${VZ_SIGMA}
 pi0_dump=${PI0_DUMP}
+full_jets=${FULL_JETS}
 memory_mb=${MEMORY_MB:-default}
 EOF
 echo "Wrote run parameters to ${OUTDIR}/run_params_${LABEL}_${REQID}.txt"

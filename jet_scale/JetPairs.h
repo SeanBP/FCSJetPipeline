@@ -11,6 +11,7 @@
 #include <TFile.h>
 #include <TTree.h>
 #include <TLeaf.h>
+#include <TBranch.h>
 
 #include <iostream>
 #include <fstream>
@@ -63,6 +64,10 @@ inline bool LoadJetPairs(const std::vector<std::string> &files, std::vector<JetP
         TTree *t = f && !f->IsZombie() ? (TTree *)f->Get("jetTree") : 0;
         if (!t) { if (f) { f->Close(); delete f; } continue; }
         const bool ue = t->GetBranch("reco_ue_E") && t->GetBranch("truth_ue_E");
+        // the file's jet type sets the fiducial region (EM-only unless reco_em_only = 0)
+        bool em_jets = true;
+        if (TBranch *b = t->GetBranch("reco_em_only"))
+            if (t->GetEntries() > 0) { b->GetEntry(0); em_jets = t->GetLeaf("reco_em_only")->GetValue() != 0; }
         if (!ue) n_no_ue_branch++;
 
         std::vector<float> *rE = 0, *rpt = 0, *rx = 0, *ry = 0, *reta = 0, *rphi = 0, *rueE = 0, *ruept = 0;
@@ -118,7 +123,7 @@ inline bool LoadJetPairs(const std::vector<std::string> &files, std::vector<JetP
             for (size_t k = 0; k < m.size(); k++)
             {
                 const int ri = m[k].first, ti = m[k].second;
-                if (!pass_fiducial_cut(rx->at(ri), ry->at(ri), reco_fiducial_buffer_ecal, kFiducialRectEcal)) continue;
+                if (!pass_fiducial_cut(rx->at(ri), ry->at(ri), JetFiducialBuffer(em_jets), JetFiducialRect(em_jets))) continue;
                 JetPair p;
                 p.rE = rE->at(ri); p.rpt = rpt->at(ri); p.rx = rx->at(ri); p.ry = ry->at(ri);
                 p.reta = reta->at(ri); p.rphi = rphi->at(ri); p.rnph = rnph->at(ri);
