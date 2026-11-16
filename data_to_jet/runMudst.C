@@ -20,6 +20,13 @@ void runMudst(char* file="st_fwd_23080044_raw_1000019.MuDst.root",
 
     StChain* chain = new StChain("StChain"); chain->SetDEBUG(0);
     StMuDstMaker* muDstMaker = new StMuDstMaker(0, 0, "", file,".", 1000, "MuDst");
+    // Branches StSimpleReaderMaker never reads (2026-11-16, job efficiency):
+    // sTGC raw hits alone are ~42% of an st_fwd MuDst; with FST and TOF hits
+    // off, reading takes ~30% less time. (TOF header stays: VPD vertex.)
+    muDstMaker->SetStatus("Ftt*", 0);
+    muDstMaker->SetStatus("Fst*", 0);
+    muDstMaker->SetStatus("BTofHit", 0);
+    muDstMaker->SetStatus("BTofRawHit", 0);
     int n=muDstMaker->tree()->GetEntries();
     printf("Found %d entries in Mudst\n",n);
     int start=0, stop=n;
@@ -61,6 +68,9 @@ void runMudst(char* file="st_fwd_23080044_raw_1000019.MuDst.root",
     // whatever library made the MuDst: Ecal towers below 0.4 GeV (6 sigma
     // above the worst-case Run 22 pedestal noise, with margin) are not
     // clustered; seeds at 1 GeV (P24ia).
+    // Early trigger filter (2026-11-16): events the reader's trigger filter
+    // would drop skip the makers below (StSimpleTrigFilterMaker.h)
+    StSimpleTrigFilterMaker* trgFilter = new StSimpleTrigFilterMaker();
     StFcsMuToEventMaker* fcsMuToEvent = new StFcsMuToEventMaker();
 
     // EPD hits for the vertex (StSimpleReaderMaker): where the MuDst has none
@@ -82,6 +92,7 @@ void runMudst(char* file="st_fwd_23080044_raw_1000019.MuDst.root",
     StSimpleReaderMaker* AnalysisCode  =  new StSimpleReaderMaker(muDstMaker) ;
     AnalysisCode -> SetSpinDb(spinDbMkr) ;
     AnalysisCode -> SetTriggerFilter(trigFilter) ;
+    trgFilter -> SetReader(AnalysisCode) ;
     AnalysisCode -> SetFcsFromStEvent() ; // the reclustered clusters and points
     // Event vertex: EPD, else BBC TAC, as measured, else the nominal z (see
     // the StSimpleReaderMaker header)

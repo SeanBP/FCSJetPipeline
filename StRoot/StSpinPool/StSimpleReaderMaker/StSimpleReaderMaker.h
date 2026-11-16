@@ -267,6 +267,10 @@ class StSimpleReaderMaker : public StMaker
   // Comma-separated trigger flag names: only events that fired one are
   // written. Empty (default) writes all; unknown names fail Init().
   void SetTriggerFilter(const char* names) { mTrigFilterNames = names ? names : ""; }
+  // The trigger filter's decision from the data trigger ids alone (the same
+  // tables Make() uses), for StSimpleTrigFilterMaker before the FCS makers.
+  // kTRUE with no filter, in trigger-simulation mode, or without an event.
+  Bool_t PassesTriggerFilterData();
 
   // Data: StSpinDbMaker (in the chain) used to resolve Spin_config
   void SetSpinDb(StSpinDbMaker* spinDb) { mSpinDb = spinDb; }

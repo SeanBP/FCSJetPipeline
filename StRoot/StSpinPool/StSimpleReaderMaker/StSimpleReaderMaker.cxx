@@ -282,6 +282,24 @@ Int_t StSimpleReaderMaker::Init( )
 
 }
 
+Bool_t StSimpleReaderMaker::PassesTriggerFilterData()
+{
+  if ( mTrigFilterIndex.empty() || mTrgSim ) return kTRUE;
+  StMuEvent* muEvent = mMuDstMaker->muDst()->event();
+  if ( !muEvent ) return kTRUE;  // Make() decides
+  const int runNumber = muEvent->runNumber();
+  const StTriggerId& nominalTrig = muEvent->triggerIdCollection().nominal();
+  std::vector<unsigned int> firedIds = nominalTrig.triggerIds();
+  for (size_t k = 0; k < firedIds.size(); k++){
+    for (int i = 0; i < kNTrigDefs; i++){
+      if ( (unsigned int)kTrigDef[i][1] != firedIds[k] || runNumber < kTrigDef[i][2] || runNumber > kTrigDef[i][3] ) continue;
+      for (size_t f = 0; f < mTrigFilterIndex.size(); f++)
+        if ( mTrigFilterIndex[f] == kTrigDef[i][0] ) return kTRUE;
+    }
+  }
+  return kFALSE;
+}
+
 Int_t StSimpleReaderMaker::Make( ) 
 { // Do each event
 
