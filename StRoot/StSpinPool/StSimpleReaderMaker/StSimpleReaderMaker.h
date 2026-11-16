@@ -15,6 +15,8 @@ class StEpdGeom    ;
 class StFcsTriggerSimMaker ;
 class fcs_trg_base ;
 class StSpinDbMaker ;
+class TH1          ;
+class TRandom3     ;
 
 class StSimpleReaderMaker : public StMaker
 {
@@ -128,11 +130,38 @@ class StSimpleReaderMaker : public StMaker
   Int_t mSpinLastRunNumber = -1 ;
   int Spin_config ;
 
-  // Event z-vertex, data only; -9999 = none. The first of TPC primary vertex
-  // (ranking > 0), VPD, BBC with |z| < 80 cm. In P24ia (st_fwd) only BBC is
-  // populated (18-34% of events); the ZDC vertex is not used.
+  // Event z-vertex (Sean 2026-11-16; ChooseVertex()): the EPD vertex, else
+  // the BBC TAC vertex, as measured (no rescaling to the TPC scale: the
+  // methods read ~0.8 z_TPC, but rescaling widens the error per event more
+  // than it removes bias; the simulation reproduces the same response), else
+  // the nominal z (mNominalVz, the beam-spot mean; with the beamline x, y in
+  // shared/JetParameters.h, the nominal IP); no |z| cut here. Data: from the MuDst EPD hits (or, where the MuDst has none,
+  // the hits StEpdHitMaker rebuilt from the trigger data into StEvent) and the
+  // BBC TAC difference. Simulation: epd_vz and bbc_vz_tac emulated from the
+  // truth vertex by SetVertexSmear(), then the same choice. The old
+  // TPC / VPD / StBbcTriggerDetector::zVertex() choice is gone: st_fwd has no
+  // TPC or VPD, and zVertex() uses pre-2003 BBC constants.
   Float_t event_vertex_z = -9999;
-  Int_t event_vertex_source = 0; // 0=none, 1=TPC, 2=VPD, 3=BBC
+  Int_t event_vertex_source = 0; // 0=not set (sim without SetVertexSmear()), 1=EPD, 2=BBC TAC, 3=nominal
+  Int_t epd_source = 0;          // EPD hits used: 0=none, 1=MuDst, 2=rebuilt (StEvent)
+  Float_t mc_vz = -9999;         // simulation: truth primary-vertex z (first MC vertex)
+  Float_t mc_vx = -9999, mc_vy = -9999; // simulation: its x, y (the generated beamline)
+  // Simulation response of each method, z_raw = a + s z_true: the peak
+  // (Gaussian core) of z_method per 20 cm z_TPC slice, linear fit over
+  // |z_TPC| < 100 cm (P25ib st_physics, 40 runs, 53k events;
+  // vertex_tpc_v1/code/make_smear.C). [0] EPD a = -1.31 cm, s = 0.8136;
+  // [1] BBC TAC a = +3.48 cm, s = 0.7884. Constructor defaults; the
+  // SetVertexSmear() file's "response" vector overrides.
+  double mRespA[2], mRespS[2];
+  double mNominalVz;             // cm: beam-spot mean (TPC, Gaussian fit: -7.68 cm); SetNominalVz()
+  // Simulation vertex emulation (SetVertexSmear()): joint fire probabilities
+  // of (EPD, BBC TAC) and the measured method - TPC residuals, from data
+  bool mVertexSmear = false;
+  double mFireProb[4];                // both, EPD only, BBC only, neither (set in the constructor)
+  TH1* mVtxRes[2];                    // EPD - TPC, BBC TAC - TPC (cm)
+  TRandom3* mVtxRng = 0;
+  double SampleResidual(int m);
+  void ChooseVertex();
 
   // Vertex test (2026-11-09, after D. Kapukchyan's StFwdAnaVertex /
   // StFwdAnaEpdQaAndVert): the raw per-detector z, no |z| cut, -9999 = none.
@@ -257,6 +286,18 @@ class StSimpleReaderMaker : public StMaker
   // instead of the MuDst's. Hits always come from the MuDst. Points'
   // Cal_pt_parentClusterId is then the cluster's index within its detector.
   void SetFcsFromStEvent(bool on = true) { mFcsFromStEvent = on; }
+
+  // Event vertex choice (see event_vertex_z): the nominal z, cm, for events
+  // with neither method (default: the TPC beam-spot mean)
+  void SetNominalVz(double cm) { mNominalVz = cm; }
+  // Simulation: emulate the EPD and BBC TAC vertices from the truth vertex.
+  // The file holds TH1 "fire" (4 bins: both, EPD only, BBC only, neither;
+  // probabilities, in the st_fwd analysis sample) and TH1 "res_epd", "res_bbc"
+  // (the scatter of the raw method z about a + s z_TPC, cm) and TVectorD
+  // "response" (a_epd, s_epd, a_bbc, s_bbc); each event draws which fire and
+  // sets z_raw = a + s mc_vz + a sampled residual, then the data's choice. Returns
+  // false (and leaves the emulation off) if the file or a histogram is missing.
+  bool SetVertexSmear(const char* file, unsigned int seed);
 
   // Data: enable the HCAL gain correction; manifestDir holds manifest.txt and
   // the correction files

@@ -49,7 +49,8 @@
       {{CALIB_SAMPLE}}      1 = JES calibration sample (-C): no jet pT
                              minimums
       {{VZ_SIGMA}}          -Z: Gaussian sigma of the generated primary vertex z, cm
-                             (SIM_VZ_SIGMA in starsim_*_filter.C; default 30)
+                             (SIM_VZ_SIGMA in starsim_*_filter.C; default 49.79,
+                             mean -7.68: the Run 22 beam spot, TPC, 2026-11-16)
       {{PI0_DUMP}}          -D: 1 = also write pi0dump_*.root (truth-labelled
                              point jets, Pi0Playground/pi0_prob/pi0_jet_dump.cpp,
                              with sigma_job/N_job) from every job's SimpleTree
@@ -211,6 +212,10 @@
             <File>file:./sim_to_jet/starsim_pythia6_filter.C</File>
             <File>file:./sim_to_jet/runSimBfc.C</File>
             <File>file:./sim_to_jet/readMudst.C</File>
+            <!-- vertex emulation inputs (StSimpleReaderMaker::SetVertexSmear, made by
+                 make_smear.C from the P25ib TPC comparison); readMudst.C turns the
+                 emulation on when this file is in the job directory -->
+            <File>file:./sim_to_jet/vertex_smear.root</File>
             <File>file:./sim_to_jet/JetMatcher.cpp</File>
             <File>file:./sim_to_jet/FcsTriggerDefs.h</File>
             <File>file:./sim_to_jet/stage_params.txt</File>

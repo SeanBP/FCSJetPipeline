@@ -83,7 +83,7 @@
 // included: eta, phi, energy (uncorrected reco_E, UE reco_ue_E, corrected),
 // pT (uncorrected, corrected), corrected x_F, points in the jet, jet position
 // (reco_x, reco_y), and per event the jets and selected jets, the vertex z
-// (event_vertex_z, -9999 = none, and its source), the listed EM and JP triggers and
+// (event_vertex_z and its source: EPD, BBC TAC or nominal), the listed EM and JP triggers and
 // sqrt(s) (qa_sqrt_s). qa_xy_sel_<side> is split by side for the left/right
 // acceptance. The same jet distributions per level,
 // qa_<variable>_<stage>_<level>: at "evt" by the event's highest listed
@@ -138,9 +138,9 @@ static int RunFromFileName(const std::string &path)
 // kBelowHalfS: those with E <= sqrt(s)/2. Not steps of the flow: kEmDefault,
 // kJpDefault, kBothDefault (jets at the default factor in the EM family, the
 // JP family, both), kVeto (_veto jets) and kCompanion (_comp jets).
-enum Cut { kAllJets, kNoLed, kTrgListed, kSpin, kCalibrated, kXfPositive, kPtMin, kTrg115, kTrgDefault, kBelowHalfS,
+enum Cut { kAllJets, kNoLed, kTrgListed, kSpin, kVertex, kCalibrated, kXfPositive, kPtMin, kTrg115, kTrgDefault, kBelowHalfS,
            kEmDefault, kJpDefault, kBothDefault, kVeto, kCompanion, kNCuts };
-static const char *const kCutName[kNCuts] = {"all jets", "no LED", "EM/JP trigger", "spin state", "calibrated", "x_F > 0",
+static const char *const kCutName[kNCuts] = {"all jets", "no LED", "EM/JP trigger", "spin state", "|vz| < 100", "calibrated", "x_F > 0",
                                              "pT > 2", "trg >= 1.15 thr", "trg >= default", "E <= sqrt(s)/2",
                                              "EM >= default", "JP >= default", "EM and JP dflt", "EM veto failed", "companion"};
 
@@ -277,6 +277,10 @@ int main(int argc, char **argv)
     if (have_run) t.SetBranchAddress("event_run", &event_run);
     if (t.GetBranch("event_vertex_z")) t.SetBranchAddress("event_vertex_z", &vz);
     if (t.GetBranch("event_vertex_source")) t.SetBranchAddress("event_vertex_source", &vz_source);
+    // the vertex cut (JetParameters.h pass_vertex_cut) needs the 2026-11-16 vertex
+    // (EPD / BBC TAC calibrated / nominal); older trees, without epd_source, are not cut
+    const bool vertex_cut = t.GetBranch("epd_source") != 0;
+    if (!vertex_cut) std::cerr << "WARNING: no epd_source branch (jet trees before the 2026-11-16 vertex code): no vertex cut" << std::endl;
     t.SetBranchAddress("reco_eta", &eta);
     t.SetBranchAddress("reco_phi", &phi);
     t.SetBranchAddress("reco_E", &e_raw);
@@ -406,9 +410,9 @@ int main(int argc, char **argv)
         for (int l = 0; l < kNTrgLevels; l++) qa_lvl[g][l].Book(TString::Format("%s_%s", stage[g], kTrgLevelName[l]));
     }
     TH1D *q_sqrts = new TH1D("qa_sqrt_s", ";event_sqrt_s_gev (GeV);events", 200, 400, 600);
-    TH1D *q_vz = new TH1D("qa_vz", ";event vertex z (cm), events with a vertex;events", 80, -80, 80);
+    TH1D *q_vz = new TH1D("qa_vz", ";event vertex z (cm);events", 120, -300, 300);
     TH1D *q_vzsrc = new TH1D("qa_vz_source", ";vertex source;events", 4, 0, 4);
-    const char *const vz_name[4] = {"none", "TPC", "VPD", "BBC"};
+    const char *const vz_name[4] = {"not set", "EPD", "BBC TAC", "nominal"};
     for (int i = 0; i < 4; i++) q_vzsrc->GetXaxis()->SetBinLabel(i + 1, vz_name[i]);
     TH1D *q_trig = new TH1D("qa_em_listed", ";listed EM triggers;events", 8, 0, 8);
     for (int i = 0; i < 8; i++)
@@ -470,6 +474,8 @@ int main(int argc, char **argv)
         q_spin->Fill(spin_config);
         if (spin < 0) continue;
         h_cut->Fill(kSpin, nj);
+        if (vertex_cut && !pass_vertex_cut(vz, vz_source)) continue;
+        h_cut->Fill(kVertex, nj);
         h_events[level]->Fill(spin);
         q_vzsrc->Fill(vz_source >= 0 && vz_source < 4 ? vz_source : 0);
         if (vz > -9000) q_vz->Fill(vz);

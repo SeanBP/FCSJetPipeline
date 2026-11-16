@@ -41,6 +41,9 @@ int main(int argc, char** argv) {
     bool em_only = (argc >= 4) && (string(argv[3]) == "1");
 
     bool use_points = (argc >= 5) && (string(argv[4]) == "1");
+    // vertex on by default (FCS_JET_VERTEX=0 turns it off): reco kinematics from the event vertex (JetParameters.h useJetVertex())
+    const bool use_vertex = useJetVertex();
+    cout << "RecoJets: reco jet kinematics from " << (use_vertex ? "the event vertex (default; FCS_JET_VERTEX=0 for the origin)" : "the origin") << endl;
 
     string list_fname = argv[1];
     ifstream infile(list_fname);
@@ -187,13 +190,25 @@ int main(int argc, char** argv) {
     Int_t Spin_config;
     outTree->Branch("Spin_config", &Spin_config, "Spin_config/I");
 
-    // Event z-vertex from the SimpleTree: TPC, then VPD, then BBC, the first
-    // with |z| < 80 cm (-9999 = none). event_vertex_source: 0 none, 1 TPC,
-    // 2 VPD, 3 BBC.
+    // Event z-vertex from the SimpleTree (StSimpleReaderMaker::ChooseVertex):
+    // EPD, else BBC TAC minus its offset, else the nominal z; no |z| cut.
+    // event_vertex_source: 0 not set, 1 EPD, 2 BBC TAC, 3 nominal.
     Float_t event_vertex_z;
     Int_t event_vertex_source;
     outTree->Branch("event_vertex_z", &event_vertex_z, "event_vertex_z/F");
     outTree->Branch("event_vertex_source", &event_vertex_source, "event_vertex_source/I");
+    // per-method z (-9999 = none) and where the EPD hits came from (1 MuDst,
+    // 2 rebuilt from the trigger data, 0 none), for vertex QA and cuts
+    Float_t epd_vz = -9999, bbc_vz_tac = -9999;
+    Int_t epd_source = 0;
+    outTree->Branch("epd_vz", &epd_vz, "epd_vz/F");
+    outTree->Branch("bbc_vz_tac", &bbc_vz_tac, "bbc_vz_tac/F");
+    outTree->Branch("epd_source", &epd_source, "epd_source/I");
+    // the vertex z the reco kinematics used (0 = origin; FCS_JET_VERTEX)
+    Float_t reco_vz_used = 0, reco_vx_used = 0, reco_vy_used = 0;
+    outTree->Branch("reco_vz_used", &reco_vz_used, "reco_vz_used/F");
+    outTree->Branch("reco_vx_used", &reco_vx_used, "reco_vx_used/F");
+    outTree->Branch("reco_vy_used", &reco_vy_used, "reco_vy_used/F");
 
     // Per-event sqrt(s), GeV, used for reco_x_F
     Double_t event_sqrt_s_gev;
@@ -268,6 +283,10 @@ int main(int argc, char** argv) {
 
         // Defaults for files without these branches
         event_vertex_z = -9999; event_vertex_source = 0;
+        epd_vz = bbc_vz_tac = -9999; epd_source = 0;
+        if ( tree->GetBranch("epd_vz") ) tree->SetBranchAddress("epd_vz", &epd_vz);
+        if ( tree->GetBranch("bbc_vz_tac") ) tree->SetBranchAddress("bbc_vz_tac", &bbc_vz_tac);
+        if ( tree->GetBranch("epd_source") ) tree->SetBranchAddress("epd_source", &epd_source);
         if ( tree->GetBranch("event_vertex_z") ) {
             tree->SetBranchAddress("event_vertex_z", &event_vertex_z);
             tree->SetBranchAddress("event_vertex_source", &event_vertex_source);
@@ -360,6 +379,10 @@ int main(int argc, char** argv) {
             reco_trg_jp_et.clear(); reco_trg_jp_et_raw.clear(); reco_trg_jp_patch.clear(); reco_trg_jp_mask.clear();
             reco_cone_ecal_et.clear(); reco_cone_hcal_et.clear();
 
+            // vertex for the reco kinematics: event_vertex_z unless FCS_JET_VERTEX=0, when set; else 0
+            reco_vz_used = (use_vertex && event_vertex_source > 0) ? event_vertex_z : 0;
+            reco_vx_used = (use_vertex && event_vertex_source > 0) ? beamX(reco_vz_used) : 0;
+            reco_vy_used = (use_vertex && event_vertex_source > 0) ? beamY(reco_vz_used) : 0;
             vector<PseudoJet> reco_particles;
             vector<int> reco_detid;
 
@@ -384,6 +407,8 @@ int main(int argc, char** argv) {
                 float y = use_points ? Cal_pt_y[i] : Cal_hit_posy[i];
                 float z = use_points ? Cal_pt_z[i] : Cal_hit_posz[i];
 
+                // direction from the event vertex (0 if FCS_JET_VERTEX=0)
+                x -= reco_vx_used; y -= reco_vy_used; z -= reco_vz_used;
                 float norm = sqrt(x*x+y*y+z*z);
 
                 reco_particles.emplace_back(
@@ -401,8 +426,8 @@ int main(int argc, char** argv) {
 
             // reco_jet_pt_min_em for EM-only reco jets; ECAL+HCAL jets have none
             for (auto &jet : cs_reco.inclusive_jets(em_only ? reco_jet_pt_min_em : 0.0)) {
-                float jetXE = z_proj*jet.px()/jet.pz();
-                float jetYE = z_proj*jet.py()/jet.pz();
+                float jetXE = reco_vx_used + (z_proj - reco_vz_used)*jet.px()/jet.pz();
+                float jetYE = reco_vy_used + (z_proj - reco_vz_used)*jet.py()/jet.pz();
                 bool passesFiducial = em_only
                     ? pass_fiducial_cut(jetXE, jetYE, reco_fiducial_buffer_ecal, kFiducialRectEcal)
                     : pass_fiducial_cut(jetXE, jetYE, reco_fiducial_buffer);
@@ -424,9 +449,9 @@ int main(int argc, char** argv) {
                 reco_nconst.push_back(consts.size());
                 reco_area.push_back(jet.area());
 
-                float rx = z_proj*jet.px()/jet.pz();
+                float rx = reco_vx_used + (z_proj - reco_vz_used)*jet.px()/jet.pz();
                 reco_x.push_back(rx);
-                reco_y.push_back(z_proj*jet.py()/jet.pz());
+                reco_y.push_back(reco_vy_used + (z_proj - reco_vz_used)*jet.py()/jet.pz());
                 reco_x_F.push_back(computeFeynmanX(jet.E(), jet.eta(), event_sqrt_s_gev));
                 reco_side.push_back(computeSide(rx));
 
@@ -442,7 +467,7 @@ int main(int argc, char** argv) {
                         if (Cal_pt_detid[p] != 0 && Cal_pt_detid[p] != 1) continue;
                         if (!pass_point_energy_cut(Cal_pt_energy[p])) continue;
                         double pEta, pPhi;
-                        computeEtaPhi(Cal_pt_x[p], Cal_pt_y[p], pEta, pPhi);
+                        computeEtaPhi(Cal_pt_x[p], Cal_pt_y[p], reco_vx_used, reco_vy_used, reco_vz_used, pEta, pPhi);
                         double dPhi = fabs(pPhi - jet.phi());
                         if (dPhi > M_PI) dPhi = 2 * M_PI - dPhi;
                         double dEta = pEta - jet.eta();

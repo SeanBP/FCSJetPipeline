@@ -157,14 +157,28 @@ void starsim( Int_t nevents=10, Int_t rngSeed=1234, Double_t ckin3=10.0, Int_t p
   _primary->SetEtaRange ( +1.0, +5.0 );
   _primary->SetPhiRange ( 0., TMath::TwoPi() );
 
-  // z-vertex: gauss widths x=1mm, y=1mm, z=30cm unless SIM_VZ_SIGMA
-  _primary->SetVertex( 0., 0., 0. );
-  // z width from $SIM_VZ_SIGMA (cm; submit_sim_to_jet.sh -Z), default 30
-  Double_t vzSigma = 30.0;
+  // z-vertex: the Run 22 beam spot measured with the TPC (P25ib st_physics,
+  // 40 runs, Gaussian fit; vertex_tpc_v1/code/make_smear.C, 2026-11-16):
+  // mean -7.68 cm, sigma 49.79 cm. $SIM_VZ_MEAN and
+  // $SIM_VZ_SIGMA (cm; submit_sim_to_jet.sh -Z) override them.
+  Double_t vzMean = -7.68;
+  if ( gSystem->Getenv("SIM_VZ_MEAN") ) vzMean = atof(gSystem->Getenv("SIM_VZ_MEAN"));
+  // Transverse beamline (Sean 2026-11-16): the event-weighted Run 22 TPC
+  // beamline (vertex_tpc_v1/code/beamline_runs.C, 40 runs): x = -0.061 cm,
+  // y = -0.203 cm at z = 0, tilt dx/dz = -1.04e-3, dy/dz = +1.95e-4 (applied by
+  // StarPrimaryMaker::RotateBeamline, which also tilts the momenta). Stable
+  // across the run except days ~0-14 (offsets up to ~0.1 cm); negligible at
+  // the FCS. Transverse width 0.01 cm: the TPC vertex is beamline-constrained,
+  // its scatter about the tilt line (~0.011 cm) equals its error, so the true
+  // width is below that.
+  _primary->SetVertex( -0.061, -0.203, vzMean );
+  _primary->SetSlope( -1.04e-3, 1.95e-4 );
+  cout << "Primary vertex z mean = " << vzMean << " cm" << endl;
+  Double_t vzSigma = 49.79;
   if ( gSystem->Getenv("SIM_VZ_SIGMA") && atof(gSystem->Getenv("SIM_VZ_SIGMA")) > 0 )
     vzSigma = atof(gSystem->Getenv("SIM_VZ_SIGMA"));
   cout << "Primary vertex z sigma = " << vzSigma << " cm" << endl;
-  _primary->SetSigma( 0.1, 0.1, vzSigma );
+  _primary->SetSigma( 0.01, 0.01, vzSigma );
 
   _primary -> Init();
 

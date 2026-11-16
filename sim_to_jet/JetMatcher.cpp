@@ -48,6 +48,10 @@ int main(int argc, char** argv) {
     bool em_only = (argc >= 4) && (string(argv[3]) == "1");
 
     bool use_points = (argc >= 5) && (string(argv[4]) == "1");
+    // vertex on by default (FCS_JET_VERTEX=0 turns it off): reco kinematics from the (emulated) event vertex, truth
+    // jets projected to the detector from the truth vertex (useJetVertex())
+    const bool use_vertex = useJetVertex();
+    cout << "JetMatcher: reco jet kinematics from " << (use_vertex ? "the event vertex (default; FCS_JET_VERTEX=0 for the origin)" : "the origin") << endl;
 
     // The EM-only jet pT minimums are analysis cuts; a JES calibration sample
     // must not have them, since a reco threshold biases the response.
@@ -194,6 +198,26 @@ int main(int argc, char** argv) {
     Int_t event_run = 0, event_id = -1;
     outTree->Branch("event_run", &event_run, "event_run/I");
     outTree->Branch("event_id", &event_id, "event_id/I");
+    // Event vertex (SimpleTree, 2026-11-16): the emulated reco vertex as data
+    // chooses it (event_vertex_source 1 EPD, 2 BBC TAC, 3 nominal, 0 not set:
+    // no SetVertexSmear), the emulated per-method z (epd_vz, bbc_vz_tac; -9999
+    // = no z) and the truth z (mc_vz); -9999 / 0 in older SimpleTrees
+    Float_t event_vertex_z = -9999, epd_vz = -9999, bbc_vz_tac = -9999, mc_vz = -9999, mc_vx = -9999, mc_vy = -9999;
+    Int_t event_vertex_source = 0;
+    outTree->Branch("event_vertex_z", &event_vertex_z, "event_vertex_z/F");
+    outTree->Branch("event_vertex_source", &event_vertex_source, "event_vertex_source/I");
+    outTree->Branch("epd_vz", &epd_vz, "epd_vz/F");
+    outTree->Branch("bbc_vz_tac", &bbc_vz_tac, "bbc_vz_tac/F");
+    outTree->Branch("mc_vz", &mc_vz, "mc_vz/F");
+    // the vertex z used to project reco / truth jets to the detector plane
+    // (0 = origin; FCS_JET_VERTEX)
+    Float_t reco_vz_used = 0, truth_vz_used = 0, reco_vx_used = 0, reco_vy_used = 0, truth_vx_used = 0, truth_vy_used = 0;
+    outTree->Branch("reco_vz_used", &reco_vz_used, "reco_vz_used/F");
+    outTree->Branch("truth_vz_used", &truth_vz_used, "truth_vz_used/F");
+    outTree->Branch("reco_vx_used", &reco_vx_used, "reco_vx_used/F");
+    outTree->Branch("reco_vy_used", &reco_vy_used, "reco_vy_used/F");
+    outTree->Branch("truth_vx_used", &truth_vx_used, "truth_vx_used/F");
+    outTree->Branch("truth_vy_used", &truth_vy_used, "truth_vy_used/F");
 
     // Photon constituents of the truth jet, with no energy cut, as the FMS
     // analysis (reco_nphotons needs 1 GeV; how to cut truth photons to match
@@ -356,6 +380,17 @@ int main(int argc, char** argv) {
             tree->SetBranchAddress("fcs_tcu_bits", &fcs_tcu_bits);
             tree->SetBranchAddress("fcs_tcu_source", &fcs_tcu_source);
         }
+        event_vertex_z = epd_vz = bbc_vz_tac = mc_vz = mc_vx = mc_vy = -9999; event_vertex_source = 0;
+        if ( tree->GetBranch("event_vertex_z") ) {
+            tree->SetBranchAddress("event_vertex_z", &event_vertex_z);
+            tree->SetBranchAddress("event_vertex_source", &event_vertex_source);
+        }
+        if ( tree->GetBranch("epd_vz") ) tree->SetBranchAddress("epd_vz", &epd_vz);
+        if ( tree->GetBranch("bbc_vz_tac") ) tree->SetBranchAddress("bbc_vz_tac", &bbc_vz_tac);
+        if ( tree->GetBranch("mc_vz") ) tree->SetBranchAddress("mc_vz", &mc_vz);
+        // truth transverse vertex (SimpleTrees from 2026-11-16 on); else 0
+        const bool has_mc_vxy = tree->GetBranch("mc_vx") && tree->GetBranch("mc_vy");
+        if ( has_mc_vxy ) { tree->SetBranchAddress("mc_vx", &mc_vx); tree->SetBranchAddress("mc_vy", &mc_vy); }
 
         // trigger 2x2 sums and their centres (SimpleTrees from 2026-11-05 on)
         trg_geom.ok = false;
@@ -380,6 +415,14 @@ int main(int argc, char** argv) {
         for (Long64_t ev = 0; ev < nentries; ev++) {
 
             if (tree->GetEntry(ev) <= 0) continue;
+            // vertices for the kinematics: the emulated event vertex for reco and
+            // the truth vertex for truth projections, unless FCS_JET_VERTEX=0; else 0
+            reco_vz_used = (use_vertex && event_vertex_source > 0) ? event_vertex_z : 0;
+            reco_vx_used = (use_vertex && event_vertex_source > 0) ? beamX(reco_vz_used) : 0;
+            reco_vy_used = (use_vertex && event_vertex_source > 0) ? beamY(reco_vz_used) : 0;
+            truth_vz_used = (use_vertex && mc_vz > -9000) ? mc_vz : 0;
+            truth_vx_used = (use_vertex && mc_vz > -9000 && has_mc_vxy && mc_vx > -9000) ? mc_vx : 0;
+            truth_vy_used = (use_vertex && mc_vz > -9000 && has_mc_vxy && mc_vy > -9000) ? mc_vy : 0;
             simpletree_entry = ev;
 
             if (!filterFlagIndices.empty()) {
@@ -475,8 +518,8 @@ int main(int argc, char** argv) {
 
                 // Only truth jets that could be matched: axis within R/2 in
                 // eta-phi of the reco fiducial region
-                float jetXE = z_proj * jet.px() / jet.pz();
-                float jetYE = z_proj * jet.py() / jet.pz();
+                float jetXE = truth_vx_used + (z_proj - truth_vz_used) * jet.px() / jet.pz();
+                float jetYE = truth_vy_used + (z_proj - truth_vz_used) * jet.py() / jet.pz();
                 bool passesFiducial = em_only
                     ? pass_jet_scale_cut(jetXE, jetYE, reco_fiducial_buffer_ecal, -truth_jet_margin_em, kFiducialRectEcal)
                     : pass_jet_scale_cut(jetXE, jetYE, reco_fiducial_buffer, -R/2.0f);
@@ -511,6 +554,8 @@ int main(int argc, char** argv) {
                 float y = use_points ? Cal_pt_y[i] : Cal_hit_posy[i];
                 float z = use_points ? Cal_pt_z[i] : Cal_hit_posz[i];
 
+                // direction from the event vertex (0 if FCS_JET_VERTEX=0)
+                x -= reco_vx_used; y -= reco_vy_used; z -= reco_vz_used;
                 float norm = sqrt(x*x + y*y + z*z);
 
                 reco_particles.emplace_back(e*x/norm, e*y/norm, e*z/norm, e);
@@ -523,8 +568,8 @@ int main(int argc, char** argv) {
 
             // reco_pt_min is 0 for ECAL+HCAL jets or when jet_pt_cuts = 0
             for (auto &jet : cs_reco.inclusive_jets(reco_pt_min)) {
-                float jetXE = z_proj * jet.px() / jet.pz();
-                float jetYE = z_proj * jet.py() / jet.pz();
+                float jetXE = reco_vx_used + (z_proj - reco_vz_used) * jet.px() / jet.pz();
+                float jetYE = reco_vy_used + (z_proj - reco_vz_used) * jet.py() / jet.pz();
                 bool passesFiducial = em_only
                     ? pass_fiducial_cut(jetXE, jetYE, reco_fiducial_buffer_ecal, kFiducialRectEcal)
                     : pass_fiducial_cut(jetXE, jetYE, reco_fiducial_buffer);
@@ -583,8 +628,8 @@ int main(int argc, char** argv) {
                 truth_nconst.push_back(consts.size());
                 truth_area.push_back(jet.area());
 
-                truth_x.push_back(z_proj*jet.px()/jet.pz());
-                truth_y.push_back(z_proj*jet.py()/jet.pz());
+                truth_x.push_back(truth_vx_used + (z_proj - truth_vz_used)*jet.px()/jet.pz());
+                truth_y.push_back(truth_vy_used + (z_proj - truth_vz_used)*jet.py()/jet.pz());
                 truth_x_F.push_back(computeFeynmanX(jet.E(), jet.eta(), kSqrtS_MainRun22_GeV));
 
                 for (auto &c : consts) {
@@ -631,9 +676,9 @@ int main(int argc, char** argv) {
                 reco_nconst.push_back(consts.size());
                 reco_area.push_back(jet.area());
 
-                float rx = z_proj*jet.px()/jet.pz();
+                float rx = reco_vx_used + (z_proj - reco_vz_used)*jet.px()/jet.pz();
                 reco_x.push_back(rx);
-                reco_y.push_back(z_proj*jet.py()/jet.pz());
+                reco_y.push_back(reco_vy_used + (z_proj - reco_vz_used)*jet.py()/jet.pz());
                 reco_x_F.push_back(computeFeynmanX(jet.E(), jet.eta(), kSqrtS_MainRun22_GeV));
                 reco_side.push_back(computeSide(rx));
 
@@ -649,7 +694,7 @@ int main(int argc, char** argv) {
                         if (Cal_pt_detid[p] != 0 && Cal_pt_detid[p] != 1) continue;
                         if (!pass_point_energy_cut(Cal_pt_energy[p])) continue;
                         double pEta, pPhi;
-                        computeEtaPhi(Cal_pt_x[p], Cal_pt_y[p], pEta, pPhi);
+                        computeEtaPhi(Cal_pt_x[p], Cal_pt_y[p], reco_vx_used, reco_vy_used, reco_vz_used, pEta, pPhi);
                         double dPhi = fabs(pPhi - jet.phi());
                         if (dPhi > M_PI) dPhi = 2 * M_PI - dPhi;
                         double dEta = pEta - jet.eta();

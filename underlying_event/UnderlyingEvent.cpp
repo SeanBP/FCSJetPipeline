@@ -23,6 +23,12 @@
 // simpletree_entry ties jetTree entries to SimpleTree entries; files without
 // it need equal entry counts.
 //
+// Event vertex (2026-11-16): the reco wedges are seen from the vertex the reco
+// jets were built from (jetTree reco_vz_used, FCS_JET_VERTEX in RecoJets /
+// JetMatcher; absent or 0 = the origin): point directions and the tile
+// geometry use z - vz, so the wedges and the jet cone's area match the jet
+// axis. Truth needs nothing (momenta, exact areas).
+//
 // Build (job folder):
 //   g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent `root-config --cflags --libs` -std=c++11
 // from this folder:
@@ -130,6 +136,11 @@ int main(int argc, char **argv)
         if (has_entry) jt->SetBranchAddress("simpletree_entry", &simpletree_entry);
         // the point energy cut depends on sqrt(s), as in the jet finders
         if (jt->GetBranch("event_sqrt_s_gev")) jt->SetBranchAddress("event_sqrt_s_gev", &event_sqrt_s_gev);
+        // the vertex the reco jets were built from (0 = origin, as before 2026-11-16)
+        Float_t reco_vz_used = 0, reco_vx_used = 0, reco_vy_used = 0;
+        if (jt->GetBranch("reco_vz_used")) jt->SetBranchAddress("reco_vz_used", &reco_vz_used);
+        if (jt->GetBranch("reco_vx_used")) jt->SetBranchAddress("reco_vx_used", &reco_vx_used);
+        if (jt->GetBranch("reco_vy_used")) jt->SetBranchAddress("reco_vy_used", &reco_vy_used);
         const bool has_truth = jt->GetBranch("truth_eta") && st->GetBranch("mcpart_num");
         if (has_truth) { jt->SetBranchAddress("truth_eta", &truth_eta); jt->SetBranchAddress("truth_phi", &truth_phi); }
 
@@ -174,14 +185,18 @@ int main(int argc, char **argv)
             if (has_truth) truth_br.Clear(nt);
             if ((nr > 0 || nt > 0) && st->GetEntry(has_entry ? simpletree_entry : ev) > 0)
             {
-                // reco: ECal points, as the reco jets' own inputs (RecoJets.cpp / JetMatcher.cpp, use_points)
+                // reco: ECal points, as the reco jets' own inputs (RecoJets.cpp / JetMatcher.cpp, use_points),
+                // seen from the jets' vertex; the tile geometry rebuilt when the vertex changes
+                if (nr > 0 && (std::fabs(reco_vz_used - geo.vz) > 1e-3 || std::fabs(reco_vx_used - geo.vx) > 1e-5 || std::fabs(reco_vy_used - geo.vy) > 1e-5))
+                    geo.Build(reco_vz_used, reco_vx_used, reco_vy_used);
                 p_eta.clear(); p_phi.clear(); p_E.clear(); p_tile.clear();
                 for (int i = 0; i < std::min((int)Cal_npts, MAX_PTS) && nr > 0; i++)
                 {
                     if (Cal_pt_detid[i] != 0 && Cal_pt_detid[i] != 1) continue;
                     if (!pass_point_energy_cut(Cal_pt_energy[i])) continue;
-                    const double rho = std::sqrt((double)Cal_pt_x[i] * Cal_pt_x[i] + (double)Cal_pt_y[i] * Cal_pt_y[i]);
-                    p_eta.push_back(std::asinh(Cal_pt_z[i] / rho)); p_phi.push_back(std::atan2(Cal_pt_y[i], Cal_pt_x[i]));
+                    const double px = Cal_pt_x[i] - geo.vx, py = Cal_pt_y[i] - geo.vy;
+                    const double rho = std::sqrt(px * px + py * py);
+                    p_eta.push_back(std::asinh((Cal_pt_z[i] - geo.vz) / rho)); p_phi.push_back(std::atan2(py, px));
                     p_E.push_back(Cal_pt_energy[i]); p_tile.push_back(geo.TileOf(Cal_pt_x[i], Cal_pt_y[i]));
                 }
                 for (size_t j = 0; j < nr; j++)

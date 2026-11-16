@@ -69,7 +69,9 @@
 #   -S  > 0 = fixed generator seeds (seed base + job index), so two submissions
 #       with the same -S, ptHat bins and -n hold the same events. 0/omit = random.
 #   -Z  Gaussian sigma of the generated primary vertex z, cm (starsim
-#       SIM_VZ_SIGMA). Default 30.
+#       SIM_VZ_SIGMA). Default 49.79, the Run 22 beam spot measured with the
+#       TPC (2026-11-16); the mean, -7.68 cm, is starsim's default
+#       (SIM_VZ_MEAN to override).
 #   -D  1 = also write each job's pi0dump_*.root: truth-labelled point jets for
 #       the pi0 probability calibration (Pi0Playground/pi0_prob/pi0_jet_dump.cpp),
 #       carrying sigma_job/N_job, so it needs no SimpleTree. 0/omit = off.
@@ -107,7 +109,7 @@ CALIB_SAMPLE=0
 SAVE_MUDST=0
 ECAL_SCALE=0.947
 SEED_BASE=0
-VZ_SIGMA=30
+VZ_SIGMA=49.79
 PI0_DUMP=0
 MEMORY_MB=""
 

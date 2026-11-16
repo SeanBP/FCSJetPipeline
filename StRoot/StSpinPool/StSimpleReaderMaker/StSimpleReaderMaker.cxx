@@ -18,6 +18,11 @@
 #include "StEvent/StFcsCollection.h"
 #include "StEvent/StFcsCluster.h"
 #include "StEvent/StFcsPoint.h"
+#include "StEvent/StEpdCollection.h"
+#include "StEvent/StEpdHit.h"
+#include "TH1.h"
+#include "TRandom3.h"
+#include "TVectorD.h"
 #include "StMuDSTMaker/COMMON/StMuPrimaryVertex.h"
 #include "StMuDSTMaker/COMMON/StMuEpdHit.h"
 
@@ -99,6 +104,12 @@ StSimpleReaderMaker::StSimpleReaderMaker( StMuDstMaker* maker ) : StMaker("StSim
   mEpdgeo = new StEpdGeom;  // EPD geom.
 
   mMuDstMaker = maker ;     // Pass MuDst pointer to DstAnlysisMaker Class member functions
+  for ( int c = 0; c < 4; c++ ) mFireProb[c] = 0;
+  mVtxRes[0] = mVtxRes[1] = 0;
+  // simulation vertex response and nominal z (see the header)
+  mRespA[0] = -1.31; mRespS[0] = 0.8136;   // EPD
+  mRespA[1] = 3.48;  mRespS[1] = 0.7884;   // BBC TAC
+  mNominalVz = -7.68;
 }
 
 StSimpleReaderMaker::~StSimpleReaderMaker() 
@@ -205,6 +216,10 @@ Int_t StSimpleReaderMaker::Init( )
   out_tree->Branch("trg_h2x2", trg_h2x2, "trg_h2x2[2][10][6]/F");
   out_tree->Branch("event_vertex_z", &event_vertex_z, "event_vertex_z/F");
   out_tree->Branch("event_vertex_source", &event_vertex_source, "event_vertex_source/I");
+  out_tree->Branch("epd_source", &epd_source, "epd_source/I");
+  out_tree->Branch("mc_vz", &mc_vz, "mc_vz/F");
+  out_tree->Branch("mc_vx", &mc_vx, "mc_vx/F");
+  out_tree->Branch("mc_vy", &mc_vy, "mc_vy/F");
   out_tree->Branch("bbc_tac_diff", &bbc_tac_diff, "bbc_tac_diff/I");
   out_tree->Branch("bbc_vz_tac", &bbc_vz_tac, "bbc_vz_tac/F");
   out_tree->Branch("bbc_vz_det", &bbc_vz_det, "bbc_vz_det/F");
@@ -276,7 +291,7 @@ Int_t StSimpleReaderMaker::Make( )
   Spin_config = -1; // "no data" until proven otherwise below
   event_run = 0; event_id = -1; fcs_tcu_bits = 0; fcs_tcu_source = 0;
   event_vertex_z = -9999;
-  event_vertex_source = 0;
+  event_vertex_source = 0; epd_source = 0; mc_vz = mc_vx = mc_vy = -9999;
   bbc_tac_diff = -4096; bbc_vz_tac = bbc_vz_det = epd_vz = vpd_vz = -9999;
   epd_avgtac_e = epd_avgtac_w = 0; epd_ntac_e = epd_ntac_w = 0;
   event_sqrt_s_gev = -1;
@@ -382,34 +397,9 @@ Int_t StSimpleReaderMaker::Make( )
     }
 
     // Event vertex and sqrt(s), data only (gated on mSpinDb like
-    // Spin_config). Vertex: TPC primary (ranking > 0), then VPD, then BBC,
-    // the first with |z| < 80 cm.
-    const double kVertexZMax = 80.0;
-    event_vertex_z = -9999; event_vertex_source = 0;
+    // Spin_config): every detector's z, uncut, then ChooseVertex() (EPD,
+    // else BBC TAC minus its offset, else nominal; see the header)
     StMuDst* muDst = mMuDstMaker->muDst();
-    if ( muDst->numberOfPrimaryVertices() > 0 ){
-      StMuPrimaryVertex* vtx0 = muDst->primaryVertex(0);
-      if ( vtx0 && vtx0->ranking() > 0 && std::fabs(vtx0->position().z()) < kVertexZMax ){
-        event_vertex_z = vtx0->position().z();
-        event_vertex_source = 1; // TPC
-      }
-    }
-    if ( event_vertex_source == 0 &&
-         (muEvent->numberOfVpdEastHits() > 0 || muEvent->numberOfVpdWestHits() > 0) &&
-         std::fabs(muEvent->vpdVz()) < kVertexZMax ){
-      event_vertex_z = muEvent->vpdVz();
-      event_vertex_source = 2; // VPD
-    }
-    if ( event_vertex_source == 0 ){
-      double bbcVz = muEvent->bbcTriggerDetector().zVertex();
-      // bbcVz's -9999 sentinel fails the |z| cut
-      if ( std::fabs(bbcVz) < kVertexZMax ){
-        event_vertex_z = bbcVz;
-        event_vertex_source = 3; // BBC
-      }
-    }
-
-    // Vertex test branches (see the header): every detector's z, uncut
     {
       const StTriggerData* td = muEvent->triggerData();
       if ( td ){
@@ -418,22 +408,47 @@ Int_t StSimpleReaderMaker::Make( )
       }
       bbc_vz_det = muEvent->bbcTriggerDetector().zVertex();
       if ( muEvent->numberOfVpdEastHits() > 0 && muEvent->numberOfVpdWestHits() > 0 ) vpd_vz = muEvent->vpdVz();
+      // EPD hits: the MuDst's, or, where it has none (P24ia st_fwd before
+      // ~day 50, 2026-11-16), those StEpdHitMaker (setReadMuDst()) rebuilt
+      // from the trigger data's QT data into StEvent. Hit selection and
+      // vertex as D. Kapukchyan's StFwdAnaEpdQaAndVert.
       double sume = 0, sumw = 0;
       TClonesArray* epdArr = muDst->epdHits();
       const int nepd = epdArr ? epdArr->GetEntriesFast() : 0;
-      for ( int k = 0; k < nepd; k++ ){
-        StMuEpdHit* eh = (StMuEpdHit*)epdArr->UncheckedAt(k);
-        if ( !eh ) continue;
-        const float nmip = eh->nMIP();
-        const int tac = eh->tac();
-        if ( !(nmip > 1 && nmip < 15 && tac > 50) ) continue;
-        if ( eh->side() < 0 ){ sume += tac; epd_ntac_e++; }
-        else { sumw += tac; epd_ntac_w++; }
+      if ( nepd > 0 ){
+        epd_source = 1;
+        for ( int k = 0; k < nepd; k++ ){
+          StMuEpdHit* eh = (StMuEpdHit*)epdArr->UncheckedAt(k);
+          if ( !eh ) continue;
+          const float nmip = eh->nMIP();
+          const int tac = eh->tac();
+          if ( !(nmip > 1 && nmip < 15 && tac > 50) ) continue;
+          if ( eh->side() < 0 ){ sume += tac; epd_ntac_e++; }
+          else { sumw += tac; epd_ntac_w++; }
+        }
+      }
+      else {
+        StEvent* stev = (StEvent*)GetInputDS("StEvent");
+        StEpdCollection* col = stev ? stev->epdCollection() : 0;
+        if ( col && col->epdHits().size() > 0 ){
+          epd_source = 2;
+          const StSPtrVecEpdHit& hits = col->epdHits();
+          for ( unsigned k = 0; k < hits.size(); k++ ){
+            const StEpdHit* eh = hits[k];
+            if ( !eh ) continue;
+            const float nmip = eh->nMIP();
+            const int tac = eh->tac();
+            if ( !(nmip > 1 && nmip < 15 && tac > 50) ) continue;
+            if ( eh->side() < 0 ){ sume += tac; epd_ntac_e++; }
+            else { sumw += tac; epd_ntac_w++; }
+          }
+        }
       }
       if ( epd_ntac_e > 0 ) epd_avgtac_e = sume / epd_ntac_e;
       if ( epd_ntac_w > 0 ) epd_avgtac_w = sumw / epd_ntac_w;
       if ( epd_avgtac_e > 50 && epd_avgtac_w > 50 ) epd_vz = (epd_avgtac_w - epd_avgtac_e) * 0.2475;
     }
+    ChooseVertex();
 
     event_sqrt_s_gev = SqrtSForRun(runNumber);
   }
@@ -727,12 +742,96 @@ Int_t StSimpleReaderMaker::Make( )
 
   } // Loop over MC tracks
 
+  // Simulation: truth primary-vertex z (the first MC vertex) and, with
+  // SetVertexSmear(), the emulated EPD and BBC TAC vertices and the same
+  // vertex choice as data
+  {
+    TClonesArray* mcv = mMuDstMaker->muDst()->mcArray(0);
+    if ( mcv && mcv->GetEntriesFast() > 0 ){
+      StMuMcVertex* v0 = (StMuMcVertex*)mcv->UncheckedAt(0);
+      if ( v0 ){ mc_vx = v0->XyzV().x(); mc_vy = v0->XyzV().y(); mc_vz = v0->XyzV().z(); }
+    }
+    if ( mVertexSmear && mc_vz > -9000 ){
+      // which methods give a z: drawn jointly, as measured
+      const double u = mVtxRng->Rndm();
+      int cls = 3;
+      double cum = 0;
+      for ( int c = 0; c < 4; c++ ){ cum += mFireProb[c]; if ( u < cum ){ cls = c; break; } }
+      const bool epdOn = (cls == 0 || cls == 1), bbcOn = (cls == 0 || cls == 2);
+      // raw method z as data measure it: a + s z_true + the measured scatter
+      if ( epdOn ) epd_vz = mRespA[0] + mRespS[0] * mc_vz + SampleResidual(0);
+      if ( bbcOn ) bbc_vz_tac = mRespA[1] + mRespS[1] * mc_vz + SampleResidual(1);
+      ChooseVertex();
+    }
+  }
+
   mEventsProcessed++ ;
   
   // Fill TTree
   out_tree->Fill();
   return kStOK ;
   
+}
+
+// Event vertex (see the header): EPD, else BBC TAC, as measured, else the
+// nominal z
+void StSimpleReaderMaker::ChooseVertex()
+{
+  if ( epd_vz > -9000 ){ event_vertex_z = epd_vz; event_vertex_source = 1; }
+  else if ( bbc_vz_tac > -9000 ){ event_vertex_z = bbc_vz_tac; event_vertex_source = 2; }
+  else { event_vertex_z = mNominalVz; event_vertex_source = 3; }
+}
+
+// One residual (cm) from mVtxRes[m], by its cumulative distribution; uniform
+// within the bin
+double StSimpleReaderMaker::SampleResidual(int m)
+{
+  TH1* h = mVtxRes[m];
+  const int nb = h->GetNbinsX();
+  const double tot = h->Integral(1, nb);
+  if ( !(tot > 0) ) return 0;
+  const double u = mVtxRng->Rndm() * tot;
+  double cum = 0;
+  for ( int b = 1; b <= nb; b++ ){
+    cum += h->GetBinContent(b);
+    if ( u < cum ) return h->GetXaxis()->GetBinLowEdge(b) + mVtxRng->Rndm() * h->GetXaxis()->GetBinWidth(b);
+  }
+  return h->GetXaxis()->GetBinUpEdge(nb);
+}
+
+bool StSimpleReaderMaker::SetVertexSmear(const char* file, unsigned int seed)
+{
+  mVertexSmear = false;
+  TFile* f = TFile::Open(file);
+  if ( !f || f->IsZombie() ){ LOG_ERROR << "StSimpleReaderMaker::SetVertexSmear: cannot open " << file << endm; return false; }
+  TH1* fire = (TH1*)f->Get("fire");
+  TH1* re = (TH1*)f->Get("res_epd");
+  TH1* rb = (TH1*)f->Get("res_bbc");
+  if ( !fire || !re || !rb || fire->GetNbinsX() != 4 ){
+    LOG_ERROR << "StSimpleReaderMaker::SetVertexSmear: " << file << " lacks fire (4 bins) / res_epd / res_bbc" << endm;
+    f->Close(); return false;
+  }
+  double tot = 0;
+  for ( int c = 0; c < 4; c++ ){ mFireProb[c] = fire->GetBinContent(c + 1); tot += mFireProb[c]; }
+  if ( !(tot > 0) ){ f->Close(); return false; }
+  for ( int c = 0; c < 4; c++ ) mFireProb[c] /= tot;
+  // the response the residuals were measured about
+  TVectorD* rsp = (TVectorD*)f->Get("response");
+  if ( !rsp || rsp->GetNrows() != 4 ){
+    LOG_ERROR << "StSimpleReaderMaker::SetVertexSmear: " << file << " has no response vector (old file?)" << endm;
+    f->Close(); return false;
+  }
+  mRespA[0] = (*rsp)[0]; mRespS[0] = (*rsp)[1]; mRespA[1] = (*rsp)[2]; mRespS[1] = (*rsp)[3];
+  mVtxRes[0] = (TH1*)re->Clone("vtxres_epd"); mVtxRes[0]->SetDirectory(0);
+  mVtxRes[1] = (TH1*)rb->Clone("vtxres_bbc"); mVtxRes[1]->SetDirectory(0);
+  f->Close();
+  delete mVtxRng;
+  mVtxRng = new TRandom3(seed);
+  mVertexSmear = true;
+  LOG_INFO << "StSimpleReaderMaker: vertex emulation from " << file << " (fire both/EPD/BBC/none "
+           << mFireProb[0] << "/" << mFireProb[1] << "/" << mFireProb[2] << "/" << mFireProb[3]
+           << "; response EPD " << mRespA[0] << " + " << mRespS[0] << " z, BBC " << mRespA[1] << " + " << mRespS[1] << " z; seed " << seed << ")" << endm;
+  return true;
 }
 
 Int_t StSimpleReaderMaker::Finish( )

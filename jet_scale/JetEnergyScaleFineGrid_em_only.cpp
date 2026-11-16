@@ -390,6 +390,15 @@ int main(int argc, char** argv)
         tree->SetBranchAddress("match_truth_idx", &match_truth_idx);
         tree->SetBranchAddress("match_reco_idx", &match_reco_idx);
 
+        // event vertex cut (JetParameters.h pass_vertex_cut, Sean 2026-11-16), as the
+        // analysis applies it, on the emulated reco vertex; trees from before the
+        // vertex emulation (no mc_vz branch) are not cut
+        Float_t ev_vz = -9999; Int_t ev_vz_src = 0;
+        const bool vertex_cut = tree->GetBranch("mc_vz") && tree->GetBranch("event_vertex_z") && tree->GetBranch("event_vertex_source");
+        if (vertex_cut) { tree->SetBranchStatus("event_vertex_z", 1); tree->SetBranchStatus("event_vertex_source", 1);
+                          tree->SetBranchAddress("event_vertex_z", &ev_vz); tree->SetBranchAddress("event_vertex_source", &ev_vz_src); }
+        else if (fidx == 0) std::cerr << "WARNING: no vertex emulation branches (mc_vz): no vertex cut" << std::endl;
+
         std::vector<float> *reco_ue_E = nullptr, *truth_ue_E = nullptr;
         if (subtract_ue)
         {
@@ -408,6 +417,7 @@ int main(int argc, char** argv)
         for (Long64_t ev = 0; ev < n_events; ev++)
         {
             tree->GetEntry(ev);
+            if (vertex_cut && !pass_vertex_cut(ev_vz, ev_vz_src)) continue;
 
             for (size_t m = 0; m < match_reco_idx->size(); m++)
             {

@@ -4,6 +4,8 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <cstdlib>
+#include <string>
 #include "fastjet/PseudoJet.hh"
 #include "fastjet/ClusterSequence.hh"
 #include "fastjet/JetDefinition.hh"
@@ -189,6 +191,64 @@ inline void computeEtaPhi(double x, double y, double &eta, double &phi)
 
     eta = std::asinh(pz / std::sqrt(px*px + py*py));
     phi = std::atan2(py, px);
+}
+
+// Run 22 beamline (Sean 2026-11-16): the TPC primary-vertex beamline,
+// event-weighted over 40 runs (P25ib st_physics; vertex_tpc_v1/code/
+// beamline_runs.C): x = kBeamX0 + kBeamDxDz z, y = kBeamY0 + kBeamDyDz z (cm).
+// The EPD / BBC TAC give only z; the event vertex is (beamX(z), beamY(z), z),
+// and with no vertex the nominal IP (beamX, beamY at z = -7.68 cm, the TPC
+// beam-spot mean; StSimpleReaderMaker::mNominalVz). The simulation generates
+// its vertices on the same beamline (starsim SetVertex / SetSlope).
+static const double kBeamX0 = -0.061, kBeamY0 = -0.203;
+static const double kBeamDxDz = -1.04e-3, kBeamDyDz = 1.95e-4;
+inline double beamX(double vz) { return kBeamX0 + kBeamDxDz * vz; }
+inline double beamY(double vz) { return kBeamY0 + kBeamDyDz * vz; }
+
+// The same seen from a vertex (vx, vy, vz) (cm): the direction of the
+// detector point (x, y, z_proj) from the vertex
+inline void computeEtaPhi(double x, double y, double vx, double vy, double vz, double &eta, double &phi)
+{
+    const double dx = x - vx, dy = y - vy, dz = z_proj - vz;
+    eta = std::asinh(dz / std::sqrt(dx*dx + dy*dy));
+    phi = std::atan2(dy, dx);
+}
+// ... from a vertex at z = vz on the z axis (x = y = 0)
+inline void computeEtaPhi(double x, double y, double vz, double &eta, double &phi)
+{
+    computeEtaPhi(x, y, 0.0, 0.0, vz, eta, phi);
+}
+
+// Event vertex in reco jet kinematics (2026-11-16): on by default (Sean,
+// 2026-11-16); FCS_JET_VERTEX=0 in the environment turns it off (origin-based
+// kinematics, as before). RecoJets / JetMatcher take reco point directions from the
+// event vertex (beamX(z), beamY(z), z) with z = event_vertex_z (the nominal z
+// when no method has one) and project jets back to the detector plane from
+// it, so reco_x / reco_y stay detector positions; truth uses the generated
+// vertex (mc_vx, mc_vy, mc_vz). Note: the JES map in use (jesmap_pixring_v1)
+// was built with origin-based reco jets; the next JES production uses this.
+inline bool useJetVertex()
+{
+    const char* v = std::getenv("FCS_JET_VERTEX");
+    return !(v && std::string(v) == "0");
+}
+
+// Event vertex cut (Sean 2026-11-16): |event_vertex_z| < kVertexZCut on the
+// chosen vertex as measured (StSimpleReaderMaker: EPD, else BBC TAC, else
+// the nominal z, which passes; no rescaling to the TPC scale, the methods
+// read ~0.8 z_TPC, so 100 cm is ~125 cm true). 100 cm keeps 91.2% of st_fwd
+// FCS-triggered events (runs from 23050000), close to the share FMS's
+// |vz| < 80 cm kept in Run 15 (93.4%: 76% of their events had no vertex and
+// sat at z = 0). The simulation emulates the same response, so the cut acts
+// alike in both.
+// Trees from before the 2026-11-16 vertex code (no epd_source / mc_vz branch:
+// event_vertex_source meant TPC / VPD / old BBC then) are not cut; callers
+// apply it only to trees with an epd_source (data) or mc_vz (simulation) branch.
+static const double kVertexZCut = 100.0;
+inline bool pass_vertex_cut(float event_vertex_z, int event_vertex_source)
+{
+    if (event_vertex_source <= 0) return true; // not set: simulation without the emulation
+    return std::fabs(event_vertex_z) < kVertexZCut;
 }
 
 inline double computeTauN(const std::vector<fastjet::PseudoJet> &constituents, int N, double R)

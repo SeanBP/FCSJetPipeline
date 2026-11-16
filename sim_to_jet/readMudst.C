@@ -109,6 +109,13 @@ void readMudst(Int_t nEvents, Int_t nFiles, TString InputFileList, TString Outpu
   // Comma-separated FCS trigger flag names: only events that fired one are written (empty = all)
   AnalysisCode -> SetTriggerFilter(trigFilter.Data()) ;
   AnalysisCode -> SetFcsFromStEvent() ; // the reclustered clusters and points
+  // Vertex emulation (2026-11-16): with vertex_smear.root in the job
+  // directory (fire probabilities and method - TPC residuals measured in
+  // data, vertex_tpc_v1), emulate the EPD and BBC TAC vertices from the
+  // truth vertex with the measured response (the file's "response") and apply the data's vertex choice.
+  // The seed follows the job name so jobs draw independently.
+  if ( !gSystem->AccessPathName("vertex_smear.root") )
+    AnalysisCode -> SetVertexSmear("vertex_smear.root", JobIdName.Hash() | 1u) ;
 
   Double_t sigmaGen; Int_t nTried;
   if ( ReadMCJobStats(sigmaGen, nTried) )

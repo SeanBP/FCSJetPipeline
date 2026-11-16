@@ -20,6 +20,14 @@
 // Truth (TruthWeightedWedges): truth photons with full azimuth; the areas are
 // exact, so the weights depend only on eta - eta_jet and are computed once.
 //
+// Event vertex (2026-11-16): the reco geometry (tile and sub-tile directions
+// and eta-phi areas) is seen from the event vertex (vx, vy, vz)
+// (UeGeometry::Build(vz, vx, vy)); UnderlyingEvent.cpp builds it at the vertex
+// the reco jet kinematics used (reco_v[xyz]_used, FCS_JET_VERTEX; the
+// beamline at z), 0 = the origin as before.
+// Truth needs no vertex: particle directions are momenta, which already point
+// from the true vertex, and the truth areas are exact in eta-phi.
+//
 // Chosen on FMS Run 15 and FCS simulation, 2026-10 (UnderlyingEventPlayground/
 // in_event): the azimuthal scans put the jet's edge at about 2R and the
 // recoil rise from about 120-130 deg; on the FMS the FCS-like wedges sit within
@@ -81,8 +89,11 @@ struct UeGeometry
     std::vector<Sub> sub;  // kUeSub^2 per tile
     int nx = 0, ny = 0;
     double dx = 0, dy = 0;
-    void Build()
+    double vz = 0, vx = 0, vy = 0; // the vertex the directions and areas are seen from (cm)
+    void Build(double vertex_z = 0, double vertex_x = 0, double vertex_y = 0)
     {
+        vz = vertex_z; vx = vertex_x; vy = vertex_y;
+        const double dz = z_proj - vz;
         const FiducialRect &r = kFiducialRectEcal;
         nx = (int)std::ceil((r.x_outer - r.x_inner) / kUeTile); ny = (int)std::ceil((r.y_max - r.y_min) / kUeTile);
         dx = (r.x_outer - r.x_inner) / nx; dy = (r.y_max - r.y_min) / ny;
@@ -93,16 +104,19 @@ struct UeGeometry
                 {
                     const double s = side ? 1 : -1;
                     double eta, phi;
-                    computeEtaPhi(s * (r.x_inner + (i + 0.5) * dx), r.y_min + (j + 0.5) * dy, eta, phi);
+                    computeEtaPhi(s * (r.x_inner + (i + 0.5) * dx), r.y_min + (j + 0.5) * dy, vx, vy, vz, eta, phi);
                     tiles.push_back(Tile{(float)eta, (float)phi});
                     for (int a = 0; a < kUeSub; a++)
                         for (int b = 0; b < kUeSub; b++)
                         {
                             const double px = s * (r.x_inner + (i + (a + 0.5) / kUeSub) * dx), py = r.y_min + (j + (b + 0.5) / kUeSub) * dy;
                             double pe, pp;
-                            computeEtaPhi(px, py, pe, pp);
-                            const double r2 = px * px + py * py;
-                            sub.push_back(Sub{(float)pe, (float)pp, (float)(dx * dy / (kUeSub * kUeSub) * z_proj / (r2 * std::sqrt(r2 + z_proj * z_proj)))});
+                            computeEtaPhi(px, py, vx, vy, vz, pe, pp);
+                            // eta-phi area of a detector-plane element seen from the vertex:
+                            // d(eta) d(phi) = dx dy dz / (r^2 sqrt(r^2 + dz^2)), dz = z_proj - vz,
+                            // r the transverse distance from the vertex
+                            const double r2 = (px - vx) * (px - vx) + (py - vy) * (py - vy);
+                            sub.push_back(Sub{(float)pe, (float)pp, (float)(dx * dy / (kUeSub * kUeSub) * dz / (r2 * std::sqrt(r2 + dz * dz)))});
                         }
                 }
     }

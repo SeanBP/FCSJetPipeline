@@ -73,6 +73,15 @@ inline bool LoadJetPairs(const std::vector<std::string> &files, std::vector<JetP
         const char *used[] = {"reco_E", "reco_pt", "reco_x", "reco_y", "reco_eta", "reco_phi", "reco_nphotons", "truth_E", "truth_pt",
                               "truth_eta", "truth_phi", "truth_nphotons", "match_reco_idx", "match_truth_idx", "fcsEM0", "fcsEM1", "fcsEM2"};
         for (int k = 0; k < 17; k++) t->SetBranchStatus(used[k], 1);
+
+        // event vertex cut (JetParameters.h pass_vertex_cut, Sean 2026-11-16), as the
+        // analysis applies it, on the emulated reco vertex; trees from before the
+        // vertex emulation (no mc_vz branch) are not cut
+        Float_t ev_vz = -9999; Int_t ev_vz_src = 0;
+        const bool vertex_cut = t->GetBranch("mc_vz") && t->GetBranch("event_vertex_z") && t->GetBranch("event_vertex_source");
+        if (vertex_cut) { t->SetBranchStatus("event_vertex_z", 1); t->SetBranchStatus("event_vertex_source", 1);
+                          t->SetBranchAddress("event_vertex_z", &ev_vz); t->SetBranchAddress("event_vertex_source", &ev_vz_src); }
+        else if (fidx == 0) std::cerr << "WARNING: no vertex emulation branches (mc_vz): no vertex cut" << std::endl;
         t->SetBranchAddress("reco_E", &rE);
         t->SetBranchAddress("reco_pt", &rpt);
         t->SetBranchAddress("reco_x", &rx);
@@ -103,6 +112,7 @@ inline bool LoadJetPairs(const std::vector<std::string> &files, std::vector<JetP
         for (Long64_t ev = 0; ev < t->GetEntries(); ev++)
         {
             t->GetEntry(ev);
+            if (vertex_cut && !pass_vertex_cut(ev_vz, ev_vz_src)) continue;
             std::vector<std::pair<int, int> > m;
             for (size_t k = 0; k < mr->size(); k++) m.push_back(std::make_pair(mr->at(k), mt->at(k)));
             for (size_t k = 0; k < m.size(); k++)

@@ -11,6 +11,8 @@ void runMudst(char* file="st_fwd_23080044_raw_1000019.MuDst.root",
     gSystem->Load("StFcsPointMaker");
     gSystem -> Load("StSimpleReaderMaker");
     gSystem -> Load("StEpdUtil");
+    gSystem -> Load("StEpdDbMaker");
+    gSystem -> Load("StEpdHitMaker");
     gSystem -> Load("StSpinDbMaker");
     gMessMgr->SetLimit("I", 0);
     gMessMgr->SetLimit("Q", 0);
@@ -60,6 +62,14 @@ void runMudst(char* file="st_fwd_23080044_raw_1000019.MuDst.root",
     // above the worst-case Run 22 pedestal noise, with margin) are not
     // clustered; seeds at 1 GeV (P24ia).
     StFcsMuToEventMaker* fcsMuToEvent = new StFcsMuToEventMaker();
+
+    // EPD hits for the vertex (StSimpleReaderMaker): where the MuDst has none
+    // (P24ia st_fwd before ~day 50, 2026-11-16), rebuild them from the
+    // trigger data's QT data with the EPD DB into the StEvent made above;
+    // where it has hits, StEpdHitMaker leaves them alone
+    StEpdDbMaker* epdDbMkr = new StEpdDbMaker("epdDb");
+    StEpdHitMaker* epdHitMkr = new StEpdHitMaker();
+    epdHitMkr->setReadMuDst();
     StFcsClusterMaker* fcsClu = new StFcsClusterMaker();
     fcsClu->setTowerEThreSeed(1.0, 1.0);
     fcsClu->setTowerEThreshold(0.4, 0.01);
@@ -73,6 +83,8 @@ void runMudst(char* file="st_fwd_23080044_raw_1000019.MuDst.root",
     AnalysisCode -> SetSpinDb(spinDbMkr) ;
     AnalysisCode -> SetTriggerFilter(trigFilter) ;
     AnalysisCode -> SetFcsFromStEvent() ; // the reclustered clusters and points
+    // Event vertex: EPD, else BBC TAC, as measured, else the nominal z (see
+    // the StSimpleReaderMaker header)
 
     // HCAL gain correction; a placeholder of 1.0 until per-tower corrections exist
     AnalysisCode -> SetHcalRetroactiveGainCorr("hcal_gain_corrections") ;
