@@ -14,8 +14,14 @@
 //     amplitude and background), so sparse bins stay stable;
 //   - f = Gaussian integral / counts in 0-0.2 GeV. It is the same for both
 //     beams, since they share the candidates.
-// Error: sqrt(dA_sig^2 + (1 - f)^2 dA_sb^2) / f (statistical; f's error and the
-// small correlation of candidates sharing a jet are not included).
+// Error: sqrt(dA_sig^2 + (1 - f)^2 dA_sb^2) / f (statistical; the small
+// correlation of candidates sharing a jet is not included).
+// Systematic from f (2026-11-17, as the FMS: the fit uncertainty of the signal
+// fraction propagated, PRD 103 Sec. III.B, up to 5.8% of A_N there):
+//   df = f x (error / value of the per-bin Gaussian amplitude; mean and width
+//   fixed), sys_f = |A_sb - A_pi0| df / f   (= |dA_pi0/df| df).
+// Written as the table's last two columns (df, sys_f) and as graphs
+// gr_AN_<beam>_<row>_pi0_sysf / gr_AN_<row>_pi0_sysf (same points, errors = sys_f).
 // Writes <out>.root (gr_AN_<beam>_<row>_pi0, gr_AN_<row>_pi0), <out>.txt and
 // <out>_mass.png (the fits per x_F bin, the window boundary marked).
 // Usage (compiled, ACLiC; ROOT 5's CINT cannot run it):
@@ -90,7 +96,7 @@ void pi0_bgsub(const char *sig_root, const char *sb_root, const char *out, const
     printf("pi0_bgsub: %s, row %s: global fit mean %.4f GeV, sigma %.4f GeV, chi2/ndf %.1f/%d\n", label, row, mu, sg, fg->GetChisquare(), fg->GetNDF());
     // per x_F bin: f
     const int nx = m2->GetNbinsX();
-    std::vector<double> fsig(nx + 1, -1);
+    std::vector<double> fsig(nx + 1, -1), dfsig(nx + 1, 0);
     std::vector<TH1D *> hb(nx + 1, (TH1D *)0);
     std::vector<TF1 *> fb(nx + 1, (TF1 *)0);
     for (int i = 1; i <= nx; i++)
@@ -107,6 +113,7 @@ void pi0_bgsub(const char *sig_root, const char *sb_root, const char *out, const
         g.SetParameters(f->GetParameter(0), mu, sg);
         const double s = g.Integral(0, kSigHi) / h->GetBinWidth(1);
         fsig[i] = TMath::Max(0.0, TMath::Min(1.0, s / nsig));
+        if (f->GetParameter(0) > 0) dfsig[i] = fsig[i] * f->GetParError(0) / f->GetParameter(0);
         hb[i] = h; fb[i] = f;
     }
     // combine
@@ -114,16 +121,20 @@ void pi0_bgsub(const char *sig_root, const char *sb_root, const char *out, const
     FILE *tab = fopen(tn.Data(), "w");
     fprintf(tab, "# background-subtracted pi0 A_N: (A_sig - (1-f) A_sb) / f; %s; row %s; sig %s, sb %s\n", label, row, sig_root, sb_root);
     fprintf(tab, "# global mass fit: mean %.4f sigma %.4f GeV\n", mu, sg);
-    fprintf(tab, "# beam xF_lo xF_hi <xF> A_pi0 stat f A_sig stat_sig A_sb stat_sb n_sig n_sb\n");
+    fprintf(tab, "# beam xF_lo xF_hi <xF> A_pi0 stat f A_sig stat_sig A_sb stat_sb n_sig n_sb df sys_f\n");
     TFile fo(TString(out) + ".root", "RECREATE");
-    TGraphAsymmErrors *gboth = new TGraphAsymmErrors();
+    TGraphAsymmErrors *gboth = new TGraphAsymmErrors(), *gbothf = new TGraphAsymmErrors();
+    gbothf->SetName(Form("gr_AN_%s_pi0_sysf", row));
+    gbothf->SetTitle(Form("%s (errors: signal-fraction systematic);x_{F};A_{N}", label));
     gboth->SetName(Form("gr_AN_%s_pi0", row));
     gboth->SetTitle(Form("%s;x_{F};A_{N}", label));
     const char *beams[2] = {"blue", "yellow"};
     printf("  %-6s %13s %8s %18s %6s %18s %18s\n", "beam", "x_F bin", "<x_F>", "A_pi0 +- stat", "f", "A_sig", "A_sb");
     for (int b = 0; b < 2; b++)
     {
-        TGraphAsymmErrors *g = new TGraphAsymmErrors();
+        TGraphAsymmErrors *g = new TGraphAsymmErrors(), *gf = new TGraphAsymmErrors();
+        gf->SetName(Form("gr_AN_%s_%s_pi0_sysf", beams[b], row));
+        gf->SetTitle(Form("%s beam, %s (errors: signal-fraction systematic);x_{F};A_{N}", beams[b], label));
         g->SetName(Form("gr_AN_%s_%s_pi0", beams[b], row));
         g->SetTitle(Form("%s beam, %s;x_{F};A_{N}", beams[b], label));
         for (std::map<std::pair<std::string, int>, Row>::iterator it = ts.begin(); it != ts.end(); ++it)
@@ -143,13 +154,19 @@ void pi0_bgsub(const char *sig_root, const char *sb_root, const char *out, const
             const double exl = b == 0 ? s.xf - s.lo : s.xf - s.lo, exh = s.hi - s.xf;
             g->SetPoint(g->GetN(), s.xf, an); g->SetPointError(g->GetN() - 1, exl, exh, dan, dan);
             gboth->SetPoint(gboth->GetN(), s.xf, an); gboth->SetPointError(gboth->GetN() - 1, exl, exh, dan, dan);
-            fprintf(tab, "%s %.3f %.3f %.4f %+.6f %.6f %.4f %+.6f %.6f %+.6f %.6f %.0f %.0f\n", beams[b], s.lo, s.hi, s.xf, an, dan, f, s.an, s.err, k.an, k.err, s.n, k.n);
+            const double df = dfsig[ib], sysf = fabs(k.an - an) * df / f;
+            gf->SetPoint(gf->GetN(), s.xf, an); gf->SetPointError(gf->GetN() - 1, exl, exh, sysf, sysf);
+            gbothf->SetPoint(gbothf->GetN(), s.xf, an); gbothf->SetPointError(gbothf->GetN() - 1, exl, exh, sysf, sysf);
+            fprintf(tab, "%s %.3f %.3f %.4f %+.6f %.6f %.4f %+.6f %.6f %+.6f %.6f %.0f %.0f %.4f %.6f\n", beams[b], s.lo, s.hi, s.xf, an, dan, f, s.an, s.err, k.an, k.err, s.n, k.n, df, sysf);
             printf("  %-6s %6.3f-%6.3f %8.4f %+9.5f +- %.5f %6.3f %+9.5f +- %.5f %+9.5f +- %.5f\n", beams[b], s.lo, s.hi, s.xf, an, dan, f, s.an, s.err, k.an, k.err);
         }
         g->Write();
+        gf->Write();
     }
     gboth->Sort();
     gboth->Write();
+    gbothf->Sort();
+    gbothf->Write();
     TNamed("pi0_bgsub", Form("%s; row %s; global fit mean %.4f sigma %.4f GeV", label, row, mu, sg)).Write();
     fo.Close();
     fclose(tab);

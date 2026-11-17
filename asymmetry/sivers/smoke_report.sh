@@ -47,6 +47,7 @@
 # SMOKE_PLOTS_ONLY=1: only the error projection and the A_N plots, from the
 # AnAsymmetry outputs already in the report folder. For the plots alone (no
 # projection, no pass folder needed): replot_report.sh <report dir>.
+# AN_XF_EDGES=<e0,e1,...>: variable x_F bin edges for every A_N (AnAsymmetry -x).
 # SMOKE_BIND=<dir>: also bind <dir> into the container (an outdir on a
 # condor job's scratch disk; see report_job.sh).
 
@@ -113,6 +114,12 @@ if [ -n "${MERGED}" ]; then
     ANIN="-M masked.root"
 else
     ANIN="${QOPT} -r yields.list $(src run22_polarization.txt)"
+fi
+# AN_XF_EDGES="e0,e1,...": variable x_F bins for every A_N below (AnAsymmetry -x,
+# edges on the stored 0.025 grid); unset: the uniform 0.05 bins
+if [ -n "${AN_XF_EDGES}" ]; then
+    ANIN="-x ${AN_XF_EDGES} ${ANIN}"
+    echo "x_F bin edges: ${AN_XF_EDGES}"
 fi
 container "./build/AnAsymmetry ${ANIN} an.root" > "${REP}/an_asymmetry.log"
 grep -A20 "^all, all photon classes" "${REP}/an_asymmetry.log" || true

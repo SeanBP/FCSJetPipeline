@@ -138,8 +138,9 @@ int main(int argc, char **argv)
     if (argc < 3) { std::cerr << "Usage: " << argv[0] << " <jet file list> <outdir> [runs per point = 5] [sim:<run>]" << std::endl; return 1; }
     // EM HCal-veto margin (AnConfig.h kEmVetoMargin); env TRG_VETO_MARGIN overrides it, to test
     // whether a plateau loss comes from the veto
-    const double veto_margin = getenv("TRG_VETO_MARGIN") ? std::atof(getenv("TRG_VETO_MARGIN")) : kEmVetoMargin;
-    if (veto_margin != kEmVetoMargin) printf("trg_eff_scan: EM veto margin %.2f (TRG_VETO_MARGIN)\n", veto_margin);
+    // per period since 2026-11-16 (AnConfig.h EmVetoMargin(run)); veto_margin > 0 overrides it for every run
+    const double veto_margin = getenv("TRG_VETO_MARGIN") ? std::atof(getenv("TRG_VETO_MARGIN")) : -1;
+    if (veto_margin > 0) printf("trg_eff_scan: EM veto margin %.2f for every run (TRG_VETO_MARGIN)\n", veto_margin);
     int sim_run = 0;
     if (argc > 4 && std::sscanf(argv[4], "sim:%d", &sim_run) != 1) { std::cerr << "ERROR: 4th argument must be sim:<run>" << std::endl; return 1; }
     const int group = argc > 3 ? std::atoi(argv[3]) : 5;
@@ -209,7 +210,7 @@ int main(int argc, char **argv)
                 if ((*em)[j] > aem && (*hmax)[j] >= 0) { aem = (*em)[j]; aveto = 4 * (*hmax)[j] / (*em)[j]; }
             for (size_t j = 0; j < em->size(); j++)
             {
-                if ((*em)[j] > 0 && (*hmax)[j] >= 0 && (*hmax)[j] * 4 * veto_margin <= (*em)[j] && (*em)[j] > lem) lem = (*em)[j];
+                if ((*em)[j] > 0 && (*hmax)[j] >= 0 && (*hmax)[j] * 4 * (veto_margin > 0 ? veto_margin : EmVetoMargin(run)) <= (*em)[j] && (*em)[j] > lem) lem = (*em)[j];
                 if ((*jp)[j] > ljp) { ljp = (*jp)[j]; lpatch = (*patch)[j]; }
             }
             const int region = lpatch < 0 ? -1 : (lpatch % 5 == 0 ? 0 : lpatch % 5 <= 2 ? 1 : 2);  // A, BC, DE
@@ -233,7 +234,7 @@ int main(int argc, char **argv)
                     if (tr < 3)
                     {
                         if (!(fem[tr] || fem_tpc[tr])) break;
-                        if ((*em)[j] > 0 && (*hmax)[j] >= 0 && (*hmax)[j] * 4 * veto_margin <= (*em)[j]) v = (*em)[j];
+                        if ((*em)[j] > 0 && (*hmax)[j] >= 0 && (*hmax)[j] * 4 * (veto_margin > 0 ? veto_margin : EmVetoMargin(run)) <= (*em)[j]) v = (*em)[j];
                     }
                     else if (tr == 5)
                     {

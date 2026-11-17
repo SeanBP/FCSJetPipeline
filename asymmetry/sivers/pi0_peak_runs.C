@@ -12,7 +12,8 @@
 //   LowStat   fewer than kMinCand candidates in 0-0.3 GeV, or the fit failed
 //             (mean outside 0.08-0.2, sigma outside 0.008-0.08)
 //   PeakShift |mean - median| > 3 sqrt(err^2 + spread^2), spread = the robust
-//             run-to-run scatter (1.4826 x MAD of the good-statistics runs)
+//             run-to-run scatter (1.4826 x MAD of the good-statistics runs);
+//             median and scatter of the run's own gain period (2026-11-17)
 //   Wide      sigma > median sigma + 3 x its robust scatter
 // Bad-run list (Sean 2026-11-16): <out>_bad_runs.txt, in D. Kapukchyan's
 // format, holds the PeakShift / Wide runs. AnAsymmetry -Q masks them on top of
@@ -30,6 +31,14 @@
 //                               changes (median raw peak of its good runs)
 //   <out>_scale_per_run.txt     each good, unflagged run its own factor; the
 //                               others the global one
+// Stability (Sean 2026-11-17): the pi0 energy scale is meant to be fixed by
+// the ECal calibration; its run-to-run variation is the systematic, unless
+// the peak jumps, in which case per-period factors may be applied. Per period
+// between the gain changes: the median peak of the good runs, its error
+// 1.2533 x scatter / sqrt(n), and each step to the next period in % and in
+// units of its error. Written to <out>_periods.txt, printed, and drawn as
+// period medians on the plot. Systematic if no jump: the robust run-to-run
+// scatter (relative), printed as "scale systematic".
 // Input: a list of per-run yield files, or an AnMerge output (.root; its
 // pi0_runs spectra, the merged report flow).
 // Usage (compiled, ACLiC): root -b -q 'pi0_peak_runs.C+("yields.list", "pi0_peak_runs")'
@@ -178,14 +187,31 @@ void pi0_peak_runs(const char *yield_list, const char *out)
     }
     const double spread = 1.4826 * Median(dm), spreads = 1.4826 * Median(ds);
     const double spreadr = 1.4826 * Median(dr), spreadrs = 1.4826 * Median(drs);
+    // PeakShift against the run's own gain period (median and robust scatter of
+    // the raw peak there; 2026-11-17), so a step between periods does not flag
+    // a whole period; the run-wide values when a period has fewer than 5 runs
+    double pmedr[3], pspr[3];
+    {
+        vector<double> pvr[3];
+        for (size_t i = 0; i < rp.size(); i++) if (rp[i].ok) pvr[PeriodOf(rp[i].run)].push_back(rp[i].mean / rp[i].scale);
+        for (int k = 0; k < 3; k++)
+        {
+            if (pvr[k].size() < 5) { pmedr[k] = medr; pspr[k] = spreadr; continue; }
+            pmedr[k] = Median(pvr[k]);
+            vector<double> dv;
+            for (size_t i = 0; i < pvr[k].size(); i++) dv.push_back(fabs(pvr[k][i] - pmedr[k]));
+            pspr[k] = 1.4826 * Median(dv);
+        }
+    }
     int nshift = 0, nwide = 0, nlow = 0;
     for (size_t i = 0; i < rp.size(); i++)
     {
         RunPeak &r = rp[i];
         if (!r.ok) { nlow++; continue; }
         const double rm = r.mean / r.scale, re = r.emean / r.scale, rs = r.sig / r.scale;
+        const int pk = PeriodOf(r.run);
         string fl;
-        if (vr.size() >= 5 && fabs(rm - medr) > 3 * sqrt(re * re + spreadr * spreadr)) { fl = "PeakShift"; nshift++; }
+        if (vr.size() >= 5 && fabs(rm - pmedr[pk]) > 3 * sqrt(re * re + pspr[pk] * pspr[pk])) { fl = "PeakShift"; nshift++; }
         if (vrs.size() >= 5 && rs > medrs + 3 * spreadrs) { fl += fl.empty() ? "Wide" : ",Wide"; nwide++; }
         if (!fl.empty()) r.flag = fl;
     }
@@ -249,6 +275,44 @@ void pi0_peak_runs(const char *yield_list, const char *out)
     }
     printf("pi0_peak_runs: %zu runs, %zu with a fit; median peak %.4f GeV (%.4f x 0.135), run-to-run scatter %.1f%%; flagged: %d PeakShift, %d Wide, %d LowStat\n",
            rp.size(), vm.size(), med, med / kMpi, med > 0 ? 100 * spread / med : 0, nshift, nwide, nlow);
+    // stability across the gain periods: median peak of the good runs per period, steps between them
+    double pmed[3] = {0, 0, 0}, perr[3] = {0, 0, 0};
+    size_t pn[3] = {0, 0, 0};
+    {
+        vector<double> pv[3];
+        for (size_t i = 0; i < rp.size(); i++)
+            if (rp[i].ok && rp[i].flag == "-") pv[PeriodOf(rp[i].run)].push_back(rp[i].mean);
+        FILE *pt = fopen(Form("%s_periods.txt", out), "w");
+        fprintf(pt, "# pi0 peak per gain period (good, unflagged runs; fitted peak on the scale the yields used)\n");
+        fprintf(pt, "# scale systematic if no jump: robust run-to-run scatter %.2f%% of the median peak\n", med > 0 ? 100 * spread / med : 0);
+        fprintf(pt, "# period first_run runs median_GeV err_GeV median/0.135 scatter_%% step_to_next_%% step/err\n");
+        const int first[3] = {0, 23027047, 23066056};
+        for (int k = 0; k < 3; k++)
+        {
+            pn[k] = pv[k].size();
+            if (pn[k] == 0) continue;
+            pmed[k] = Median(pv[k]);
+            vector<double> dv;
+            for (size_t i = 0; i < pv[k].size(); i++) dv.push_back(fabs(pv[k][i] - pmed[k]));
+            const double sc = 1.4826 * Median(dv);
+            perr[k] = 1.2533 * sc / sqrt((double)pn[k]);
+            fprintf(pt, "%d %d %zu %.5f %.5f %.4f %.2f", k, first[k], pn[k], pmed[k], perr[k], pmed[k] / kMpi, 100 * sc / pmed[k]);
+            if (k < 2 && !pv[k + 1].empty())
+            {
+                const double m1 = Median(pv[k + 1]);
+                vector<double> d1;
+                for (size_t i = 0; i < pv[k + 1].size(); i++) d1.push_back(fabs(pv[k + 1][i] - m1));
+                const double e1 = 1.2533 * 1.4826 * Median(d1) / sqrt((double)pv[k + 1].size());
+                const double st = m1 - pmed[k], se = sqrt(perr[k] * perr[k] + e1 * e1);
+                fprintf(pt, " %+.2f %+.1f\n", 100 * st / pmed[k], se > 0 ? st / se : 0);
+                printf("pi0_peak_runs: step period %d -> %d: %+.2f%% (%+.1f sigma); run-to-run scatter %.2f%%\n", k, k + 1, 100 * st / pmed[k], se > 0 ? st / se : 0,
+                       med > 0 ? 100 * spread / med : 0);
+            }
+            else fprintf(pt, " - -\n");
+        }
+        fclose(pt);
+        printf("pi0_peak_runs: scale systematic if no jump (robust run-to-run scatter): %.2f%%; per period: %s_periods.txt\n", med > 0 ? 100 * spread / med : 0, out);
+    }
     // plot: peak / 0.135 and sigma vs day; good runs blue, flagged red
     TGraphErrors *g[2][2];
     for (int q = 0; q < 2; q++) for (int k = 0; k < 2; k++) g[q][k] = new TGraphErrors();
@@ -288,18 +352,30 @@ void pi0_peak_runs(const char *yield_list, const char *out)
             const double d = DayOf(gc[k]);
             TLine *lg = new TLine(d, ylo, d, yhi); lg->SetLineColor(kGreen + 2); lg->SetLineStyle(7); lg->SetLineWidth(2); lg->Draw();
         }
+        if (q == 0)
+        {
+            const double pd[4] = {xlo, DayOf(23027047), DayOf(23066056), xhi};
+            for (int k = 0; k < 3; k++)
+                if (pn[k])
+                {
+                    TLine *pl = new TLine(pd[k], pmed[k] / kMpi, pd[k + 1], pmed[k] / kMpi);
+                    pl->SetLineColor(kOrange + 7); pl->SetLineWidth(3); pl->Draw();
+                }
+        }
         g[q][0]->SetMarkerStyle(20); g[q][0]->SetMarkerSize(0.8); g[q][0]->SetMarkerColor(kAzure + 2); g[q][0]->SetLineColor(kAzure + 2);
         g[q][1]->SetMarkerStyle(21); g[q][1]->SetMarkerSize(0.9); g[q][1]->SetMarkerColor(kRed + 1); g[q][1]->SetLineColor(kRed + 1);
         if (g[q][0]->GetN()) g[q][0]->Draw("P");
         if (g[q][1]->GetN()) g[q][1]->Draw("P");
         if (q == 0)
         {
-            TLegend *lg = new TLegend(0.09, 0.80, 0.98, 0.89); lg->SetNColumns(4); lg->SetTextFont(42); lg->SetTextSize(0.042); lg->SetBorderSize(1); lg->SetFillColor(kWhite);
+            TLegend *lg = new TLegend(0.09, 0.80, 0.98, 0.89); lg->SetNColumns(5); lg->SetTextFont(42); lg->SetTextSize(0.042); lg->SetBorderSize(1); lg->SetFillColor(kWhite);
             lg->AddEntry(g[0][0], "run", "p");
             lg->AddEntry(g[0][1], "flagged run", "p");
             lg->AddEntry(lm, Form("median %.3f (#pm3%% band)", cen[0]), "l");
             TLine *dum = new TLine(); dum->SetLineColor(kGreen + 2); dum->SetLineStyle(7); dum->SetLineWidth(2);
             lg->AddEntry(dum, "gain changes", "l");
+            TLine *dpm = new TLine(); dpm->SetLineColor(kOrange + 7); dpm->SetLineWidth(3);
+            lg->AddEntry(dpm, "period median", "l");
             lg->Draw();
         }
     }

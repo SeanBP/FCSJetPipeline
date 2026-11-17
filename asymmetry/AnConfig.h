@@ -65,13 +65,39 @@ static const double kEmThresholdGeV[kNEmLevels] = {2.0, 3.5, 5.0};
 // EM slice it reached): the union at factor f is the EM levels plus the JP
 // jets whose EM slice is below f (AnAsymmetry -J). Jets above an EM
 // threshold that fail only the veto go to their own histograms (kVetoSuffix). Default
-// factor 1.3 for both families; see kEmCutFactor / kJpCutFactor. The yields are
+// factor 1.15 for both families (2026-11-17); see kEmCutFactor / kJpCutFactor. The yields are
 // kept per slice of trigger value / threshold (kTrgSliceEdge, suffixes
 // kTrgSliceSuffix), so AnAsymmetry -f can choose another factor afterwards.
 static const int kNTrgLevels = 6;
 static const char *const kTrgLevelName[kNTrgLevels] = {"EM0", "EM1", "EM2", "JP0", "JP1", "JP2"};
+// Nominal thresholds: Akio's register settings (offline-scale reference for the turn-on scans)
 static const double kTrgThresholdGeV[kNTrgLevels] = {2.0, 3.5, 5.0, 4.0, 6.0, 8.0};
 inline bool IsJpLevel(int l) { return l >= kNEmLevels; }
+// Measured thresholds per gain period (Sean 2026-11-16): the offline trigger
+// value at which the hardware bit is set half the time, x50 x nominal, from the
+// 125-run efficiency scan (TriggerPlayground/trg_eff_scan.cpp group fits,
+// trigger_turnon/periods_v1/period_thresholds.txt). The online-to-offline scale
+// changed at the gain changes 23027047 (old 0.7 ET-gain factor removed) and
+// 23066056 (ECal gain halved): before 23027047 every trigger fires at ~0.75 x
+// nominal. The A_N cut is trigger value >= f x TrgThresholdGeV(level, run), so f
+// is the same distance above the real turn-on in every period (the FMS rule).
+// Period shares of the good-run st_fwd events (for the simulation, which draws
+// a period per event): 0.183 / 0.305 / 0.512.
+static const int kNTrgPeriods = 3;
+static const int kTrgPeriodStart[kNTrgPeriods] = {0, 23027047, 23066056};
+static const double kTrgPeriodShare[kNTrgPeriods] = {0.183, 0.305, 0.512};
+static const double kTrgX50[kNTrgPeriods][kNTrgLevels] = {
+    {0.760, 0.751, 0.770, 0.734, 0.725, 0.715},   // before 23027047
+    {1.049, 1.056, 1.053, 1.099, 1.090, 1.063},   // 23027047-23066055
+    {1.007, 1.015, 0.990, 1.081, 1.067, 1.049}};  // from 23066056
+// the gain period of a run; run <= 0 (unknown) counts as the last period
+inline int TrgPeriod(int run)
+{
+    int p = kNTrgPeriods - 1;
+    if (run > 0) for (p = kNTrgPeriods - 1; p > 0 && run < kTrgPeriodStart[p]; p--) {}
+    return p;
+}
+inline double TrgThresholdGeV(int level, int run) { return kTrgX50[TrgPeriod(run)][level] * kTrgThresholdGeV[level]; }
 // Default cut factor per family: 1.3 for both (Sean 2026-11-05, for the 20%
 // pass; EM was 1.15 for a few hours). At 1.3 the turn-on loss
 // (trg_safety.txt), jet-weighted over each gain period, is <= 0.4% for every
@@ -120,8 +146,23 @@ inline const char *SuppBadRunReason(int run)
     for (int i = 0; i < kNSuppBadRuns; i++) if (kSuppBadRuns[i].run == run) return kSuppBadRuns[i].why;
     return 0;
 }
-static const double kEmCutFactor = 1.3;
-static const double kJpCutFactor = 1.3;
+// Default trigger factor 1.15 for EM (threshold and veto together, EmTrgFactor)
+// and JP, each relative to the gain period's measured threshold (turn-on x50 x
+// nominal, TrgThresholdGeV) (Sean 2026-11-17, was 1.3); 1.3 is kept for the
+// trigger systematic (AnAsymmetry -f 1.3; systematics/sys_slices.py).
+// Note: the default-only histograms (h_xFm_*, h_xFP_*, h_xFz*, h_xFpi_*,
+// Collins) are filled at this factor when AnHistograms runs; yield files made
+// before 2026-11-17 have them at 1.3.
+static const double kEmCutFactor = 1.15;
+static const double kJpCutFactor = 1.15;
+// The trigger-systematic factor (Sean 2026-11-17: "fill the 1.3 copy"): the
+// histograms filled only at the default factor (h_xFm_*, h_xFP_*, h_xFPz_*,
+// h_xFpi_* and their sums, Collins) get a second copy at this factor, suffix
+// kSysSuffix ("_jponly" + kSysSuffix for the union's JP part). The main yields
+// need none: they are kept in trigger slices. AnAsymmetry -f 1.3 in the -m,
+// -p, -z, -I modes reads the copies.
+static const double kTrgSysFactor = 1.3;
+static const char *const kSysSuffix = "_f130";
 inline double CutFactor(int level) { return IsJpLevel(level) ? kJpCutFactor : kEmCutFactor; }
 // EM HCal-veto margin: a jet counts only if its largest neighbouring HCal 4x4
 // <= ECal 4x4 / (4 x margin). 1.3 since 2026-11-05 (Sean: same number as the
@@ -131,7 +172,38 @@ inline double CutFactor(int level) { return IsJpLevel(level) ? kJpCutFactor : kE
 // 1.5 would give >= 99.7% everywhere). TriggerPlayground/trg_eff_scan.cpp
 // trg_veto_periods.png. Not stored in slices: changing it reruns AnHistograms
 // on the kept jet trees (submit_rehist.sh).
-static const double kEmVetoMargin = 1.3;
+// Per gain period since 2026-11-16 (Sean), with the per-period thresholds
+// (TrgThresholdGeV): at f = 1.15 x the measured threshold, EM purity (fraction
+// of offline-selected events the hardware fired, trigger_turnon/
+// cut_perf_measured_v1/veto_f115) levels off at ~0.99 from m = 1.1 after
+// 23027047, while before it keeps rising to m = 1.5 (0.976 at 1.3, 0.992 at
+// 1.5): the online HCal/ECal scale differed there. A larger margin past the
+// plateau only loses events (1.1 -> 1.3 costs ~10% of EM0 after 23027047).
+static const double kEmVetoMarginPeriod[kNTrgPeriods] = {1.5, 1.1, 1.1};
+inline double EmVetoMargin(int run) { return kEmVetoMarginPeriod[TrgPeriod(run)]; }
+// EM trigger and HCal veto as ONE cut (Sean 2026-11-17: "always shift those two
+// together in tandem, treating it like a single cut"). The veto has its own
+// measured edge per gain period: the veto ratio r = 4 H_max / E_4x4 at which
+// the EM0 bit falls to 50% (reference events, leading ECal 4x4 >= 1.3 x the
+// measured threshold; TriggerPlayground/trg_veto_edge.cpp, 125-run scan,
+// trigger_turnon/time_scan_v1/trg_veto_edge.txt; widths s = 0.14 / 0.20 / 0.16).
+// A jet's EM trigger factor is
+//   f = min(E_4x4 / measured threshold, veto edge / r)
+// so a cut "f >= 1.15" (or any slice edge) raises the ECal threshold and
+// tightens the veto by the same factor. AnHistograms assigns EM slices from f;
+// EmVetoMargin above is kept only for the TriggerPlayground margin scans.
+// Jets with E_4x4 above 1.15 x threshold but f below it are the "_veto" jets.
+static const double kEmVetoEdge[kNTrgPeriods] = {0.815, 1.116, 1.167};
+inline double EmVetoEdge(int run) { return kEmVetoEdge[TrgPeriod(run)]; }
+// -1 if the jet has no HCal information (hmax < 0) or no ECal sum
+inline double EmTrgFactor(double em_et, double hmax, int level, int run)
+{
+    if (!(em_et > 0) || hmax < 0) return -1;
+    const double fe = em_et / TrgThresholdGeV(level, run);
+    if (hmax == 0) return fe;
+    const double fv = EmVetoEdge(run) * em_et / (4 * hmax);
+    return fe < fv ? fe : fv;
+}
 static const int kNTrgSlices = 4;
 static const double kTrgSliceEdge[kNTrgSlices] = {1.15, 1.30, 1.45, 1.60};  // lower edges; the last runs to infinity
 static const char *const kTrgSliceSuffix[kNTrgSlices] = {"_t115", "_t130", "_t145", "_t160"};
@@ -299,7 +371,13 @@ static const double kPi0EdgeMargin = 0.5 * 5.542;  // half an ECal tower (cm) at
 static const int kNPi0MassBins = 60;                // 5 MeV
 static const double kPi0MassMax = 0.3;
 static const double kPi0SigLo = 0.0, kPi0SigHi = 0.2, kPi0SbLo = 0.2, kPi0SbHi = 0.3;
-static const int kNPi0ZCls = 3;                     // non-isolated, gap, isolated
-static const double kPi0ZEdges[kNPi0ZCls + 1] = {0.0, 0.9, 0.98, 1.0001};
+// z_em bins: the FMS classes (non-isolated < 0.9, isolated > 0.98) plus the
+// edges of the isolation-threshold systematic (Sean 2026-11-17): isolated
+// 0.95 (loose) / 0.99 (tight), non-isolated 0.85 (tight) / 0.95 (loose),
+// chosen in AnAsymmetry -I <cls>=<threshold>. Yield files made before
+// 2026-11-17 have only 0 / 0.9 / 0.98 / 1 (AnAsymmetry refuses other thresholds).
+static const int kNPi0ZCls = 6;
+static const double kPi0ZEdges[kNPi0ZCls + 1] = {0.0, 0.85, 0.9, 0.95, 0.98, 0.99, 1.0001};
+static const double kPi0IsoZ = 0.98, kPi0NonIsoZ = 0.9;   // the FMS (nominal) thresholds
 
 #endif

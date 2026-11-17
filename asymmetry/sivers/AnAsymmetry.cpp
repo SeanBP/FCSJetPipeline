@@ -81,8 +81,8 @@
 // histograms' EM tags, AnConfig.h kEmTagSuffix), each jet once. Yield files keep the triggering jets per slice
 // of trigger value / threshold (_t115, _t130, _t145, _t160); the slices at
 // or above the factor are summed: -fe <f> for the EM levels (default
-// kEmCutFactor = 1.3), -fj <f> for the JP levels (default kJpCutFactor =
-// 1.3), -f <f> both (1.15, 1.3, 1.45 or 1.6). The -J union takes the JP jets
+// kEmCutFactor = 1.15 since 2026-11-17), -fj <f> for the JP levels (default
+// kJpCutFactor = 1.15), -f <f> both (1.15, 1.3, 1.45 or 1.6). The -J union takes the JP jets
 // whose EM slice is below the EM factor. -V adds the EM jets that failed only the HCal-veto margin
 // (_veto). Yield files made before 2026-11-05 (no "trigger_rule") have
 // neither and are refused.
@@ -93,18 +93,18 @@
 // Sean 2026-11-11: the window in units of the peak width). The older form
 // in:<peak> / out:<peak> still takes 0.5-1.5 x <peak>. The yields come from
 // AnHistograms' x_F vs mass yields (h_xFm_*, E <= sqrt(s)/2, jets at the
-// default factor 1.3, -J union from _jponly): a mass bin (25 MeV)
+// default factor, -J union from _jponly): a mass bin (25 MeV)
 // counts as inside if its centre is in the window, and the window actually
 // used is printed. <|cos phi|>, <x_F> and the run-weighted P per bin are those
 // of all np2 jets (the mass split is not stored for them; the jets in and out
 // of the window share the acceptance, so the difference is small). Only the
 // np2 rows are meaningful in this mode; it excludes -E, -C, -A, -V and factors
-// other than 1.3.
+// other than the default (AnConfig.h kEmCutFactor / kJpCutFactor).
 //
 // Leading-point pi0 probability range (-p <lo>:<hi>). The np1 rows (and so
 // "all" and np12) then hold every jet with P_lead (reco_pi0_lead_prob) in
 // [lo, hi), from AnHistograms' x_F vs P_lead yields (h_xFP_*, E <= sqrt(s)/2,
-// jets at the default factor 1.3, -J union from _jponly): a 0.05 P_lead bin
+// jets at the default factor, -J union from _jponly): a 0.05 P_lead bin
 // counts if its centre is in the range. Their <|cos phi|> and <x_F> come from
 // h_abscosP_* / h_xfsumP_* of the same jets. The other photon-class rows are
 // empty in this mode. Same restrictions as -m (which it excludes); yield files
@@ -122,7 +122,10 @@
 // AnConfig.h "FMS-style pi0 candidates"). The np1 rows (and all, np12) hold
 // pi0 candidates (photon pairs inside a default jet), binned in the pi0's own
 // x_F. They are read from AnHistograms' h_xFpi_* / h_abscospi_* / h_xfsumpi_*:
-//   - z_em class: iso z_em > 0.98, noniso z_em < 0.9, incl all;
+//   - z_em class: iso z_em > 0.98, noniso z_em < 0.9, incl all; another
+//     threshold with <cls>=<z> (iso=0.95:sig, noniso=0.85:sb; the isolation-
+//     threshold systematic, 2026-11-17). It must be a z_em bin edge of the
+//     yield files (AnConfig.h kPi0ZEdges), else AnAsymmetry stops;
 //   - mass window: sig M_gg 0-0.2 GeV, sb 0.2-0.3 GeV.
 // Each row's x_F vs M_gg spectrum of the class is written as pi0_mass_<row>.
 // sivers/pi0_bgsub.C combines a sig and an sb output into the background-
@@ -150,6 +153,9 @@
 //        ./AnAsymmetry [-E] [-C | -A] [-f factor | -fe f_EM -fj f_JP] [-J] [-V] [-Q <pi0 bad-run list>] -r <yield file list> <run polarization table> <out.root> [rebin = 2]
 //                         [bad-run list = kBadRunListDefault | none] [flagged | all]
 //   rebin 2 gives x_F bins of 0.05, as the FMS EM-jet analysis
+//   -x <e0,e1,...> (anywhere): variable x_F bins instead, edges on the stored
+//   0.025 grid (AnConfig.h kNXfBins); jets outside [e0, last] are left out.
+//   The binning is written as TNamed "xf_binning" and in the table header.
 //   Prints, for each level, all and allJP, A_N per x_F bin of both beams
 //   with all photon classes summed; writes graphs
 //   gr_AN_<beam>_<level|all|allJP>_<photon class|all|np3plus|np12> (x_F > 0 blue, x_F < 0
@@ -192,6 +198,66 @@ static const int kUp[2][2] = {{0, 1}, {0, 2}}, kDown[2][2] = {{2, 3}, {1, 3}};
 static const int kLeftSide[2] = {1, 0};
 
 struct Asym { double eps, err; bool ok; };
+
+// x_F binning of the A_N: a uniform merge of the stored fine bins (rebin), or,
+// with -x, variable edges on the fine grid (g_xf_edges, empty = uniform)
+static std::vector<double> g_xf_edges;
+static int g_rebin = 2;
+
+// -x "e0,e1,...": parses and checks the edges against the stored axis (each
+// on a fine-bin edge, strictly increasing, inside [kXfMin, kXfMax])
+static bool ParseXfEdges(const std::string &opt, std::vector<double> &e)
+{
+    std::stringstream ss(opt);
+    std::string t;
+    while (std::getline(ss, t, ',')) if (!t.empty()) e.push_back(std::atof(t.c_str()));
+    if (e.size() < 2) { std::cerr << "ERROR: -x needs at least two edges" << std::endl; return false; }
+    const double w = (kXfMax - kXfMin) / kNXfBins;
+    for (size_t i = 0; i < e.size(); i++)
+    {
+        const double f = (e[i] - kXfMin) / w;
+        if (std::fabs(f - std::floor(f + 0.5)) > 1e-6 || e[i] < kXfMin - 1e-9 || e[i] > kXfMax + 1e-9)
+        { std::cerr << "ERROR: -x edge " << e[i] << " is not on the stored x_F grid (" << w << " steps from " << kXfMin << " to " << kXfMax << ")" << std::endl; return false; }
+        e[i] = kXfMin + std::floor(f + 0.5) * w;
+        if (i && !(e[i] > e[i - 1])) { std::cerr << "ERROR: -x edges must increase" << std::endl; return false; }
+    }
+    return true;
+}
+
+// the x_F rebinned copy of h (a new histogram named name): uniform or -x edges.
+// With edges, content outside [first, last edge] goes to the under/overflow.
+static TH1D *RebinXf(TH1D *h, const char *name)
+{
+    if (g_xf_edges.empty()) return (TH1D *)h->Rebin(g_rebin, name);
+    return (TH1D *)h->Rebin((int)g_xf_edges.size() - 1, name, &g_xf_edges[0]);
+}
+
+// the same along x of a TH2D (x_F vs M_gg); a new histogram, h untouched
+static TH2D *RebinXfX(TH2D *h)
+{
+    if (g_xf_edges.empty()) { TH2D *c = (TH2D *)h->Clone(); c->SetDirectory(0); c->RebinX(g_rebin); return c; }
+    const TAxis *ay = h->GetYaxis();
+    TH2D *c;
+    if (ay->GetXbins()->GetSize()) c = new TH2D(TString(h->GetName()) + "_xfr", h->GetTitle(), (int)g_xf_edges.size() - 1, &g_xf_edges[0], ay->GetNbins(), ay->GetXbins()->GetArray());
+    else c = new TH2D(TString(h->GetName()) + "_xfr", h->GetTitle(), (int)g_xf_edges.size() - 1, &g_xf_edges[0], ay->GetNbins(), ay->GetXmin(), ay->GetXmax());
+    c->SetDirectory(0);
+    c->Sumw2();
+    c->GetXaxis()->SetTitle(h->GetXaxis()->GetTitle());
+    c->GetYaxis()->SetTitle(ay->GetTitle());
+    for (int i = 0; i <= h->GetNbinsX() + 1; i++)
+    {
+        const int ic = c->GetXaxis()->FindBin(h->GetXaxis()->GetBinCenter(i));
+        for (int j = 0; j <= ay->GetNbins() + 1; j++)
+        {
+            const double v = h->GetBinContent(i, j), e = h->GetBinError(i, j);
+            if (v == 0 && e == 0) continue;
+            c->SetBinContent(ic, j, c->GetBinContent(ic, j) + v);
+            c->SetBinError(ic, j, std::sqrt(std::pow(c->GetBinError(ic, j), 2) + e * e));
+        }
+    }
+    c->SetName(h->GetName());
+    return c;
+}
 
 // cross-ratio asymmetry and its Poisson error
 static Asym CrossRatio(double Lu, double Ld, double Ru, double Rd)
@@ -239,11 +305,27 @@ struct Sums
     // -p: P_lead range [plead_lo, plead_hi); np1 rows = all jets in it, other classes empty
     bool plead_mode = false, z_mode = false;
     double plead_lo = 0, plead_hi = 1, z_lo = 0, z_hi = 1;
+    // -I with a threshold: z_lo / z_hi must be z_em bin edges of every file
+    bool z_edge_check = false;
+    bool ZEdgesOk(const TAxis *ax) const
+    {
+        const double v[2] = {z_lo, z_hi};
+        for (int k = 0; k < 2; k++)
+        {
+            if (v[k] <= 0 || v[k] >= 1) continue;
+            bool on = false;
+            for (int b = 1; b <= ax->GetNbins() + 1; b++) on |= std::fabs(ax->GetBinLowEdge(b) - v[k]) < 1e-6;
+            if (!on) return false;
+        }
+        return true;
+    }
     // -I: FMS-style pi0 candidates (h_xFpi_*: x_F x M_gg x z_em). Uses the -p -z
     // path with plead_lo/hi = the mass window, z_lo/hi = the z_em class; also
     // sums the candidates' x_F vs M_gg spectra per level (pimass, for the
     // signal fraction in pi0_bgsub.C)
     bool pi0_mode = false;
+    // -m / -p / -z / -I at the trigger-systematic factor: read the "_f130" copies
+    std::string fsfx;
     std::map<std::string, TH2D *> pimass;
     static bool StartsWith(const std::string &a, const char *b) { return a.compare(0, std::strlen(b), b) == 0; }
     // -p: a yield (h_xF_<l>_<cls>_<side>_<spin>) or sum (h_abscos_ / h_xfsum_<l>_<cls>)
@@ -260,6 +342,7 @@ struct Sums
         if (yield) { n.ReplaceAll("h_xF_", TString("h_xF") + tag); n.ReplaceAll("_np1_", "_"); }
         else { n.ReplaceAll("h_abscos_", TString("h_abscos") + tag); n.ReplaceAll("h_xfsum_", TString("h_xfsum") + tag); n.ReplaceAll("_np1", ""); }
         if (jp_only) n += "_jponly";
+        n += fsfx.c_str();
         if (z_mode)
         {
             TH3D *m3 = (TH3D *)f.Get(n);
@@ -298,6 +381,7 @@ struct Sums
         n.ReplaceAll("h_xF_", "h_xFm_");
         n.ReplaceAll("_np2_", "_");
         if (jp_only) n += "_jponly";
+        n += fsfx.c_str();
         TH2D *m = (TH2D *)f.Get(n);
         if (!m) return 0;
         TH1D *a = new TH1D((name + "_rdm").c_str(), "", m->GetNbinsX(), m->GetXaxis()->GetXmin(), m->GetXaxis()->GetXmax());
@@ -413,8 +497,14 @@ struct Sums
                     for (int s = 0; s < kNSides; s++)
                         for (int p = 0; p < kNSpinStates; p++)
                         {
-                            TH3D *m3 = (TH3D *)f.Get(TString::Format("h_xFpi_%s_%s_%s%s", kTrgLevelName[l], kSideName[s], kSpinStateName[p], o ? "_jponly" : ""));
+                            TH3D *m3 = (TH3D *)f.Get(TString::Format("h_xFpi_%s_%s_%s%s%s", kTrgLevelName[l], kSideName[s], kSpinStateName[p], o ? "_jponly" : "", fsfx.c_str()));
                             if (!m3) { std::cerr << "ERROR: " << f.GetName() << " misses an h_xFpi_* histogram" << std::endl; return false; }
+                            if (z_edge_check && !ZEdgesOk(m3->GetZaxis()))
+                            {
+                                std::cerr << "ERROR: the -I z_em threshold is not a z_em bin edge of " << f.GetName()
+                                          << " (yield files before 2026-11-17 have only 0, 0.9, 0.98, 1)" << std::endl;
+                                return false;
+                            }
                             const std::string key = std::string(kTrgLevelName[l]) + (o ? "#jponly" : "");
                             TH2D *&mm = pimass[key];
                             if (!mm)
@@ -570,7 +660,7 @@ int main(int argc, char **argv)
     // "all"; -V: add the EM jets failing only the veto margin
     bool hi_e = false, comp_only = false, comp_add = false, jp_in_all = false, add_veto = false;
     double factor_em = kEmCutFactor, factor_jp = kJpCutFactor;
-    std::string mass_opt, plead_opt, z_opt, pi0_opt, pi0_bad_path;
+    std::string mass_opt, plead_opt, z_opt, pi0_opt, pi0_bad_path, xf_edges_opt;
     {
         int m = 1;
         for (int i = 1; i < argc; i++)
@@ -589,6 +679,7 @@ int main(int argc, char **argv)
             if (a == "-z" && i + 1 < argc) { z_opt = argv[++i]; continue; }
             if (a == "-I" && i + 1 < argc) { pi0_opt = argv[++i]; continue; }
             if (a == "-Q" && i + 1 < argc) { pi0_bad_path = argv[++i]; continue; }
+            if (a == "-x" && i + 1 < argc) { xf_edges_opt = argv[++i]; continue; }
             argv[m++] = argv[i];
         }
         argc = m;
@@ -603,6 +694,12 @@ int main(int argc, char **argv)
         if (!edge_em || !edge_jp) { std::cerr << "ERROR: -f / -fe / -fj must be a slice edge (1.15, 1.3, 1.45, 1.6)" << std::endl; return 1; }
     }
     if (comp_only && comp_add) { std::cerr << "ERROR: -C and -A exclude each other" << std::endl; return 1; }
+    // -m / -p / -z / -I read histograms filled only at the default factor, and
+    // their "_f130" copies at the trigger-systematic factor (AnConfig.h
+    // kTrgSysFactor, 2026-11-17); other factors are refused there
+    const bool at_dflt = std::fabs(factor_em - kEmCutFactor) < 1e-6 && std::fabs(factor_jp - kJpCutFactor) < 1e-6;
+    const bool at_sys = std::fabs(factor_em - kTrgSysFactor) < 1e-6 && std::fabs(factor_jp - kTrgSysFactor) < 1e-6;
+    const bool dflt_or_sys = at_dflt || at_sys;
     const bool per_run = argc > 1 && std::string(argv[1]) == "-r";
     // -M <merged.root> <out.root> [rebin]: an AnMerge output (masked, with the
     // run-polarization-weighted yields); rewritten into the single-file form
@@ -625,23 +722,28 @@ int main(int argc, char **argv)
                   << "  -C: companion jets alone (below the trigger threshold, in events with a jet above it)\n"
                   << "  -A: triggering and companion jets together (default: triggering jets alone)\n"
                   << "  -f: trigger value cut, factor x nominal threshold, both families: 1.15, 1.3, 1.45 or 1.6\n"
-                  << "  -fe / -fj: the factor for EM levels / JP levels alone (default 1.3 for both)\n"
+                  << "  -fe / -fj: the factor for EM levels / JP levels alone (default 1.15 for both, AnConfig.h; 1.3 for the trigger systematic)\n"
                   << "  -J: \"all\" = EM + JP union, each jet once (default: EM levels only; allJP is always written)\n"
                   << "  -V: add EM jets that failed only the HCal-veto margin\n"
                   << "  -m in:<mean>:<sigma> | out:<mean>:<sigma>: np2 rows = two-photon jets with pair mass inside / outside mean +- 2 sigma (GeV;\n"
                   << "     in:<peak> / out:<peak>: 0.5-1.5 x <peak>)\n"
                   << "  -p <lo>:<hi>: np1 rows (and all, np12) = every jet with leading-point pi0 probability P_lead in [lo, hi)\n"
                   << "  -z <lo>:<hi>: the same rows, jets whose pi0 candidate carries a jet energy fraction z in [lo, hi) (with -p: class edges 0, 0.5, 0.7, 0.85, 1)\n"
-                  << "  -I <iso|noniso|incl>:<sig|sb>: np1 rows (and all, np12) = FMS-style pi0 candidates (z_em > 0.98 / < 0.9 / all) in the signal\n"
+                  << "  -I <iso|noniso|incl>[=<z>]:<sig|sb>: np1 rows (and all, np12) = FMS-style pi0 candidates (z_em > 0.98 / < 0.9 / all; =<z>: another\n"
+                  << "     threshold on a z_em bin edge, e.g. iso=0.95, noniso=0.85) in the signal\n"
                   << "     (M_gg 0-0.2) or sideband (0.2-0.3) window, binned in pi0 x_F; background subtraction: pi0_bgsub.C\n"
                   << "  -Q <list>: (-r) also mask the runs flagged in this pi0-peak bad-run list (pi0_peak_runs.C <out>_bad_runs.txt)\n"
-                  << "  -M <merged.root> <out.root> [rebin]: read one AnMerge output (sums, masked runs subtracted, P-weighted yields) instead of -r" << std::endl;
+                  << "  -M <merged.root> <out.root> [rebin]: read one AnMerge output (sums, masked runs subtracted, P-weighted yields) instead of -r\n"
+                  << "  -x <e0,e1,...>: variable x_F bin edges on the stored 0.025 grid (e.g. 0,0.1,0.15,0.175,0.2,0.25,0.35,0.5); replaces rebin" << std::endl;
         return 1;
     }
     const int rebin = argc > 5 ? std::atoi(argv[5]) : 2;
     if (rebin < 1) { std::cerr << "ERROR: bad rebin" << std::endl; return 1; }
+    g_rebin = rebin;
+    if (!xf_edges_opt.empty() && !ParseXfEdges(xf_edges_opt, g_xf_edges)) return 1;
 
     Sums sums;
+    if (at_sys && !at_dflt) sums.fsfx = kSysSuffix;
     sums.hi_e = hi_e;
     sums.use_trig = !comp_only;
     sums.use_comp = comp_only || comp_add;
@@ -667,9 +769,9 @@ int main(int argc, char **argv)
         const double whi = sig > 0 ? peak + kMassWindowSigma * sig : 1.5 * peak;
         const std::string wtext = sig > 0 ? TString::Format("%.4f +- 2 x %.4f GeV", peak, sig).Data()
                                           : TString::Format("0.5-1.5 x %.4f GeV", peak).Data();
-        if (hi_e || comp_only || comp_add || add_veto || std::fabs(factor_em - 1.3) > 1e-6 || std::fabs(factor_jp - 1.3) > 1e-6)
+        if (hi_e || comp_only || comp_add || add_veto || !dflt_or_sys)
         {
-            std::cerr << "ERROR: -m works with the default jets only (no -E, -C, -A, -V; factors 1.3)" << std::endl;
+            std::cerr << "ERROR: -m works with the default jets only (no -E, -C, -A, -V; the default factors, or -f 1.3 for the trigger systematic)" << std::endl;
             return 1;
         }
         sums.mass_mode = w == "in" ? 1 : 2;
@@ -707,26 +809,34 @@ int main(int argc, char **argv)
     if (!pi0_opt.empty())
     {
         const size_t c = pi0_opt.find(':');
-        const std::string cls = pi0_opt.substr(0, c), win = c == std::string::npos ? "" : pi0_opt.substr(c + 1);
-        if ((cls != "iso" && cls != "noniso" && cls != "incl") || (win != "sig" && win != "sb"))
+        std::string cls = pi0_opt.substr(0, c);
+        const std::string win = c == std::string::npos ? "" : pi0_opt.substr(c + 1);
+        double zthr = -1;
+        const size_t eq = cls.find('=');
+        if (eq != std::string::npos) { zthr = std::atof(cls.substr(eq + 1).c_str()); cls = cls.substr(0, eq); }
+        if ((cls != "iso" && cls != "noniso" && cls != "incl") || (win != "sig" && win != "sb") || (eq != std::string::npos && (cls == "incl" || !(zthr > 0 && zthr < 1))))
         {
-            std::cerr << "ERROR: -I takes <iso|noniso|incl>:<sig|sb>" << std::endl;
+            std::cerr << "ERROR: -I takes <iso|noniso|incl>[=<z_em threshold> for iso/noniso]:<sig|sb>" << std::endl;
             return 1;
         }
+        if (zthr < 0) zthr = cls == "iso" ? kPi0IsoZ : kPi0NonIsoZ;
         if (!mass_opt.empty() || !plead_opt.empty() || !z_opt.empty()) { std::cerr << "ERROR: -I excludes -m, -p and -z" << std::endl; return 1; }
-        if (hi_e || comp_only || comp_add || add_veto || std::fabs(factor_em - 1.3) > 1e-6 || std::fabs(factor_jp - 1.3) > 1e-6)
+        if (hi_e || comp_only || comp_add || add_veto || !dflt_or_sys)
         {
-            std::cerr << "ERROR: -I works with the default jets only (no -E, -C, -A, -V; factors 1.3)" << std::endl;
+            std::cerr << "ERROR: -I works with the default jets only (no -E, -C, -A, -V; the default factors, or -f 1.3 for the trigger systematic)" << std::endl;
             return 1;
         }
         sums.pi0_mode = sums.plead_mode = sums.z_mode = true;
         sums.plead_lo = win == "sig" ? kPi0SigLo : kPi0SbLo;
         sums.plead_hi = win == "sig" ? kPi0SigHi : kPi0SbHi;
-        // z_em classes by bin centre (AnConfig.h kPi0ZEdges: 0-0.9, 0.9-0.98, 0.98-1)
-        sums.z_lo = cls == "iso" ? kPi0ZEdges[2] : 0;
-        sums.z_hi = cls == "noniso" ? kPi0ZEdges[1] : kPi0ZEdges[kNPi0ZCls];
+        // z_em classes by bin centre (AnConfig.h kPi0ZEdges); the threshold must
+        // be a z_em bin edge of the yield files (checked when they are read)
+        sums.z_lo = cls == "iso" ? zthr : 0;
+        sums.z_hi = cls == "noniso" ? zthr : kPi0ZEdges[kNPi0ZCls];
+        sums.z_edge_check = cls != "incl";
+        const std::string zdesc = cls == "iso" ? TString::Format("> %g", zthr).Data() : cls == "noniso" ? TString::Format("< %g", zthr).Data() : "all";
         mass_note = TString::Format("np1 rows (all, np12) = FMS-style pi0 candidates (pi0 x_F), %s (z_em %s), M_gg %s window %.2f-%.2f GeV; other photon classes empty",
-                                    cls.c_str(), cls == "iso" ? "> 0.98" : cls == "noniso" ? "< 0.9" : "all", win == "sig" ? "signal" : "sideband",
+                                    cls.c_str(), zdesc.c_str(), win == "sig" ? "signal" : "sideband",
                                     sums.plead_lo, sums.plead_hi).Data();
         std::printf("AnAsymmetry: %s\n", mass_note.c_str());
     }
@@ -737,9 +847,9 @@ int main(int argc, char **argv)
         const double lo = std::atof(plead_opt.substr(0, c).c_str()), hi = c == std::string::npos ? -1 : std::atof(plead_opt.substr(c + 1).c_str());
         if (c == std::string::npos || !(lo >= 0 && hi > lo && hi <= 1.0 + 1e-9)) { std::cerr << "ERROR: -p takes <lo>:<hi> with 0 <= lo < hi <= 1" << std::endl; return 1; }
         if (!mass_opt.empty()) { std::cerr << "ERROR: -p and -m exclude each other" << std::endl; return 1; }
-        if (hi_e || comp_only || comp_add || add_veto || std::fabs(factor_em - 1.3) > 1e-6 || std::fabs(factor_jp - 1.3) > 1e-6)
+        if (hi_e || comp_only || comp_add || add_veto || !dflt_or_sys)
         {
-            std::cerr << "ERROR: -p works with the default jets only (no -E, -C, -A, -V; factors 1.3)" << std::endl;
+            std::cerr << "ERROR: -p works with the default jets only (no -E, -C, -A, -V; the default factors, or -f 1.3 for the trigger systematic)" << std::endl;
             return 1;
         }
         sums.plead_mode = true;
@@ -874,7 +984,7 @@ int main(int argc, char **argv)
         pol_note = std::string("per-run P from ") + argv[3];
     }
 
-    if (sums.nbins % rebin) { std::cerr << "ERROR: rebin " << rebin << " does not divide the " << sums.nbins << " x_F bins" << std::endl; return 1; }
+    if (g_xf_edges.empty() && sums.nbins % rebin) { std::cerr << "ERROR: rebin " << rebin << " does not divide the " << sums.nbins << " x_F bins" << std::endl; return 1; }
     if (sums.n_no_hie > 0)
         std::printf("AnAsymmetry: WARNING: %d yield file(s) have no _hiE histograms (made before 2026-11-04, jets above sqrt(s)/2 dropped there)\n", sums.n_no_hie);
     if (sums.n_old_labels > 0)
@@ -884,12 +994,16 @@ int main(int argc, char **argv)
     TNamed("high_E_jets", hie_note.c_str()).Write();
     TNamed("jet_sample", sample_note.c_str()).Write();
     TNamed("trigger_selection", trg_note.c_str()).Write();
+    std::string xf_note;
+    if (g_xf_edges.empty()) xf_note = TString::Format("uniform, %d fine bins of %.4f merged", rebin, (kXfMax - kXfMin) / kNXfBins).Data();
+    else { xf_note = "edges"; for (size_t i = 0; i < g_xf_edges.size(); i++) xf_note += TString::Format(" %g", g_xf_edges[i]).Data(); }
+    TNamed("xf_binning", xf_note.c_str()).Write();
     if (sums.pi0_mode) TNamed("pi0_selection", mass_note.c_str()).Write();
     if (sums.mass_mode) TNamed("mass_window", TString::Format("%.4f %.4f %.4f", sums.mass_bin_lo, sums.mass_bin_hi, sums.mass_bin_w).Data()).Write();
     const std::string table_name = std::string(argv[per_run ? 4 : 2]).substr(0, std::string(argv[per_run ? 4 : 2]).rfind(".root")) + ".txt";
     FILE *table = std::fopen(table_name.c_str(), "w");
     std::fprintf(table, "# A_N = eps / (<P> <|cos phi|>), %s; stat = statistical error only\n", pol_note.c_str());
-    std::fprintf(table, "# %s; %s; %s\n", hie_note.c_str(), sample_note.c_str(), trg_note.c_str());
+    std::fprintf(table, "# %s; %s; %s; x_F bins: %s\n", hie_note.c_str(), sample_note.c_str(), trg_note.c_str(), xf_note.c_str());
     if (per_run || merged) std::fprintf(table, "# bad runs: %s\n", bad_note.c_str());
     std::fprintf(table, "# level class beam xF_lo xF_hi <xF> A_N stat jets <|cos|> <P>\n");
     for (int L = 0; L <= kNTrgLevels + 1; L++)
@@ -918,14 +1032,14 @@ int main(int argc, char **argv)
                 // the -J union ("all" with JP levels): JP jets that did not fire EM at the factor
                 const bool jpo = L == kNTrgLevels && IsJpLevel(ll);
                 const std::string ok_ = jpo ? "#jponly" : "";
-                TH1D *c = (TH1D *)sums.h[TString::Format("h_abscos_%s_%s", kTrgLevelName[ll], PhotonClassName(kk)).Data() + ok_]->Rebin(rebin, "tmp_c");
-                TH1D *x = (TH1D *)sums.h[TString::Format("h_xfsum_%s_%s", kTrgLevelName[ll], PhotonClassName(kk)).Data() + ok_]->Rebin(rebin, "tmp_x");
+                TH1D *c = RebinXf(sums.h[TString::Format("h_abscos_%s_%s", kTrgLevelName[ll], PhotonClassName(kk)).Data() + ok_], "tmp_c");
+                TH1D *x = RebinXf(sums.h[TString::Format("h_xfsum_%s_%s", kTrgLevelName[ll], PhotonClassName(kk)).Data() + ok_], "tmp_x");
                 if (first) { mcos[k] = (TH1D *)c->Clone("c_" + tag); mxf[k] = (TH1D *)x->Clone("x_" + tag); }
                 else { mcos[k]->Add(c); mxf[k]->Add(x); }
                 delete c; delete x;
                 for (int b = 0; b < 2; b++)
                 {
-                    TH1D *pr = (TH1D *)(jpo ? sums.pwo : sums.pw)[b][ll][kk]->Rebin(rebin, "tmp_p");
+                    TH1D *pr = RebinXf((jpo ? sums.pwo : sums.pw)[b][ll][kk], "tmp_p");
                     if (first) mpol[b][k] = (TH1D *)pr->Clone(TString::Format("p%d_", b) + tag);
                     else mpol[b][k]->Add(pr);
                     delete pr;
@@ -933,7 +1047,7 @@ int main(int argc, char **argv)
                 for (int s = 0; s < kNSides; s++)
                     for (int p = 0; p < kNSpinStates; p++)
                     {
-                        TH1D *r = (TH1D *)sums.h[YieldName(ll, kk, s, p).Data() + ok_]->Rebin(rebin, "tmp_y");
+                        TH1D *r = RebinXf(sums.h[YieldName(ll, kk, s, p).Data() + ok_], "tmp_y");
                         if (first) y[k][s][p] = (TH1D *)r->Clone(TString::Format("y_%d_%d_", s, p) + tag);
                         else y[k][s][p]->Add(r);
                         delete r;
@@ -961,7 +1075,7 @@ int main(int argc, char **argv)
                 if (!ms) { ms = (TH2D *)it->second->Clone(TString::Format("pi0_mass_%s", lname)); ms->SetDirectory(0); }
                 else ms->Add(it->second);
             }
-            if (ms) { ms->RebinX(rebin); out.cd(); ms->Write(); delete ms; }
+            if (ms) { TH2D *mr = RebinXfX(ms); delete ms; out.cd(); mr->Write(); delete mr; }
         }
 
         for (int k = 0; k < nK; k++)

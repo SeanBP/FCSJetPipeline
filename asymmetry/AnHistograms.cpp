@@ -17,7 +17,7 @@
 // result (_noem, _emt115 ... _emt160 after the slice suffix) for an EM + JP
 // union without double counting (AnAsymmetry -J). The yields are kept per slice of
 // trigger value / threshold, the factor's choice left to AnAsymmetry -f
-// (default kEmCutFactor = kJpCutFactor = 1.3; slices from 1.15). Each jet fills x_F
+// (default kEmCutFactor = kJpCutFactor = 1.15 since 2026-11-17; slices from 1.15). Each jet fills x_F
 // (reco_x_F_corr) in
 //   h_xF_<level>_<photon class>_<side>_<spin state><sample>
 // with <level> EM0, EM1, EM2, JP0, JP1, JP2, e.g. h_xF_EM1_np2_xpos_BuYd_t130,
@@ -383,19 +383,21 @@ int main(int argc, char **argv)
     static TH1D *h[kNSamp][kNEmTags][2][kNTrgLevels][kNPhotonClasses][kNSides][kNSpinStates];
     static TH1D *h_cos[kNSamp][kNEmTags][2][kNTrgLevels][kNPhotonClasses], *h_xfs[kNSamp][kNEmTags][2][kNTrgLevels][kNPhotonClasses];
     // pair yields, E <= sqrt(s)/2: [0] triggering >= the default factor, [1]
-    // triggering 1.15 to the default factor, [2] companions, [3] JP levels: jets
-    // >= the default factor in JP that are not >= the default factor in EM (for an EM +
-    // JP union of [0] without double counting)
-    static TH2D *h_m[4][kNTrgLevels][kNSides][kNSpinStates];
-    // x_F vs P_lead, the same four samples as h_m, every jet with E <= sqrt(s)/2
-    static TH2D *h_p[4][kNTrgLevels][kNSides][kNSpinStates], *h_pcos[4][kNTrgLevels], *h_pxfs[4][kNTrgLevels];
-    // Collins (collins/CollinsHistograms.h): sample 0 default, 1 _jponly
+    // triggering 1.15 to the default factor (empty since the default is 1.15),
+    // [2] companions, [3] JP levels: jets >= the default factor in JP that are
+    // not >= the default factor in EM (for an EM + JP union of [0] without
+    // double counting), [4] / [5] the same as [0] / [3] at the trigger-
+    // systematic factor (AnConfig.h kTrgSysFactor, suffix kSysSuffix)
+    static TH2D *h_m[6][kNTrgLevels][kNSides][kNSpinStates];
+    // x_F vs P_lead, the same six samples as h_m, every jet with E <= sqrt(s)/2
+    static TH2D *h_p[6][kNTrgLevels][kNSides][kNSpinStates], *h_pcos[6][kNTrgLevels], *h_pxfs[6][kNTrgLevels];
+    // Collins (collins/CollinsHistograms.h): sample 0 default, 1 _jponly, 2 / 3 the same at kTrgSysFactor
     static CollinsHistograms collins;
-    // A_N vs P_lead class vs z: [0] default, [1] _jponly
-    static TH3D *h_pz[2][kNTrgLevels][kNSides][kNSpinStates], *h_pzcos[2][kNTrgLevels], *h_pzxfs[2][kNTrgLevels];
-    // FMS-style pi0 candidates, x_F x M_gg x z_em class: [0] default, [1] _jponly
-    static TH3D *h_pi[2][kNTrgLevels][kNSides][kNSpinStates], *h_picos[2][kNTrgLevels], *h_pixfs[2][kNTrgLevels];
-    const char *const msfx[4] = {"", "_t115", kCompSuffix, "_jponly"};
+    // A_N vs P_lead class vs z: [0] default, [1] _jponly, [2] / [3] the same at kTrgSysFactor
+    static TH3D *h_pz[4][kNTrgLevels][kNSides][kNSpinStates], *h_pzcos[4][kNTrgLevels], *h_pzxfs[4][kNTrgLevels];
+    // FMS-style pi0 candidates, x_F x M_gg x z_em class: [0] default, [1] _jponly, [2] / [3] at kTrgSysFactor
+    static TH3D *h_pi[4][kNTrgLevels][kNSides][kNSpinStates], *h_picos[4][kNTrgLevels], *h_pixfs[4][kNTrgLevels];
+    const TString msfx[6] = {"", "_t115", kCompSuffix, "_jponly", kSysSuffix, TString("_jponly") + kSysSuffix};
     TH1D *h_events[kNTrgLevels], *h_pt[kNTrgLevels], *h_ptraw[kNTrgLevels], *h_ratio[kNTrgLevels];
     for (int l = 0; l < kNTrgLevels; l++)
     {
@@ -422,9 +424,9 @@ int main(int argc, char **argv)
                     }
                 }
             }
-        for (int m = 0; m < 4; m++)
+        for (int m = 0; m < 6; m++)
         {
-            if (m == 3 && !IsJpLevel(l)) continue;
+            if ((m == 3 || m == 5) && !IsJpLevel(l)) continue;
             for (int s = 0; s < kNSides; s++)
                 for (int p = 0; p < kNSpinStates; p++)
                 {
@@ -437,8 +439,8 @@ int main(int argc, char **argv)
             h_pcos[m][l] = new TH2D(name, name + ";x_{F};P_{lead}", kNXfBins, kXfMin, kXfMax, kNPleadBins, kPleadMin, kPleadMax);
             name = TString::Format("h_xfsumP_%s", kTrgLevelName[l]) + msfx[m];
             h_pxfs[m][l] = new TH2D(name, name + ";x_{F};P_{lead}", kNXfBins, kXfMin, kXfMax, kNPleadBins, kPleadMin, kPleadMax);
-            if (m != 0 && m != 3) continue;
-            const int mg = m == 0 ? 0 : 1;
+            if (m == 1 || m == 2) continue;
+            const int mg = m == 0 ? 0 : m == 3 ? 1 : m == 4 ? 2 : 3;
             {
                 double xa[kNXfBins + 1], za[kNZBinsA + 1];
                 for (int i = 0; i <= kNXfBins; i++) xa[i] = kXfMin + i * (kXfMax - kXfMin) / kNXfBins;
@@ -474,7 +476,7 @@ int main(int argc, char **argv)
         for (int p = 0; p < kNSpinStates; p++) h_events[l]->GetXaxis()->SetBinLabel(p + 1, kSpinStateName[p]);
         h_pt[l] = new TH1D(TString::Format("h_ptcorr_%s", kTrgLevelName[l]), ";corrected jet p_{T} (GeV);jets", 100, 0, 20);
         h_ptraw[l] = new TH1D(TString::Format("h_ptraw_%s", kTrgLevelName[l]), ";uncorrected jet p_{T} (GeV);jets", 100, 0, 20);
-        h_ratio[l] = new TH1D(TString::Format("h_trgratio_%s", kTrgLevelName[l]), TString::Format(";%s trigger value / %.1f GeV;jets", kTrgLevelName[l], kTrgThresholdGeV[l]), 60, 0, 6);
+        h_ratio[l] = new TH1D(TString::Format("h_trgratio_%s", kTrgLevelName[l]), TString::Format(";%s trigger value / the period's measured threshold (nominal %.1f GeV);jets", kTrgLevelName[l], kTrgThresholdGeV[l]), 60, 0, 6);
     }
     // sanity distributions: [0] jets of events passing the event cuts, [1]
     // selected jets, [2] companion jets; all levels together, and per level
@@ -614,19 +616,22 @@ int main(int argc, char **argv)
             h_pt[level]->Fill(pt);
             h_ptraw[level]->Fill((*pt_raw)[j]);
             base[j] = 1;
-            // EM: the lowest listed EM level at >= 1.15 x threshold, and the veto margin
+            // EM: the lowest listed EM level at >= 1.15 x threshold; its slice from the
+            // combined EM factor f = min(E_4x4 / threshold, veto edge / r) (AnConfig.h
+            // EmTrgFactor, 2026-11-17: threshold and veto move together as one cut)
             const double em_et = (*trg_em)[j];
             for (int l = 0; l < kNEmLevels && emL[j] < 0; l++)
-                if (listed[l] && em_et >= kTrgSliceEdge[0] * kTrgThresholdGeV[l]) emL[j] = l;
+                if (listed[l] && em_et >= kTrgSliceEdge[0] * TrgThresholdGeV(l, cur_run)) emL[j] = l;
             if (emL[j] >= 0)
             {
-                const double ratio = em_et / kTrgThresholdGeV[emL[j]];
+                const double ratio = em_et / TrgThresholdGeV(emL[j], cur_run);
                 h_ratio[emL[j]]->Fill(ratio);
-                if ((*trg_hmax)[j] >= 0 && (*trg_hmax)[j] * 4 * kEmVetoMargin <= em_et)
+                const double fem = EmTrgFactor(em_et, (*trg_hmax)[j], emL[j], cur_run);
+                if (fem >= kTrgSliceEdge[0] - 1e-9)
                 {
                     emS[j] = 0;
-                    for (int sl = 1; sl < kNTrgSlices; sl++) if (ratio >= kTrgSliceEdge[sl]) emS[j] = sl;
-                    if (ratio >= kEmCutFactor - 1e-9 && emL[j] > event_em) event_em = emL[j];
+                    for (int sl = 1; sl < kNTrgSlices; sl++) if (fem >= kTrgSliceEdge[sl] - 1e-9) emS[j] = sl;
+                    if (fem >= kEmCutFactor - 1e-9 && emL[j] > event_em) event_em = emL[j];
                 }
                 else emVeto[j] = 1;
             }
@@ -636,11 +641,11 @@ int main(int argc, char **argv)
             {
                 if (!listed[l]) continue;
                 if (l < 5 && !((*trg_jpmask)[j] & jp_region[l - kNEmLevels])) continue;
-                if (jp_et >= kTrgSliceEdge[0] * kTrgThresholdGeV[l]) jpL[j] = l;
+                if (jp_et >= kTrgSliceEdge[0] * TrgThresholdGeV(l, cur_run)) jpL[j] = l;
             }
             if (jpL[j] >= 0)
             {
-                const double ratio = jp_et / kTrgThresholdGeV[jpL[j]];
+                const double ratio = jp_et / TrgThresholdGeV(jpL[j], cur_run);
                 h_ratio[jpL[j]]->Fill(ratio);
                 jpS[j] = 0;
                 for (int sl = 1; sl < kNTrgSlices; sl++) if (ratio >= kTrgSliceEdge[sl]) jpS[j] = sl;
@@ -664,6 +669,9 @@ int main(int argc, char **argv)
             const bool em_on = emS[j] >= 0, jp_on = jpS[j] >= 0;
             const bool em_dflt = em_on && kTrgSliceEdge[emS[j]] >= kEmCutFactor - 1e-9;
             const bool jp_dflt = jp_on && kTrgSliceEdge[jpS[j]] >= kJpCutFactor - 1e-9;
+            // at the trigger-systematic factor (the "_f130" copies of the default-only histograms)
+            const bool em_sys = em_on && kTrgSliceEdge[emS[j]] >= kTrgSysFactor - 1e-9;
+            const bool jp_sys = jp_on && kTrgSliceEdge[jpS[j]] >= kTrgSysFactor - 1e-9;
             // fill one (sample, tag, level)
             auto fill = [&](int g, int tg, int l)
             {
@@ -695,6 +703,9 @@ int main(int argc, char **argv)
                 if (jp_on) h_m[jp_dflt ? 0 : 1][jpL[j]][side][spin]->Fill(xf, mass[j]);
                 if (jp_dflt && !em_dflt) h_m[3][jpL[j]][side][spin]->Fill(xf, mass[j]);
                 if (comp) h_m[2][event_jl][side][spin]->Fill(xf, mass[j]);
+                if (em_sys) h_m[4][emL[j]][side][spin]->Fill(xf, mass[j]);
+                if (jp_sys) h_m[4][jpL[j]][side][spin]->Fill(xf, mass[j]);
+                if (jp_sys && !em_sys) h_m[5][jpL[j]][side][spin]->Fill(xf, mass[j]);
             }
             // x_F vs P_lead yields (E <= sqrt(s)/2), the same samples
             const double pl = have_plead && j < plead->size() ? (*plead)[j] : -1;
@@ -710,6 +721,9 @@ int main(int argc, char **argv)
                 if (jp_on) pfill(jp_dflt ? 0 : 1, jpL[j]);
                 if (jp_dflt && !em_dflt) pfill(3, jpL[j]);
                 if (comp) pfill(2, event_jl);
+                if (em_sys) pfill(4, emL[j]);
+                if (jp_sys) pfill(4, jpL[j]);
+                if (jp_sys && !em_sys) pfill(5, jpL[j]);
             }
             // A_N vs P_lead vs the pi0 candidate's z: default jets and JP-not-EM (_jponly)
             if (have_z && pl >= 0 && !hi)
@@ -727,6 +741,9 @@ int main(int argc, char **argv)
                     if (em_dflt) zfill(0, emL[j]);
                     if (jp_dflt) zfill(0, jpL[j]);
                     if (jp_dflt && !em_dflt) zfill(1, jpL[j]);
+                    if (em_sys) zfill(2, emL[j]);
+                    if (jp_sys) zfill(2, jpL[j]);
+                    if (jp_sys && !em_sys) zfill(3, jpL[j]);
                 }
             }
             // FMS-style pi0 candidates: every photon pair of a default jet (and _jponly)
@@ -778,11 +795,17 @@ int main(int argc, char **argv)
                         // trigger threshold; Sean 2026-11-16: factor x threshold, as the
                         // host jet's trigger value). The union (_jponly) is per pi0:
                         // JP pi0s that do not pass in EM
-                        const bool em_ok = em_dflt && ppt_raw >= kEmCutFactor * kTrgThresholdGeV[emL[j]];
-                        const bool jp_ok = jp_dflt && ppt_raw >= kJpCutFactor * kTrgThresholdGeV[jpL[j]];
+                        const bool em_ok = em_dflt && ppt_raw >= kEmCutFactor * TrgThresholdGeV(emL[j], cur_run);
+                        const bool jp_ok = jp_dflt && ppt_raw >= kJpCutFactor * TrgThresholdGeV(jpL[j], cur_run);
                         if (em_ok) pifill(0, emL[j]);
                         if (jp_ok) pifill(0, jpL[j]);
                         if (jp_ok && !em_ok) pifill(1, jpL[j]);
+                        // the same at the trigger-systematic factor (host jet and pi0 pT)
+                        const bool em_oks = em_sys && ppt_raw >= kTrgSysFactor * TrgThresholdGeV(emL[j], cur_run);
+                        const bool jp_oks = jp_sys && ppt_raw >= kTrgSysFactor * TrgThresholdGeV(jpL[j], cur_run);
+                        if (em_oks) pifill(2, emL[j]);
+                        if (jp_oks) pifill(2, jpL[j]);
+                        if (jp_oks && !em_oks) pifill(3, jpL[j]);
                     }
             }
             // Collins yields: default jets (EM and JP levels) and JP-not-EM (_jponly)
@@ -794,6 +817,9 @@ int main(int argc, char **argv)
                 if (em_dflt) collins.Fill(0, emL[j], side, spin, xf, gg, zz, plp);
                 if (jp_dflt) collins.Fill(0, jpL[j], side, spin, xf, gg, zz, plp);
                 if (jp_dflt && !em_dflt) collins.Fill(1, jpL[j], side, spin, xf, gg, zz, plp);
+                if (em_sys) collins.Fill(2, emL[j], side, spin, xf, gg, zz, plp);
+                if (jp_sys) collins.Fill(2, jpL[j], side, spin, xf, gg, zz, plp);
+                if (jp_sys && !em_sys) collins.Fill(3, jpL[j], side, spin, xf, gg, zz, plp);
             }
             // QA: default triggering jets ("sel", by the EM level, else the JP level) and companions ("comp")
             const int st = comp ? 2 : dflt ? 1 : -1;
@@ -825,7 +851,7 @@ int main(int argc, char **argv)
     if (!have_plead) TNamed("plead_missing", "jet files without reco_pi0_lead_prob: h_xFP_* empty").Write();
     if (!have_gup) TNamed("collins_missing", "jet files without reco_pi0_lead_gup: h_xFg_* empty").Write();
     if (!have_z) TNamed("pz_missing", "jet files without reco_pi0_lead_z1: h_xFPz_* empty").Write();
-    TNamed("trigger_rule", TString::Format("trigger values (reco_trg_*), slices from %.2f, default factor EM %.2f JP %.2f, EM veto margin %.2f", kTrgSliceEdge[0], kEmCutFactor, kJpCutFactor, kEmVetoMargin).Data()).Write();
+    TNamed("trigger_rule", TString::Format("trigger values (reco_trg_*) / measured per-period thresholds (x50 x nominal, AnConfig.h kTrgX50), slices from %.2f, default factor EM %.2f JP %.2f, EM factor = min(E/threshold, veto edge/r), veto edges per period %.3f / %.3f / %.3f", kTrgSliceEdge[0], kEmCutFactor, kJpCutFactor, kEmVetoEdge[0], kEmVetoEdge[1], kEmVetoEdge[2]).Data()).Write();
     out.Write();
     printf("AnHistograms: %lld events, runs %s\n", n, rs.str().c_str());
     for (int c = 0; c < kNCuts; c++) printf("  %-16s %.0f jets\n", kCutName[c], h_cut->GetBinContent(c + 1));

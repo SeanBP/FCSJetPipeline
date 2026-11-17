@@ -609,7 +609,7 @@ int main(int argc, char **argv)
             any = true;
             TH1 *h = it->second;
             h->SetLineColor(lc[l]); h->SetLineWidth(2); h->SetMinimum(0.5);
-            h->SetTitle(TString::Format("%s jets: trigger value / %.1f GeV (%s)", kTrgLevelName[l], kTrgThresholdGeV[l],
+            h->SetTitle(TString::Format("%s jets: trigger value / measured threshold of the run's period (nominal %.1f GeV; %s)", kTrgLevelName[l], kTrgThresholdGeV[l],
                                         IsJpLevel(l) ? "largest JP patch with the jet" : "largest ECal 4x4 in the jet"));
             h->Draw("hist");
             gPad->Update();

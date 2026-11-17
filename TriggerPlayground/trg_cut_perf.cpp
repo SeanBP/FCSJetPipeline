@@ -3,7 +3,8 @@
 // trigger scan, data_to_jet -t "" -E 1 -F 1, one MuDst file per run).
 //
 // Per event, the offline decision for trigger t: some jet has a trigger value
-// >= f x the nominal threshold (AnConfig.h kTrgThresholdGeV). EM: the jet's
+// >= f x the run period's measured threshold (AnConfig.h TrgThresholdGeV: x50
+// x nominal; was the nominal threshold before 2026-11-16). EM: the jet's
 // largest ECal 4x4 window (reco_trg_em_et, the stage-2 EM sum) and, for the
 // HCal veto, the largest neighbouring HCal 4x4 (reco_trg_em_hmax): the jet
 // passes the veto with margin m if 4 m hmax <= em (the hardware vetoes at
@@ -31,9 +32,9 @@
 //
 // Output (<outdir>): trg_cut_perf_EM.png, trg_cut_perf_JP.png (efficiency and
 // purity vs f, the current cut marked), trg_cut_perf_veto.png (EM vs the veto
-// margin m at f = kEmCutFactor), trg_cut_perf.txt (the numbers at the current
+// margin m at f = kEmCutFactor, or the 3rd argument), trg_cut_perf.txt (the numbers at the current
 // cuts).
-// Usage: ./trg_cut_perf <jet file list> <outdir>
+// Usage: ./trg_cut_perf <jet file list> <outdir> [veto-scan factor]
 // Build: g++ -m64 -O2 -I../shared -I../asymmetry trg_cut_perf.cpp ../shared/VectorDict.cxx -o trg_cut_perf
 //            `root-config --cflags --libs` -std=c++11
 
@@ -78,8 +79,10 @@ struct Tally { long hw = 0, hwj = 0, off = 0, both = 0; };
 
 int main(int argc, char **argv)
 {
-    if (argc < 3) { std::cerr << "Usage: " << argv[0] << " <jet file list> <outdir>" << std::endl; return 1; }
+    if (argc < 3) { std::cerr << "Usage: " << argv[0] << " <jet file list> <outdir> [veto-scan factor = kEmCutFactor]" << std::endl; return 1; }
     const std::string outdir = argv[2];
+    // the EM cut factor of the veto-margin scan (2026-11-16: an option, to scan the margin at a candidate factor)
+    const double fveto = argc > 3 ? std::atof(argv[3]) : kEmCutFactor;
     gSystem->mkdir(outdir.c_str(), true);
     // [period][trigger][factor] and, EM only, [period][level][margin]
     std::vector<Tally> tf(kNP * kNT * kNF), tm(kNP * 3 * kNM);
@@ -132,7 +135,8 @@ int main(int argc, char **argv)
                 if (tr < 3) hw = (tcu >> (3 + tr)) & 1;
                 else if (tr == 5) hw = (tcu >> 6) & 1;
                 else hw = ((tcu >> (tr == 3 ? 10 : 7)) & 7) != 0;  // any region
-                const double thr = kTrgThresholdGeV[tr];
+                // the run's measured per-period threshold (AnConfig.h TrgThresholdGeV, 2026-11-16)
+                const double thr = TrgThresholdGeV(tr, run);
                 // the largest trigger value of any jet, no veto: the coverage
                 double anyv = -1;
                 for (size_t j = 0; j < em->size(); j++) anyv = std::max(anyv, (double)(isjp ? (*jp)[j] : (*em)[j]));
@@ -143,7 +147,7 @@ int main(int argc, char **argv)
                 {
                     double v;
                     if (isjp) v = (*jp)[j];
-                    else v = ((*em)[j] > 0 && (*hmax)[j] >= 0 && 4 * kEmVetoMargin * (*hmax)[j] <= (*em)[j]) ? (*em)[j] : -1;
+                    else v = ((*em)[j] > 0 && (*hmax)[j] >= 0 && 4 * EmVetoMargin(run) * (*hmax)[j] <= (*em)[j]) ? (*em)[j] : -1;
                     if (v > lead) lead = v;
                 }
                 for (int fi = 0; fi < kNF; fi++)
@@ -162,7 +166,7 @@ int main(int argc, char **argv)
                         const double m = MarOf(mi);
                         bool off = false;
                         for (size_t j = 0; j < em->size() && !off; j++)
-                            off = (*em)[j] >= kEmCutFactor * thr && (*hmax)[j] >= 0 && 4 * m * (*hmax)[j] <= (*em)[j];
+                            off = (*em)[j] >= fveto * thr && (*hmax)[j] >= 0 && 4 * m * (*hmax)[j] <= (*em)[j];
                         for (int p : {per, 3})
                         {
                             Tally &c = tm[(p * 3 + tr) * kNM + mi];
@@ -207,7 +211,7 @@ int main(int argc, char **argv)
             {
                 c.cd(1 + k + 3 * row);
                 gPad->SetLeftMargin(0.13); gPad->SetBottomMargin(0.13);
-                TH1D *fr = new TH1D(Form("fr%d%d%d", fam, k, row), Form(";offline %s / threshold (%g GeV);%s", fam ? "JP patch sum" : "ECal 4x4 sum",
+                TH1D *fr = new TH1D(Form("fr%d%d%d", fam, k, row), Form(";offline %s / measured threshold of the period (nominal %g GeV);%s", fam ? "JP patch sum" : "ECal 4x4 sum",
                                     kTrgThresholdGeV[tr], row ? "purity" : "efficiency"), 10, 0.5, 2.5);
                 fr->SetMinimum(0); fr->SetMaximum(1.05);
                 fr->GetXaxis()->SetTitleSize(0.05); fr->GetYaxis()->SetTitleSize(0.055); fr->GetYaxis()->SetTitleOffset(1.1);
@@ -231,13 +235,15 @@ int main(int argc, char **argv)
                     const Tally &ca = tf[(3 * kNT + tr) * kNF];
                     tl.DrawLatex(0.5, 0.75, Form("coverage (all runs): %.2f", ca.hw ? double(ca.hwj) / ca.hw : 0.));
                 }
-                if (!fam && row == 0) tl.DrawLatex(0.5, 0.82, Form("HCal veto margin %.2g", kEmVetoMargin));
+                if (!fam && row == 0) tl.DrawLatex(0.5, 0.82, Form("HCal veto margin %.2g / %.2g / %.2g", kEmVetoMarginPeriod[0], kEmVetoMarginPeriod[1], kEmVetoMarginPeriod[2]));
             }
+            // the table at the current factor and at the candidates around it (2026-11-16)
+            for (double ff : {1.0, 1.1, 1.15, 1.2, 1.3})
             for (int p = 0; p < kNP; p++)
             {
-                int fi = (int)std::lround((fcur - 0.5) / 0.05);
+                int fi = (int)std::lround((ff - 0.5) / 0.05);
                 const Tally &cc = tf[(p * kNT + tr) * kNF + fi];
-                txt << Form("%s f=%.2f %-18s hw %8ld off %8ld both %8ld eff %.3f pur %.3f", kTrgLevelName[tr], fcur, kPeriodName[p], cc.hw, cc.off, cc.both,
+                txt << Form("%s f=%.2f%s %-18s hw %8ld off %8ld both %8ld eff %.3f pur %.3f", kTrgLevelName[tr], ff, std::fabs(ff - fcur) < 1e-6 ? "*" : " ", kPeriodName[p], cc.hw, cc.off, cc.both,
                             cc.hwj ? double(cc.both) / cc.hwj : 0., cc.off ? double(cc.both) / cc.off : 0.)
                     << Form("   coverage %.3f\n", cc.hw ? double(cc.hwj) / cc.hw : 0.);
             }
@@ -267,21 +273,21 @@ int main(int argc, char **argv)
                     g->Draw("PL SAME");
                     if (lg) lg->AddEntry(g, kPeriodName[p], "pl");
                 }
-                TLine *l = new TLine(kEmVetoMargin, 0, kEmVetoMargin, 1.05); l->SetLineStyle(2); l->SetLineWidth(2); l->Draw();
+                TLine *l = new TLine(kEmVetoMarginPeriod[2], 0, kEmVetoMarginPeriod[2], 1.05); l->SetLineStyle(2); l->SetLineWidth(2); l->Draw();
                 TLine *l1 = new TLine(1, 0, 1, 1.05); l1->SetLineStyle(3); l1->SetLineColor(kGray + 2); l1->Draw();
                 if (lg) { lg->SetBorderSize(0); lg->SetFillStyle(0); lg->SetTextSize(0.04); lg->Draw(); }
                 TLatex tl; tl.SetNDC(); tl.SetTextSize(0.06);
                 tl.DrawLatex(0.15, 0.92, Form("#bf{%s} %s vs veto margin", kTrgLevelName[k], row ? "purity" : "efficiency"));
                 tl.SetTextSize(0.045);
-                if (row == 0) tl.DrawLatex(0.45, 0.82, Form("ECal 4x4 #geq %.2g #times threshold", kEmCutFactor));
+                if (row == 0) tl.DrawLatex(0.45, 0.82, Form("ECal 4x4 #geq %.3g #times threshold", fveto));
             }
         c.SaveAs((outdir + "/trg_cut_perf_veto.png").c_str());
         for (int k = 0; k < 3; k++)
             for (int p = 0; p < kNP; p++)
-                for (double m : {0.0, 1.0, kEmVetoMargin, 2.0})
+                for (double m : {0.0, 1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 2.0, 2.5, 3.0})
                 {
                     const Tally &cc = tm[(p * 3 + k) * kNM + (int)std::lround(m / 0.1)];
-                    txt << Form("%s veto m=%.1f (f=%.2f) %-18s hw %8ld off %8ld both %8ld eff %.3f pur %.3f\n", kTrgLevelName[k], m, kEmCutFactor, kPeriodName[p],
+                    txt << Form("%s veto m=%.1f (f=%.2f) %-18s hw %8ld off %8ld both %8ld eff %.3f pur %.3f\n", kTrgLevelName[k], m, fveto, kPeriodName[p],
                                 cc.hw, cc.off, cc.both, cc.hwj ? double(cc.both) / cc.hwj : 0., cc.off ? double(cc.both) / cc.off : 0.);
                 }
     }

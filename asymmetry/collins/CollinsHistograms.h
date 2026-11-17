@@ -24,10 +24,11 @@
 
 struct CollinsHistograms
 {
-    TH3D *g[2][kNTrgLevels][kNSides][kNSpinStates][kNPleadClsG] = {};
-    TH2D *gabs[2][kNTrgLevels][kNPleadClsG] = {}, *gxfs[2][kNTrgLevels][kNPleadClsG] = {};
+    TH3D *g[4][kNTrgLevels][kNSides][kNSpinStates][kNPleadClsG] = {};
+    TH2D *gabs[4][kNTrgLevels][kNPleadClsG] = {}, *gxfs[4][kNTrgLevels][kNPleadClsG] = {};
 
-    // sample mg (0 default, 1 _jponly) of level l; sfx = the sample's suffix
+    // sample mg (0 default, 1 _jponly, 2 _f130, 3 _jponly_f130: the trigger-
+    // systematic factor, AnConfig.h kTrgSysFactor) of level l; sfx = its suffix
     void Book(int mg, int l, const TString &sfx)
     {
         double xe[kNXfBinsG + 1], ge[kNGBins + 1];
