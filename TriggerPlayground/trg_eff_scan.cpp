@@ -1,11 +1,16 @@
 // Trigger efficiency across Run 22 for the per-jet trigger values (RecoJets
-// reco_trg_*, shared/FcsTrigSums.h), at the cut factors 1.15 and 1.3 x the
-// nominal threshold (AnConfig.h kTrgThresholdGeV), from unfiltered jet files
-// (data_to_jet -t "" -E 1 -F 1, one MuDst file per run).
+// reco_trg_*, shared/FcsTrigSums.h), at the cut factors 1.15 (A_N default) and
+// 1.3 (trigger systematic), from unfiltered jet files (data_to_jet -t "" -E 1
+// -F 1, one MuDst file per run).
 //
-// Per event, the leading jet's trigger value: EM, the largest ECal 4x4 among
-// jets passing the HCal-veto margin (em_hmax <= em_et / (4 x 1.15)); JP, the
-// largest patch sum. The efficiency of trigger t at factor f is the fraction
+// Units (current standard, 2026-11-17): the trigger value is in units of the
+// gain period's measured threshold, AnConfig.h TrgThresholdGeV(level, run) =
+// x50 x nominal, so x = 1 is the period's 50% point. Per event, the leading
+// jet's value: EM, the largest combined factor EmTrgFactor = min(E_4x4 / thr,
+// edge / r) over jets (threshold and HCal veto as ONE cut, r = 4 H_max / E_4x4,
+// edge = the period's veto 50% point EmVetoEdge(run)); JP, the largest patch
+// sum / thr. Env TRG_NOMINAL=1 restores the old units (nominal threshold, EM
+// veto as a separate margin EmVetoMargin(run)) for comparison. The efficiency of trigger t at factor f is the fraction
 // of events with leading value >= f x threshold whose hardware bit is set
 // (fcs_tcu_bits, before prescale: EM0-2 bits 3-5; JP2 bit 6; JP1 bits 7-9 and
 // JP0 bits 10-12 for regions A, BC, DE, the jet's own region required).
@@ -140,6 +145,16 @@ int main(int argc, char **argv)
     // whether a plateau loss comes from the veto
     // per period since 2026-11-16 (AnConfig.h EmVetoMargin(run)); veto_margin > 0 overrides it for every run
     const double veto_margin = getenv("TRG_VETO_MARGIN") ? std::atof(getenv("TRG_VETO_MARGIN")) : -1;
+    const bool nominal = getenv("TRG_NOMINAL") && std::atoi(getenv("TRG_NOMINAL")) == 1;
+    printf("trg_eff_scan: units %s\n", nominal ? "nominal threshold, separate veto margin (TRG_NOMINAL=1)" : "period threshold TrgThresholdGeV, EM combined factor EmTrgFactor");
+    // trigger value / threshold of one jet; < 0 if not eligible
+    auto emx = [&](double e, double h, int tr, int run) -> double {
+        if (!(e > 0) || h < 0) return -1;
+        if (!nominal) return EmTrgFactor(e, h, tr, run);
+        return h * 4 * (veto_margin > 0 ? veto_margin : EmVetoMargin(run)) <= e ? e / kTrgThresholdGeV[tr] : -1;
+    };
+    auto jpthr = [&](int tr, int run) -> double { return nominal ? kTrgThresholdGeV[tr] : TrgThresholdGeV(tr, run); };
+    const char *unit_lab = nominal ? "nominal threshold" : "period threshold (x_{50})";
     if (veto_margin > 0) printf("trg_eff_scan: EM veto margin %.2f for every run (TRG_VETO_MARGIN)\n", veto_margin);
     int sim_run = 0;
     if (argc > 4 && std::sscanf(argv[4], "sim:%d", &sim_run) != 1) { std::cerr << "ERROR: 4th argument must be sim:<run>" << std::endl; return 1; }
@@ -202,7 +217,7 @@ int main(int argc, char **argv)
             for (int k = 0; k < n_ref_em; k++) em_ref |= ref_em[k] != 0;
             for (int k = 0; k < n_ref_jp; k++) jp_ref |= ref_jp[k] != 0;
             if (sim_run > 0) em_ref = jp_ref = true;  // simulation: no trigger chose the event
-            double lem = -1, ljp = -1;
+            double lem[3] = {-1, -1, -1}, ljp = -1;
             int lpatch = -1;
             // the jet with the largest ECal 4x4, veto or not, and its veto ratio
             double aem = -1, aveto = -1;
@@ -210,7 +225,7 @@ int main(int argc, char **argv)
                 if ((*em)[j] > aem && (*hmax)[j] >= 0) { aem = (*em)[j]; aveto = 4 * (*hmax)[j] / (*em)[j]; }
             for (size_t j = 0; j < em->size(); j++)
             {
-                if ((*em)[j] > 0 && (*hmax)[j] >= 0 && (*hmax)[j] * 4 * (veto_margin > 0 ? veto_margin : EmVetoMargin(run)) <= (*em)[j] && (*em)[j] > lem) lem = (*em)[j];
+                for (int l = 0; l < 3; l++) { const double x = emx((*em)[j], (*hmax)[j], l, run); if (x > lem[l]) lem[l] = x; }
                 if ((*jp)[j] > ljp) { ljp = (*jp)[j]; lpatch = (*patch)[j]; }
             }
             const int region = lpatch < 0 ? -1 : (lpatch % 5 == 0 ? 0 : lpatch % 5 <= 2 ? 1 : 2);  // A, BC, DE
@@ -219,8 +234,8 @@ int main(int argc, char **argv)
             if (em_ref && aem > 0)
                 for (int tr = 0; tr < 3; tr++)
                 {
-                    if (aem < kVetoTrgFactor * kTrgThresholdGeV[tr]) continue;
-                    const int vb = VBinOf(aveto);
+                    if (aem < kVetoTrgFactor * jpthr(tr, run)) continue;
+                    const int vb = VBinOf(nominal ? aveto : aveto / EmVetoEdge(run));
                     rh.vtot[tr * (kNV + 1) + vb]++;
                     if ((tcu >> (3 + tr)) & 1) rh.vpass[tr * (kNV + 1) + vb]++;
                 }
@@ -234,29 +249,29 @@ int main(int argc, char **argv)
                     if (tr < 3)
                     {
                         if (!(fem[tr] || fem_tpc[tr])) break;
-                        if ((*em)[j] > 0 && (*hmax)[j] >= 0 && (*hmax)[j] * 4 * (veto_margin > 0 ? veto_margin : EmVetoMargin(run)) <= (*em)[j]) v = (*em)[j];
+                        v = emx((*em)[j], (*hmax)[j], tr, run);
                     }
                     else if (tr == 5)
                     {
                         if (!fjp[0]) break;
-                        v = (*jp)[j];
+                        v = (*jp)[j] / jpthr(tr, run);
                     }
                     else
                     {
                         const int pj = (*patch)[j];
                         if (pj < 0) continue;
                         const int rg = pj % 5 == 0 ? 0 : pj % 5 <= 2 ? 1 : 2;
-                        if (fjp[(tr == 3 ? 4 : 1) + rg]) v = (*jp)[j];
+                        if (fjp[(tr == 3 ? 4 : 1) + rg]) v = (*jp)[j] / jpthr(tr, run);
                     }
                     if (v > best) best = v;
                 }
-                if (best > 0) rh.spec[tr * (kNB + 1) + BinOf(best / kTrgThresholdGeV[tr])]++;
+                if (best > 0) rh.spec[tr * (kNB + 1) + BinOf(best)]++;
             }
             for (int tr = 0; tr < kNT; tr++)
             {
                 const bool isjp = tr >= 3;
                 if (!(isjp ? jp_ref : em_ref)) continue;  // reference events only
-                const double v = (isjp ? ljp : lem) / kTrgThresholdGeV[tr];
+                const double v = isjp ? ljp / jpthr(tr, run) : lem[tr];
                 if (!(v > 0)) continue;
                 bool fired;
                 if (tr < 3) fired = (tcu >> (3 + tr)) & 1;
@@ -337,7 +352,7 @@ int main(int argc, char **argv)
             gPad->SetGridy();
             gPad->SetBottomMargin(0.22); gPad->SetTopMargin(0.1);
             TH1D *fr = new TH1D(TString::Format("fr%d_%d", e, tr), "", groups.size(), 0, groups.size());
-            fr->SetTitle(TString::Format("%s (%.1f GeV): %s;first run of each group of %d;efficiency of the hardware bit", kTrgLevelName[tr], kTrgThresholdGeV[tr],
+            fr->SetTitle(TString::Format("%s (nominal %.1f GeV): %s;first run of each group of %d;efficiency of the hardware bit", kTrgLevelName[tr], kTrgThresholdGeV[tr],
                                          e ? "trigger value in [f, f+0.15) #times thr" : "trigger value #geq f #times thr", group));
             fr->SetMinimum(e ? 0.0 : 0.5); fr->SetMaximum(1.08);
             for (size_t i = 0; i < groups.size(); i++) if (i % 3 == 0) fr->GetXaxis()->SetBinLabel(i + 1, TString::Format("%d", groups[i].front()));
@@ -376,7 +391,7 @@ int main(int argc, char **argv)
             }
             lg->Draw();
             TLatex tl; tl.SetNDC(); tl.SetTextSize(0.055);
-            tl.DrawLatex(0.12, 0.93, TString::Format("%s (%.1f GeV): %s", kTrgLevelName[tr], kTrgThresholdGeV[tr],
+            tl.DrawLatex(0.12, 0.93, TString::Format("%s (nominal %.1f GeV): %s", kTrgLevelName[tr], kTrgThresholdGeV[tr],
                                                     e ? "trigger value in [f, f+0.15) #times thr" : "trigger value #geq f #times thr"));
         }
         c->SaveAs((outdir + (e ? "/trg_eff_edge.png" : "/trg_eff_integrated.png")).c_str());
@@ -478,7 +493,7 @@ int main(int argc, char **argv)
     }
     {
         FILE *ts = std::fopen((outdir + "/trg_safety.txt").c_str(), "w");
-        std::fprintf(ts, "# turn-on fit per group of runs (reference events, x = trigger value / nominal threshold); T(x) = erf turn-on with the plateau p divided out\n");
+        std::fprintf(ts, "# turn-on fit per group of runs (reference events, x = trigger value / threshold, see the units line); T(x) = erf turn-on with the plateau p divided out\n");
         std::fprintf(ts, "# loss_f = fraction of jets above f x thr removed by the turn-on (recorded-sample spectrum, leading eligible jet); kept = N(>=1.3)/N(>=1.15)\n");
         for (size_t h = 0; h < hot_lines.size(); h++) std::fprintf(ts, "%s\n", hot_lines[h].c_str());
         std::fprintf(ts, "# trg first_run last_run n_turn n_spec fit plateau floor x50 +- sigma x10 x99 z115 z130 loss115 loss130 kept\n");
@@ -506,7 +521,7 @@ int main(int argc, char **argv)
                 gPad->SetGridy();
                 if (row == 1) gPad->SetLogy();
                 TH1D *fr = new TH1D(TString::Format("fs%d_%d", tr, row), "", nr, 0, nr);
-                const char *ytit[3] = {"trigger value / nominal threshold", "turn-on loss above the cut", "N(#geq 1.3) / N(#geq 1.15)"};
+                const char *ytit[3] = {nominal ? "trigger value / nominal threshold" : "trigger value / period threshold", "turn-on loss above the cut", "N(#geq 1.3) / N(#geq 1.15)"};
                 fr->GetYaxis()->SetTitle(ytit[row]);
                 fr->GetYaxis()->SetTitleSize(0.05); fr->GetYaxis()->SetLabelSize(0.045); fr->GetYaxis()->SetTitleOffset(1.25);
                 if (row == 0) { fr->SetMinimum(0.4); fr->SetMaximum(1.9); }
@@ -576,11 +591,11 @@ int main(int argc, char **argv)
                     TLine *ln = new TLine(i, y0, i, y1);
                     ln->SetLineStyle(2); ln->SetLineColor(kGray + 2); ln->SetLineWidth(2); ln->Draw();
                 }
-                TLatex tl; tl.SetNDC(); tl.SetTextSize(0.05);
-                const char *rt[3] = {"x_{10}-x_{99} box, x_{50}; cut 1.15 - -, 1.3 #minus",
+                TLatex tl; tl.SetNDC(); tl.SetTextSize(0.042);
+                const char *rt[3] = {"x_{10}-x_{99}, x_{50}; cut 1.15 - -, 1.3 #minus",
                                      "loss: 1.15 #circ, 1.3 #bullet (floor 10^{-4})",
                                      "kept: N(#geq1.3)/N(#geq1.15)"};
-                tl.DrawLatex(0.13, 0.93, TString::Format("#bf{%s} (%g GeV): %s", kTrgLevelName[tr], kTrgThresholdGeV[tr], rt[row]));
+                tl.DrawLatex(0.13, 0.93, TString::Format("#bf{%s} (nominal %g GeV): %s", kTrgLevelName[tr], kTrgThresholdGeV[tr], rt[row]));
             }
         }
         c->SaveAs((outdir + (fam ? "/trg_safety_JP.png" : "/trg_safety_EM.png")).c_str());
@@ -604,7 +619,7 @@ int main(int argc, char **argv)
             gPad->SetGridy(); gPad->SetLeftMargin(0.12); gPad->SetRightMargin(0.03); gPad->SetTopMargin(0.09); gPad->SetBottomMargin(0.14);
             TH1D *fr = new TH1D(TString::Format("fv%d", tr), "", 100, 0, 2.0);
             fr->SetMinimum(0); fr->SetMaximum(1.5);
-            fr->GetXaxis()->SetTitle("jet veto value / veto threshold  (4 H^{max}_{4x4} / E_{4x4})");
+            fr->GetXaxis()->SetTitle(nominal ? "jet veto value / veto threshold  (4 H^{max}_{4x4} / E_{4x4})" : "r / period veto edge  (r = 4 H^{max}_{4x4} / E_{4x4})");
             fr->GetYaxis()->SetTitle("fraction with the hardware bit set");
             fr->GetXaxis()->SetTitleSize(0.045); fr->GetYaxis()->SetTitleSize(0.05);
             fr->GetXaxis()->SetLabelSize(0.045); fr->GetYaxis()->SetLabelSize(0.045);
@@ -618,7 +633,7 @@ int main(int argc, char **argv)
             }
             TLegend *lg = new TLegend(0.13, 0.69, 0.96, 0.905);
             lg->SetBorderSize(0); lg->SetFillColor(kWhite); lg->SetFillStyle(1001); lg->SetTextSize(0.038);
-            lg->SetHeader("bit set, margin 1.15 (red dashed) / 1.3 (red solid), grey: veto");
+            lg->SetHeader(nominal ? "bit set, margin 1.15 (red dashed) / 1.3 (red solid), grey: veto" : "bit set; cut 1.15 (dashed) / 1.3 (solid) at r/edge = 1/f");
             for (int p = 0; p < 3; p++)
             {
                 std::vector<double> tot(kNV + 1, 0), pas(kNV + 1, 0);
@@ -650,7 +665,7 @@ int main(int argc, char **argv)
                     for (int b = 0; b < kNV; b++) if ((b + 1) * kDV <= rcut[m] + 1e-9) { n += tot[b]; k += pas[b]; }
                     agr[m] = n > 0 ? k / n : -1; kept[m] = ntot > 0 ? n / ntot : -1;
                 }
-                std::fprintf(tv, "%-4s %-20s margin 1.15: %.4f (kept %.3f)  margin 1.3: %.4f (kept %.3f)  of %.0f\n", kTrgLevelName[tr], plab[p], agr[0], kept[0], agr[1], kept[1], ntot);
+                std::fprintf(tv, "%-4s %-20s cut 1.15: %.4f (kept %.3f)  cut 1.3: %.4f (kept %.3f)  of %.0f\n", kTrgLevelName[tr], plab[p], agr[0], kept[0], agr[1], kept[1], ntot);
                 g->SetMarkerStyle(pmk[p]); g->SetMarkerSize(0.9); g->SetMarkerColor(pcol[p]); g->SetLineColor(pcol[p]);
                 if (g->GetN()) g->Draw("p same");
                 lg->AddEntry(g, TString::Format("%s: %.1f%% / %.1f%%", plab[p], 100 * agr[0], 100 * agr[1]), "pe");
@@ -658,7 +673,7 @@ int main(int argc, char **argv)
             lg->Draw();
             TLatex tl; tl.SetNDC(); tl.SetTextSize(0.06);
             tl.SetTextSize(0.05);
-            tl.DrawLatex(0.12, 0.93, TString::Format("#bf{%s} (%g GeV), trigger value #geq 1.3 #times thr", kTrgLevelName[tr], kTrgThresholdGeV[tr]));
+            tl.DrawLatex(0.12, 0.93, TString::Format("#bf{%s} (nominal %g GeV), E_{4x4} #geq 1.3 #times thr", kTrgLevelName[tr], kTrgThresholdGeV[tr]));
         }
         std::fclose(tv);
         c->SaveAs((outdir + "/trg_veto_periods.png").c_str());
@@ -686,7 +701,7 @@ int main(int argc, char **argv)
             gPad->SetGridy(); gPad->SetLeftMargin(0.12); gPad->SetRightMargin(0.03); gPad->SetTopMargin(0.09); gPad->SetBottomMargin(0.12);
             TH1D *fr = new TH1D(TString::Format("ft%d", tr), "", 100, 0.4, 2.0);
             fr->SetMinimum(0); fr->SetMaximum(1.5);
-            fr->GetXaxis()->SetTitle("jet trigger value / nominal threshold");
+            fr->GetXaxis()->SetTitle(TString::Format("trigger value / %s", unit_lab));
             fr->GetYaxis()->SetTitle("fraction with the hardware bit set");
             fr->GetXaxis()->SetTitleSize(0.05); fr->GetYaxis()->SetTitleSize(0.05);
             fr->GetXaxis()->SetLabelSize(0.045); fr->GetYaxis()->SetLabelSize(0.045);
@@ -733,7 +748,7 @@ int main(int argc, char **argv)
                 {
                     TGraphAsymmErrors *gs = (TGraphAsymmErrors *)g->Clone(TString::Format("turnon_%s_p%d", kTrgLevelName[tr], p));
                     for (int i = 0; i < gs->GetN(); i++) gs->SetPoint(i, gs->GetX()[i] - (p - 1) * 0.008, gs->GetY()[i]);
-                    gs->SetTitle(TString::Format("%s %s;trigger value / nominal threshold;bit set", kTrgLevelName[tr], plab[p]));
+                    gs->SetTitle(TString::Format("%s %s;trigger value / threshold;bit set", kTrgLevelName[tr], plab[p]));
                     tf->WriteTObject(gs);
                 }
                 g->SetMarkerStyle(pmk[p]); g->SetMarkerSize(0.9); g->SetMarkerColor(pcol[p]); g->SetLineColor(pcol[p]);
@@ -743,6 +758,7 @@ int main(int argc, char **argv)
             lg->Draw();
             TLatex tl; tl.SetNDC(); tl.SetTextSize(0.06);
             tl.DrawLatex(0.12, 0.93, TString::Format("#bf{%s}  (nominal %g GeV)", kTrgLevelName[tr], kTrgThresholdGeV[tr]));
+            if (!nominal && tr < 3) { TLatex te; te.SetNDC(); te.SetTextSize(0.04); te.SetTextAlign(31); te.DrawLatex(0.95, 0.2, "EM value = min(E_{4x4}/thr, edge/r)"); }
         }
         std::fclose(ta);
         tf->Close();

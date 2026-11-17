@@ -1,30 +1,26 @@
-// Trigger thresholds over Run 22 (Sean 2026-11-17): per group of consecutive
-// runs and per trigger, the jet trigger value (in units of the NOMINAL
-// threshold, AnConfig.h kTrgThresholdGeV, so steps between gain periods show)
-// at which
-//   efficiency = N(offline and hardware) / N(hardware with a jet)   = 50%
-//   purity     = N(offline and hardware) / N(offline)               = 50%
-// with the offline decision "some jet has trigger value >= f x nominal", the
-// definitions of trg_cut_perf.cpp (reference events only; EM: threshold and
-// HCal veto as one cut, the jet's value min(E_4x4, nominal / r), r = 4 H_max /
-// E_4x4, so f moves the ECal cut and the veto (nominal edge r = 1) together; hardware bit:
-// fcs_tcu_bits before prescale, JP0/JP1 any region). Efficiency falls and
-// purity rises with f; each crossing is interpolated on a 0.01 grid, its
-// error the range of f where the 68% Clopper-Pearson band contains 0.5.
-// Runs are grouped consecutively inside a gain period (23027047, 23066056)
-// until a group has [runs per group] runs; the last short group of a period
-// joins the previous one.
-// Input: jet files with reco_trg_em_et / reco_trg_em_hmax / reco_trg_jp_et,
-// fcs_tcu_bits and the reference trigger branches (data_to_jet; the Run 22
-// trigger scan trigger_turnon/run22_scan_v1, or a full pass's kept jet trees).
-// Output: <outdir>/trg_time_scan.txt (per group and trigger: first/last run,
-// counts, f_eff50 +- , f_pur50 +- ) and trg_time_scan.png (one panel per
-// trigger, run number on x, both crossings on y, gain changes dashed).
-// Hot JP run 23070019 (JP0-2 fire in every reference event far below
-// threshold; trg_eff_scan.cpp's hot test) is left out of the JP triggers.
-// Optional 4th argument: trg_eff_scan.cpp's trg_safety.txt, whose turn-on
-// x50 per group (bit set in 50% of the reference events at that trigger
-// value; independent of the jet spectrum) is overlaid as open circles.
+// Trigger levels over Run 22 relative to the HARDWARE settings (Sean 2026-11-17):
+// Akio's nominal thresholds kTrgThresholdGeV (EM0-2 2 / 3.5 / 5 GeV, JP0-2
+// 4 / 6 / 8 GeV) and, for EM, the HCal veto setting r = 4 H_max / E_4x4 = 1
+// (the hardware vetoes at r > 1). One factor f scales the trigger value and the
+// veto buffer together: an EM jet passes at f if E_4x4 >= f x E_hw and
+// r <= 1 / f, i.e. its value is min(E_4x4 / E_hw, 1 / r); a JP jet passes if its
+// patch sum >= f x E_hw. The event's value is its largest jet value. Per group
+// of runs and trigger, the f where
+//   efficiency = N(offline and hardware) / N(hardware)  = 50%  (falls with f)
+//   purity     = N(offline and hardware) / N(offline)   = 50%  (rises with f)
+//   x50        = the bit is set in 50% of the events at that f (direct crossing
+//                of the bit fraction in bins of 0.05, no fit; spectrum-independent)
+// The median x50 of each gain period (23027047, 23066056) is drawn as a line:
+// the period's nominal factor. Crossings are interpolated; errors: the range
+// where the 68% Clopper-Pearson band contains 0.5. Reference events only (EM: JP,
+// DiJP, Had, HHT, HTOT, HcalTot; JP: EM0/1, DY, J/psi, ELE2); hardware bit:
+// fcs_tcu_bits before prescale, JP0/JP1 any region (hardware events count with a
+// jet >= 0.5 x E_hw). Hot JP run 23070019 is left out of JP.
+// Groups: consecutive runs within a gain period, [runs per group] each; with a
+// trg_safety.txt (trg_eff_scan.cpp) its per-trigger groups instead (wider for
+// EM1/EM2, which have few events near threshold).
+// Output: <outdir>/trg_time_scan.txt (per trigger and group; per period medians)
+// and trg_time_scan.png.
 // Usage: ./trg_time_scan <jet file list> <outdir> [runs per group = 5] [trg_safety.txt]
 // Build: g++ -m64 -O2 -I../shared -I../asymmetry trg_time_scan.cpp ../shared/VectorDict.cxx -o trg_time_scan
 //            `root-config --cflags --libs` -std=c++11
@@ -33,6 +29,7 @@
 #include <TFile.h>
 #include <TGraphAsymmErrors.h>
 #include <TH1F.h>
+#include <TLatex.h>
 #include <TLegend.h>
 #include <TLine.h>
 #include <TStyle.h>
@@ -46,56 +43,57 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #include "VectorDict.h"
 #include "AnConfig.h"
-#include <TLatex.h>
-#include <sstream>
 
-static const int kNT = 6;  // EM0, EM1, EM2, JP0, JP1, JP2
-static const char *kTrgName[kNT] = {"EM0", "EM1", "EM2", "JP0", "JP1", "JP2"};
+static const int kNS = 6;  // EM0-2, JP0-2
+static const char *kScanName[kNS] = {"EM0", "EM1", "EM2", "JP0", "JP1", "JP2"};
 static const int kPeriodEdge[2] = {23027047, 23066056};
 static int PeriodOf(int run) { return run < kPeriodEdge[0] ? 0 : run < kPeriodEdge[1] ? 1 : 2; }
+// cut grid: f = 0.05 ... 2.0
 static const int kNF = 196;
-static double FacOf(int i) { return 0.05 + 0.01 * i; }  // 0.05 ... 2.0 x nominal
+static double GridOf(int i) { return 0.05 + 0.01 * i; }
+// bit fraction per value bin (x50): bins of 0.05 in f up to 2.5
+static const int kNB = 50;
+static const double kDB = 0.05;
 
-struct Tally { long hwj = 0, off = 0, both = 0; };
-// per run: [trigger][factor]
-typedef std::vector<Tally> RunTally;
+struct Tally { long hw = 0, off = 0, both = 0; };
+struct RunData
+{
+    std::vector<Tally> t;            // [scan][grid]
+    std::vector<long> tot, pass;     // [scan][bin]
+    RunData() : t(kNS * kNF), tot(kNS * kNB, 0), pass(kNS * kNB, 0) {}
+};
 
-// the f where the curve (num/den per factor) crosses 0.5, falling (eff) or rising (pur);
-// err: the f range where the 68% Clopper-Pearson band contains 0.5
-static bool Crossing(const std::vector<Tally> &v, int tr, bool eff, double &f50, double &lo, double &hi)
+// 0.5 crossing of k/n along x in the given direction (falling: from >= 0.5 to < 0.5);
+// err: the x range near it where the 68% Clopper-Pearson band contains 0.5
+static bool Cross(const std::vector<double> &xs, const std::vector<long> &ks, const std::vector<long> &ns, bool falling,
+                  double &x50, double &lo, double &hi, long nmin = 5)
 {
     std::vector<double> x, y, ylo, yhi;
-    for (int i = 0; i < kNF; i++)
+    for (size_t i = 0; i < xs.size(); i++)
     {
-        const Tally &c = v[tr * kNF + i];
-        const long den = eff ? c.hwj : c.off;
-        if (den < 5) continue;
-        x.push_back(FacOf(i));
-        y.push_back(double(c.both) / den);
-        ylo.push_back(TEfficiency::ClopperPearson(den, c.both, 0.683, false));
-        yhi.push_back(TEfficiency::ClopperPearson(den, c.both, 0.683, true));
+        if (ns[i] < nmin) continue;
+        x.push_back(xs[i]);
+        y.push_back(double(ks[i]) / ns[i]);
+        ylo.push_back(TEfficiency::ClopperPearson(ns[i], ks[i], 0.683, false));
+        yhi.push_back(TEfficiency::ClopperPearson(ns[i], ks[i], 0.683, true));
     }
     if (x.size() < 3) return false;
-    // central crossing: first sign change of (y - 0.5) in the expected direction
-    f50 = -1;
+    x50 = -1;
     for (size_t i = 1; i < x.size(); i++)
     {
         const double a = y[i - 1] - 0.5, b = y[i] - 0.5;
-        if ((eff && a >= 0 && b < 0) || (!eff && a <= 0 && b > 0))
-        {
-            f50 = x[i - 1] + (x[i] - x[i - 1]) * (a / (a - b));
-            break;
-        }
+        if ((falling && a >= 0 && b < 0) || (!falling && a <= 0 && b > 0)) { x50 = x[i - 1] + (x[i] - x[i - 1]) * (a / (a - b)); break; }
     }
-    if (f50 < 0) return false;
-    lo = hi = f50;
+    if (x50 < 0) return false;
+    lo = hi = x50;
     for (size_t i = 0; i < x.size(); i++)
-        if (ylo[i] <= 0.5 && yhi[i] >= 0.5 && std::fabs(x[i] - f50) < 0.3) { lo = std::min(lo, x[i]); hi = std::max(hi, x[i]); }
+        if (ylo[i] <= 0.5 && yhi[i] >= 0.5 && std::fabs(x[i] - x50) < 0.3) { lo = std::min(lo, x[i]); hi = std::max(hi, x[i]); }
     return true;
 }
 
@@ -105,7 +103,7 @@ int main(int argc, char **argv)
     const std::string outdir = argv[2];
     const int per_group = argc > 3 ? std::max(1, std::atoi(argv[3])) : 5;
     gSystem->mkdir(outdir.c_str(), true);
-    std::map<int, RunTally> runs;
+    std::map<int, RunData> runs;
 
     std::ifstream list(argv[1]);
     std::string fn;
@@ -145,50 +143,54 @@ int main(int argc, char **argv)
             for (int k = 0; k < n_ref_em; k++) em_ref |= ref_em[k] != 0;
             for (int k = 0; k < n_ref_jp; k++) jp_ref |= ref_jp[k] != 0;
             if (!em_ref && !jp_ref) continue;
-            RunTally &rt = runs[run];
-            if (rt.empty()) rt.resize(kNT * kNF);
-            for (int tr = 0; tr < kNT; tr++)
-            {
-                const bool isjp = tr >= 3;
-                if (!(isjp ? jp_ref : em_ref)) continue;
-                if (isjp && run == 23070019) continue;  // hot JP run
-                bool hw;
-                if (tr < 3) hw = (tcu >> (3 + tr)) & 1;
-                else if (tr == 5) hw = (tcu >> 6) & 1;
-                else hw = ((tcu >> (tr == 3 ? 10 : 7)) & 7) != 0;
-                const double nom = kTrgThresholdGeV[tr];
-                double anyv = -1, lead = -1;
-                for (size_t j = 0; j < em->size(); j++)
-                {
-                    anyv = std::max(anyv, (double)(isjp ? (*jp)[j] : (*em)[j]));
-                    double v;
-                    if (isjp) v = (*jp)[j];
-                    // EM threshold and veto as one cut (2026-11-17): the jet's value in nominal-threshold
-                    // units is min(E_4x4, nominal x 1 / r), the nominal veto edge being r = 1
-                    else if (!((*em)[j] > 0) || (*hmax)[j] < 0) v = -1;
-                    else v = (*hmax)[j] > 0 ? std::min((double)(*em)[j], nom * (*em)[j] / (4 * (*hmax)[j])) : (*em)[j];
-                    lead = std::max(lead, v);
-                }
-                // hardware events with a jet near the threshold (trg_cut_perf: >= 0.5 x the
-                // measured threshold; here 0.5 x the measured threshold as well)
-                const bool hwj = hw && anyv >= 0.5 * TrgThresholdGeV(tr, run);
+            RunData &rd = runs[run];
+            double ljp = -1, lE = -1;
+            for (size_t j = 0; j < em->size(); j++) { ljp = std::max(ljp, (double)(*jp)[j]); lE = std::max(lE, (double)(*em)[j]); }
+            auto fill = [&](int s, double value, bool hw) {
                 for (int fi = 0; fi < kNF; fi++)
                 {
-                    const bool off = lead >= FacOf(fi) * nom;
-                    Tally &c = rt[tr * kNF + fi];
-                    c.hwj += hwj; c.off += off; c.both += hw && off;
+                    const bool off = value >= GridOf(fi);
+                    Tally &c = rd.t[s * kNF + fi];
+                    c.hw += hw; c.off += off; c.both += hw && off;
                 }
-            }
+                const int b = std::min(kNB - 1, std::max(0, (int)(value / kDB)));
+                rd.tot[s * kNB + b]++;
+                if (hw) rd.pass[s * kNB + b]++;
+            };
+            if (em_ref && lE > 0)
+                for (int l = 0; l < 3; l++)
+                {
+                    // the event's value: the largest jet min(E_4x4 / E_hw, 1 / r) (threshold and veto, one factor)
+                    double v = -1;
+                    for (size_t j = 0; j < em->size(); j++)
+                    {
+                        const double e = (*em)[j], h = (*hmax)[j];
+                        if (!(e > 0) || h < 0) continue;
+                        const double fe = e / kTrgThresholdGeV[l], fv = h > 0 ? e / (4 * h) : 1e9;
+                        v = std::max(v, std::min(fe, fv));
+                    }
+                    const bool hw = (tcu >> (3 + l)) & 1;
+                    // hardware events count with a jet >= 0.5 x E_hw (any veto), as JP
+                    if (v > 0) fill(l, v, hw && lE >= 0.5 * kTrgThresholdGeV[l]);
+                }
+            if (jp_ref && run != 23070019 && ljp > 0)
+                for (int l = 0; l < 3; l++)
+                {
+                    const int tr = 3 + l;
+                    const bool hw = tr == 5 ? ((tcu >> 6) & 1) : (((tcu >> (tr == 3 ? 10 : 7)) & 7) != 0);
+                    // hardware events count only with a jet near threshold (trg_cut_perf: >= 0.5 x thr)
+                    fill(tr, ljp / kTrgThresholdGeV[tr], hw && ljp >= 0.5 * kTrgThresholdGeV[tr]);
+                }
         }
     }
     printf("trg_time_scan: %d files, %zu runs\n", nfiles, runs.size());
 
-    // groups of consecutive runs within a gain period
+    // default groups of consecutive runs within a gain period
     std::vector<std::vector<int> > groups;
     {
         std::vector<int> cur;
         int curp = -1;
-        for (std::map<int, RunTally>::const_iterator it = runs.begin(); it != runs.end(); ++it)
+        for (std::map<int, RunData>::const_iterator it = runs.begin(); it != runs.end(); ++it)
         {
             const int p = PeriodOf(it->first);
             if (p != curp && !cur.empty())
@@ -209,44 +211,8 @@ int main(int argc, char **argv)
             else groups.push_back(cur);
         }
     }
-
-    std::ofstream txt(outdir + "/trg_time_scan.txt");
-    txt << "# trigger value / NOMINAL threshold where efficiency = N(both)/N(hw with a jet) and purity = N(both)/N(offline) cross 50%\n"
-        << "# (reference events; EM with the per-period veto margin); err = f range where the 68% Clopper-Pearson band holds 0.5\n"
-        << "# trg first_run last_run n_runs n_hw n_offline_at_1 f_eff50 lo hi f_pur50 lo hi pur_at_0.05 pur_at_1\n";
-    TGraphAsymmErrors *ge[kNT], *gp[kNT];
-    for (int tr = 0; tr < kNT; tr++) { ge[tr] = new TGraphAsymmErrors(); gp[tr] = new TGraphAsymmErrors(); }
-    for (size_t g = 0; g < groups.size(); g++)
-    {
-        std::vector<Tally> sum(kNT * kNF);
-        for (size_t r = 0; r < groups[g].size(); r++)
-        {
-            const RunTally &rt = runs[groups[g][r]];
-            for (int k = 0; k < kNT * kNF; k++) { sum[k].hwj += rt[k].hwj; sum[k].off += rt[k].off; sum[k].both += rt[k].both; }
-        }
-        const int r0 = groups[g].front(), r1 = groups[g].back();
-        const double xc = 0.5 * (r0 + r1);
-        for (int tr = 0; tr < kNT; tr++)
-        {
-            double fe = -1, el = 0, eh = 0, fp = -1, pl = 0, ph = 0;
-            const bool oke = Crossing(sum, tr, true, fe, el, eh), okp = Crossing(sum, tr, false, fp, pl, ph);
-            const int i1 = (int)std::lround((1.0 - 0.05) / 0.01);
-            // purity at the lowest f (the bit's overall rate in the reference sample) and at 1 x nominal
-            const Tally &c0 = sum[tr * kNF], &c1 = sum[tr * kNF + i1];
-            const double pur0 = c0.off ? double(c0.both) / c0.off : -1, pur1 = c1.off ? double(c1.both) / c1.off : -1;
-            char line[320];
-            std::snprintf(line, sizeof line, "%s %d %d %zu %ld %ld %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f\n", kTrgName[tr], r0, r1, groups[g].size(), sum[tr * kNF].hwj,
-                          sum[tr * kNF + i1].off, oke ? fe : -1, oke ? el : -1, oke ? eh : -1, okp ? fp : -1, okp ? pl : -1, okp ? ph : -1, pur0, pur1);
-            txt << line;
-            if (oke) { const int n = ge[tr]->GetN(); ge[tr]->SetPoint(n, xc, fe); ge[tr]->SetPointError(n, xc - r0, r1 - xc, fe - el, eh - fe); }
-            if (okp) { const int n = gp[tr]->GetN(); gp[tr]->SetPoint(n, xc, fp); gp[tr]->SetPointError(n, xc - r0, r1 - xc, fp - pl, ph - fp); }
-        }
-    }
-    txt.close();
-
-    // optional overlay: turn-on x50 per group from trg_safety.txt
-    TGraphAsymmErrors *gx[kNT];
-    for (int tr = 0; tr < kNT; tr++) gx[tr] = new TGraphAsymmErrors();
+    // per-trigger groups from trg_safety.txt (a run outside every range joins the nearest group of its period)
+    std::vector<std::pair<long, long> > xr[6];
     if (argc > 4)
     {
         std::ifstream sf(argv[4]);
@@ -255,49 +221,147 @@ int main(int argc, char **argv)
         {
             if (ln.empty() || ln[0] == '#') continue;
             std::istringstream ss(ln);
-            std::string t; long a, b; double nt, ns, fit, pl, fl, x50, ex;
-            if (!(ss >> t >> a >> b >> nt >> ns >> fit >> pl >> fl >> x50 >> ex)) continue;
-            for (int tr = 0; tr < kNT; tr++)
-                if (t == kTrgName[tr]) { const int n = gx[tr]->GetN(); const double xc = 0.5 * (a + b); gx[tr]->SetPoint(n, xc, x50); gx[tr]->SetPointError(n, xc - a, b - xc, ex, ex); }
+            std::string t; long a, b;
+            if (!(ss >> t >> a >> b)) continue;
+            for (int tr = 0; tr < 6; tr++) if (t == kScanName[tr]) xr[tr].push_back(std::make_pair(a, b));
         }
     }
+    std::vector<std::vector<int> > sgroups[kNS];
+    for (int tr = 0; tr < 6; tr++)
+    {
+        if (xr[tr].empty()) { sgroups[tr] = groups; continue; }
+        std::vector<std::vector<int> > g(xr[tr].size());
+        for (std::map<int, RunData>::const_iterator it = runs.begin(); it != runs.end(); ++it)
+        {
+            const long run = it->first;
+            int best = -1; long bd = -1;
+            for (size_t k = 0; k < xr[tr].size(); k++)
+            {
+                if (PeriodOf((int)xr[tr][k].first) != PeriodOf((int)run)) continue;
+                const long d = run < xr[tr][k].first ? xr[tr][k].first - run : run > xr[tr][k].second ? run - xr[tr][k].second : 0;
+                if (best < 0 || d < bd) { best = (int)k; bd = d; }
+            }
+            if (best >= 0) g[best].push_back((int)run);
+        }
+        for (size_t k = 0; k < g.size(); k++) if (!g[k].empty()) sgroups[tr].push_back(g[k]);
+    }
+
+    std::ofstream txt(outdir + "/trg_time_scan.txt");
+    txt << "# per trigger and group: factor f (relative to the hardware settings; EM: E >= f E_hw and r <= 1/f) at\n"
+        << "# 50% efficiency, 50% purity and x50 (bit fraction 50%), with 68% ranges\n"
+        << "# groups: " << (argc > 4 ? "per trigger from the trg_safety file" : "consecutive runs") << "\n"
+        << "# scan first_run last_run n_runs n_hw n_events eff50 lo hi pur50 lo hi x50 lo hi\n";
+    TGraphAsymmErrors *ge[kNS], *gp[kNS], *gx[kNS];
+    for (int s = 0; s < kNS; s++) { ge[s] = new TGraphAsymmErrors(); gp[s] = new TGraphAsymmErrors(); gx[s] = new TGraphAsymmErrors(); }
+    size_t ngroups = 0;
+    for (int s = 0; s < kNS; s++)
+    {
+        const bool veto = false;
+        const double u = 1.0;  // results in units of the factor f
+        for (size_t g = 0; g < sgroups[s].size(); g++)
+        {
+            const std::vector<int> &grp = sgroups[s][g];
+            ngroups++;
+            std::vector<double> xg(kNF), xb(kNB);
+            std::vector<long> kb(kNF), nhw(kNF), noff(kNF), bt(kNB, 0), bp(kNB, 0);
+            for (int fi = 0; fi < kNF; fi++) xg[fi] = GridOf(fi);
+            for (int b = 0; b < kNB; b++) xb[b] = (b + 0.5) * kDB;
+            for (size_t r = 0; r < grp.size(); r++)
+            {
+                const RunData &rd = runs[grp[r]];
+                for (int fi = 0; fi < kNF; fi++) { const Tally &c = rd.t[s * kNF + fi]; kb[fi] += c.both; nhw[fi] += c.hw; noff[fi] += c.off; }
+                for (int b = 0; b < kNB; b++) { bt[b] += rd.tot[s * kNB + b]; bp[b] += rd.pass[s * kNB + b]; }
+            }
+            long nev = 0;
+            for (int b = 0; b < kNB; b++) nev += bt[b];
+            double fe = -1, el = 0, eh = 0, fp = -1, pl = 0, ph = 0, fx = -1, xl = 0, xh = 0;
+            // thresholds: efficiency falls, purity rises, bit fraction rises; veto: the reverse
+            const bool oke = Cross(xg, kb, nhw, !veto, fe, el, eh), okp = Cross(xg, kb, noff, veto, fp, pl, ph);
+            const bool okx = Cross(xb, bp, bt, veto, fx, xl, xh, 10);
+            const int r0 = grp.front(), r1 = grp.back();
+            const double xc = 0.5 * (r0 + r1);
+            char line[400];
+            std::snprintf(line, sizeof line, "%s %d %d %zu %ld %ld %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f\n", kScanName[s], r0, r1, grp.size(), nhw[0], nev,
+                          oke ? u * fe : -1, oke ? u * el : -1, oke ? u * eh : -1, okp ? u * fp : -1, okp ? u * pl : -1, okp ? u * ph : -1,
+                          okx ? u * fx : -1, okx ? u * xl : -1, okx ? u * xh : -1);
+            txt << line;
+            if (oke) { const int n = ge[s]->GetN(); ge[s]->SetPoint(n, xc, u * fe); ge[s]->SetPointError(n, xc - r0, r1 - xc, u * (fe - el), u * (eh - fe)); }
+            if (okp) { const int n = gp[s]->GetN(); gp[s]->SetPoint(n, xc, u * fp); gp[s]->SetPointError(n, xc - r0, r1 - xc, u * (fp - pl), u * (ph - fp)); }
+            if (okx) { const int n = gx[s]->GetN(); gx[s]->SetPoint(n, xc, u * fx); gx[s]->SetPointError(n, xc - r0, r1 - xc, u * (fx - xl), u * (xh - fx)); }
+        }
+    }
+    // per period: median x50 over the groups (the period's nominal factor)
+    double pmed[kNS][3];
+    for (int s = 0; s < kNS; s++)
+        for (int p = 0; p < 3; p++)
+        {
+            std::vector<double> v;
+            for (int i = 0; i < gx[s]->GetN(); i++)
+            {
+                double x, y; gx[s]->GetPoint(i, x, y);
+                if (PeriodOf((int)(x + 0.5)) == p) v.push_back(y);
+            }
+            std::sort(v.begin(), v.end());
+            pmed[s][p] = v.empty() ? -1 : (v.size() % 2 ? v[v.size() / 2] : 0.5 * (v[v.size() / 2 - 1] + v[v.size() / 2]));
+            char line[200];
+            std::snprintf(line, sizeof line, "# period_median_x50 %s period %d %.3f (%zu groups) = %.3f GeV\n", kScanName[s], p, pmed[s][p], v.size(), pmed[s][p] * kTrgThresholdGeV[s]);
+            txt << line;
+        }
+    txt.close();
+
     gStyle->SetOptStat(0);
     TCanvas c("c", "c", 1800, 1000);
     c.Divide(3, 2, 0.004, 0.004);
     const double rlo = runs.empty() ? 23000000 : runs.begin()->first - 2000, rhi = runs.empty() ? 23110000 : runs.rbegin()->first + 2000;
-    for (int tr = 0; tr < kNT; tr++)
+    for (int s = 0; s < kNS; s++)
     {
-        c.cd(tr + 1);
+        const bool em = s < 3;
+        c.cd(s + 1);
         gPad->SetGridy(); gPad->SetLeftMargin(0.12); gPad->SetRightMargin(0.03); gPad->SetBottomMargin(0.12);
-        TH1F *fr = new TH1F(Form("fr%d", tr), Form("%s (nominal %.1f GeV);run number;jet trigger value / nominal threshold", kTrgName[tr], kTrgThresholdGeV[tr]),
-                            10, rlo, rhi);
-        fr->SetMinimum(0.0); fr->SetMaximum(1.6);
+        const double ymax = 1.6;
+        TH1F *fr = new TH1F(Form("fr%d", s), Form(";run number;factor f of the hardware setting%s", em ? "s" : ""), 10, rlo, rhi);
+        fr->SetMinimum(0.0); fr->SetMaximum(ymax);
         fr->GetXaxis()->SetNoExponent(); fr->GetXaxis()->SetNdivisions(505);
         fr->GetXaxis()->SetTitleSize(0.05); fr->GetYaxis()->SetTitleSize(0.05); fr->GetXaxis()->SetLabelSize(0.042); fr->GetYaxis()->SetLabelSize(0.045);
         fr->Draw("AXIS");
-        TLatex tl; tl.SetNDC(); tl.SetTextFont(62); tl.SetTextSize(0.055);
-        tl.DrawLatex(0.13, 0.93, Form("%s  (nominal %.1f GeV)", kTrgName[tr], kTrgThresholdGeV[tr]));
+        TLatex tl; tl.SetNDC(); tl.SetTextFont(62); tl.SetTextSize(0.052);
+        if (em) tl.DrawLatex(0.13, 0.93, Form("%s:  E_{4x4} #geq f #times %.1f GeV  and  r #leq 1/f", kScanName[s], kTrgThresholdGeV[s]));
+        else tl.DrawLatex(0.13, 0.93, Form("%s:  patch #geq f #times %.1f GeV", kScanName[s], kTrgThresholdGeV[s]));
+        TLine *thl[3];
+        for (int p = 0; p < 3; p++)
+        {
+            const double a = p == 0 ? rlo : kPeriodEdge[p - 1], b = p == 2 ? rhi : kPeriodEdge[p];
+            thl[p] = new TLine(a, pmed[s][p], b, pmed[s][p]); thl[p]->SetLineColor(kGreen + 2); thl[p]->SetLineWidth(3);
+            if (pmed[s][p] > 0) thl[p]->Draw();
+        }
         for (int k = 0; k < 2; k++)
         {
-            TLine *l = new TLine(kPeriodEdge[k], 0.0, kPeriodEdge[k], 1.6);
+            TLine *l = new TLine(kPeriodEdge[k], 0.0, kPeriodEdge[k], ymax);
             l->SetLineColor(kGray + 2); l->SetLineStyle(7); l->SetLineWidth(2); l->Draw();
         }
-        ge[tr]->SetMarkerStyle(20); ge[tr]->SetMarkerColor(kAzure + 2); ge[tr]->SetLineColor(kAzure + 2);
-        gp[tr]->SetMarkerStyle(21); gp[tr]->SetMarkerColor(kOrange + 7); gp[tr]->SetLineColor(kOrange + 7);
-        if (ge[tr]->GetN()) ge[tr]->Draw("P");
-        if (gp[tr]->GetN()) gp[tr]->Draw("P");
-        if (gx[tr]->GetN()) { gx[tr]->SetMarkerStyle(24); gx[tr]->SetMarkerColor(kBlack); gx[tr]->SetLineColor(kBlack); gx[tr]->Draw("P"); }
-        if (tr == 1)
+        ge[s]->SetMarkerStyle(20); ge[s]->SetMarkerColor(kAzure + 2); ge[s]->SetLineColor(kAzure + 2);
+        gp[s]->SetMarkerStyle(21); gp[s]->SetMarkerColor(kOrange + 7); gp[s]->SetLineColor(kOrange + 7);
+        gx[s]->SetMarkerStyle(24); gx[s]->SetMarkerColor(kBlack); gx[s]->SetLineColor(kBlack);
+        if (ge[s]->GetN()) ge[s]->Draw("P");
+        if (gp[s]->GetN()) gp[s]->Draw("P");
+        if (gx[s]->GetN()) gx[s]->Draw("P");
+        if (s == 3)
         {
-            TLegend *lg = new TLegend(0.14, 0.14, 0.80, 0.33);
-            lg->SetBorderSize(0); lg->SetFillStyle(0); lg->SetTextSize(0.042);
-            lg->AddEntry(ge[tr], "50% efficiency (cut keeps half the fired events)", "p");
-            lg->AddEntry(gp[tr], "50% purity (half the cut's events fired)", "p");
-            if (gx[tr]->GetN()) lg->AddEntry(gx[tr], "turn-on x_{50} (bit set at that value 50%)", "p");
+            TLegend *lg = new TLegend(0.14, 0.14, 0.90, 0.42);
+            lg->SetBorderSize(0); lg->SetFillStyle(0); lg->SetTextSize(0.040);
+            lg->AddEntry(ge[s], "50% efficiency (cut keeps half the fired events)", "p");
+            lg->AddEntry(gp[s], "50% purity (half the cut's events fired)", "p");
+            lg->AddEntry(gx[s], "x_{50} (bit set in 50% at that factor)", "p");
+            lg->AddEntry(thl[0], "period median x_{50}: the period's nominal factor", "l");
             lg->Draw();
+        }
+        if (s == 0)
+        {
+            TLatex tn; tn.SetNDC(); tn.SetTextSize(0.040);
+            tn.DrawLatex(0.15, 0.16, "one f scales threshold and veto buffer");
         }
     }
     c.SaveAs((outdir + "/trg_time_scan.png").c_str());
-    printf("trg_time_scan: %zu groups; %s/trg_time_scan.{txt,png}\n", groups.size(), outdir.c_str());
+    printf("trg_time_scan: %zu groups; %s/trg_time_scan.{txt,png}\n", ngroups, outdir.c_str());
     return 0;
 }

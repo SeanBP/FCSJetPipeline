@@ -8,7 +8,11 @@
 // largest ECal 4x4 window (reco_trg_em_et, the stage-2 EM sum) and, for the
 // HCal veto, the largest neighbouring HCal 4x4 (reco_trg_em_hmax): the jet
 // passes the veto with margin m if 4 m hmax <= em (the hardware vetoes at
-// 4 hmax > em, i.e. m = 1; m = 0 means no veto cut). JP: the jet's patch sum
+// 4 hmax > em, i.e. m = 1; m = 0 means no veto cut). Since 2026-11-17 the EM
+// factor scan uses the combined cut (threshold and veto as ONE cut, Sean):
+// the jet's factor is AnConfig.h EmTrgFactor = min(E/thr, edge/r), r = 4 hmax/E,
+// edge = EmVetoEdge(run); the separate veto-margin page is only made with env
+// TRG_VETO_PAGE=1 (diagnostic). JP: the jet's patch sum
 // (reco_trg_jp_et, ECal + HCal E_T of the large patch).
 // The hardware decision: the trigger's bit in fcs_tcu_bits (stage 3, before
 // prescale): EM0-2 bits 3-5, JP2 bit 6, JP1 any of bits 7-9, JP0 any of bits
@@ -147,7 +151,7 @@ int main(int argc, char **argv)
                 {
                     double v;
                     if (isjp) v = (*jp)[j];
-                    else v = ((*em)[j] > 0 && (*hmax)[j] >= 0 && 4 * EmVetoMargin(run) * (*hmax)[j] <= (*em)[j]) ? (*em)[j] : -1;
+                    else { const double fj = EmTrgFactor((*em)[j], (*hmax)[j], tr, run); v = fj > 0 ? fj * thr : -1; }  // combined cut, in GeV-equivalent
                     if (v > lead) lead = v;
                 }
                 for (int fi = 0; fi < kNF; fi++)
@@ -211,8 +215,8 @@ int main(int argc, char **argv)
             {
                 c.cd(1 + k + 3 * row);
                 gPad->SetLeftMargin(0.13); gPad->SetBottomMargin(0.13);
-                TH1D *fr = new TH1D(Form("fr%d%d%d", fam, k, row), Form(";offline %s / measured threshold of the period (nominal %g GeV);%s", fam ? "JP patch sum" : "ECal 4x4 sum",
-                                    kTrgThresholdGeV[tr], row ? "purity" : "efficiency"), 10, 0.5, 2.5);
+                TH1D *fr = new TH1D(Form("fr%d%d%d", fam, k, row), Form(";offline %s / period threshold;%s", fam ? "JP patch sum" : "EM value min(E/thr, edge/r)",
+                                    row ? "purity" : "efficiency"), 10, 0.5, 2.5);
                 fr->SetMinimum(0); fr->SetMaximum(1.05);
                 fr->GetXaxis()->SetTitleSize(0.05); fr->GetYaxis()->SetTitleSize(0.055); fr->GetYaxis()->SetTitleOffset(1.1);
                 fr->Draw();
@@ -226,16 +230,17 @@ int main(int argc, char **argv)
                     if (lg) lg->AddEntry(g, kPeriodName[p], "pl");
                 }
                 TLine *l = new TLine(fcur, 0, fcur, 1.05); l->SetLineStyle(2); l->SetLineWidth(2); l->Draw();
+                TLine *ls = new TLine(kTrgSysFactor, 0, kTrgSysFactor, 1.05); ls->SetLineStyle(1); ls->SetLineWidth(2); ls->SetLineColor(kRed + 1); ls->Draw();
                 if (lg) { lg->SetBorderSize(0); lg->SetFillStyle(0); lg->SetTextSize(0.04); lg->Draw(); }
                 TLatex tl; tl.SetNDC(); tl.SetTextSize(0.06);
-                tl.DrawLatex(0.15, 0.92, Form("#bf{%s} %s", kTrgLevelName[tr], row ? "purity" : "efficiency"));
+                tl.DrawLatex(0.15, 0.92, Form("#bf{%s} %s (nominal %g GeV)", kTrgLevelName[tr], row ? "purity" : "efficiency", kTrgThresholdGeV[tr]));
                 tl.SetTextSize(0.045);
                 if (row == 0)
                 {
                     const Tally &ca = tf[(3 * kNT + tr) * kNF];
                     tl.DrawLatex(0.5, 0.75, Form("coverage (all runs): %.2f", ca.hw ? double(ca.hwj) / ca.hw : 0.));
                 }
-                if (!fam && row == 0) tl.DrawLatex(0.5, 0.82, Form("HCal veto margin %.2g / %.2g / %.2g", kEmVetoMarginPeriod[0], kEmVetoMarginPeriod[1], kEmVetoMarginPeriod[2]));
+                if (!fam && row == 0) tl.DrawLatex(0.4, 0.82, Form("one cut; veto edge %.3g / %.3g / %.3g", kEmVetoEdge[0], kEmVetoEdge[1], kEmVetoEdge[2]));
             }
             // the table at the current factor and at the candidates around it (2026-11-16)
             for (double ff : {1.0, 1.1, 1.15, 1.2, 1.3})
@@ -250,7 +255,8 @@ int main(int argc, char **argv)
         }
         c.SaveAs((outdir + (fam ? "/trg_cut_perf_JP.png" : "/trg_cut_perf_EM.png")).c_str());
     }
-    // veto-margin page
+    // veto-margin page (diagnostic only since 2026-11-17: the veto moves with the threshold)
+    if (getenv("TRG_VETO_PAGE") && std::atoi(getenv("TRG_VETO_PAGE")) == 1)
     {
         TCanvas c("cv", "", 1500, 850);
         c.Divide(3, 2, 0.002, 0.002);
@@ -291,6 +297,6 @@ int main(int argc, char **argv)
                                 cc.hw, cc.off, cc.both, cc.hwj ? double(cc.both) / cc.hwj : 0., cc.off ? double(cc.both) / cc.off : 0.);
                 }
     }
-    printf("trg_cut_perf: wrote %s/trg_cut_perf_{EM,JP,veto}.png and trg_cut_perf.txt\n", outdir.c_str());
+    printf("trg_cut_perf: wrote %s/trg_cut_perf_{EM,JP}.png (veto page with TRG_VETO_PAGE=1) and trg_cut_perf.txt\n", outdir.c_str());
     return 0;
 }
