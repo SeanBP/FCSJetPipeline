@@ -68,7 +68,10 @@ static bool IsYield(const std::string &n) { return StartsWith(n, "h_xF"); }
 // EM levels (no suffix) and JP levels not firing EM (_jponly)
 static bool IsPi0PeakInput(const std::string &n)
 {
-    // (the trigger-systematic copies, suffix kSysSuffix "_f130", are left out)
+    // (the trigger-systematic copies, suffix kSysSuffix "_f130", and the
+    // systematic-variation copies, AnConfig.h kVarSuffix, are left out)
+    for (int v = 0; v < kNVar; v++)
+        if (EndsWith(n, kVarSuffix[v])) return false;
     return (StartsWith(n, "h_xFpi_EM") && !EndsWith(n, "_jponly") && !EndsWith(n, "_f130")) || (StartsWith(n, "h_xFpi_JP") && EndsWith(n, "_jponly"));
 }
 

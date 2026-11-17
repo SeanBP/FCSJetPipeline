@@ -229,6 +229,13 @@ Int_t StSimpleReaderMaker::Init( )
   out_tree->Branch("epd_avgtac_w", &epd_avgtac_w, "epd_avgtac_w/F");
   out_tree->Branch("epd_ntac_e", &epd_ntac_e, "epd_ntac_e/I");
   out_tree->Branch("epd_ntac_w", &epd_ntac_w, "epd_ntac_w/I");
+  out_tree->Branch("bbc_e_ntiles", &bbc_e_ntiles, "bbc_e_ntiles/I");
+  out_tree->Branch("bbc_e_adcsum", &bbc_e_adcsum, "bbc_e_adcsum/I");
+  out_tree->Branch("epd_e_nhits", &epd_e_nhits, "epd_e_nhits/I");
+  out_tree->Branch("tof_mult", &tof_mult, "tof_mult/I");
+  out_tree->Branch("event_time", &event_time, "event_time/i");
+  out_tree->Branch("zdc_coinc_rate", &zdc_coinc_rate, "zdc_coinc_rate/F");
+  out_tree->Branch("bbc_coinc_rate", &bbc_coinc_rate, "bbc_coinc_rate/F");
   out_tree->Branch("event_sqrt_s_gev", &event_sqrt_s_gev, "event_sqrt_s_gev/D");
 
   out_tree->Branch("sigma_job", &sigma_job, "sigma_job/D");
@@ -312,6 +319,8 @@ Int_t StSimpleReaderMaker::Make( )
   event_vertex_source = 0; epd_source = 0; mc_vz = mc_vx = mc_vy = -9999;
   bbc_tac_diff = -4096; bbc_vz_tac = bbc_vz_det = epd_vz = vpd_vz = -9999;
   epd_avgtac_e = epd_avgtac_w = 0; epd_ntac_e = epd_ntac_w = 0;
+  bbc_e_ntiles = bbc_e_adcsum = epd_e_nhits = tof_mult = -1;
+  event_time = 0; zdc_coinc_rate = bbc_coinc_rate = -1;
   event_sqrt_s_gev = -1;
 
   // -----------
@@ -423,7 +432,18 @@ Int_t StSimpleReaderMaker::Make( )
       if ( td ){
         bbc_tac_diff = (int)td->bbcTimeDifference() - 4096;
         if ( bbc_tac_diff != 0 && bbc_tac_diff != -4096 ) bbc_vz_tac = bbc_tac_diff * -0.2475;
+        // east BBC small tiles (PMT 1-16) with a signal, and TOF multiplicity
+        // (the FMS Run 15 "ring of fire" cut: BBC east >= 1, TOF > 2)
+        bbc_e_ntiles = 0; bbc_e_adcsum = 0;
+        for ( int pmt = 1; pmt <= 16; pmt++ ){
+          const int adc = (int)td->bbcADC(east, pmt, 0);
+          if ( adc > 0 ){ bbc_e_ntiles++; bbc_e_adcsum += adc; }
+        }
+        tof_mult = (int)td->tofMultiplicity(0);
       }
+      event_time = (UInt_t)muEvent->eventInfo().time();
+      zdc_coinc_rate = muEvent->runInfo().zdcCoincidenceRate();
+      bbc_coinc_rate = muEvent->runInfo().bbcCoincidenceRate();
       bbc_vz_det = muEvent->bbcTriggerDetector().zVertex();
       if ( muEvent->numberOfVpdEastHits() > 0 && muEvent->numberOfVpdWestHits() > 0 ) vpd_vz = muEvent->vpdVz();
       // EPD hits: the MuDst's, or, where it has none (P24ia st_fwd before
@@ -431,6 +451,7 @@ Int_t StSimpleReaderMaker::Make( )
       // from the trigger data's QT data into StEvent. Hit selection and
       // vertex as D. Kapukchyan's StFwdAnaEpdQaAndVert.
       double sume = 0, sumw = 0;
+      epd_e_nhits = 0;
       TClonesArray* epdArr = muDst->epdHits();
       const int nepd = epdArr ? epdArr->GetEntriesFast() : 0;
       if ( nepd > 0 ){
@@ -438,6 +459,7 @@ Int_t StSimpleReaderMaker::Make( )
         for ( int k = 0; k < nepd; k++ ){
           StMuEpdHit* eh = (StMuEpdHit*)epdArr->UncheckedAt(k);
           if ( !eh ) continue;
+          if ( eh->side() < 0 && eh->nMIP() > 0.3 ) epd_e_nhits++;
           const float nmip = eh->nMIP();
           const int tac = eh->tac();
           if ( !(nmip > 1 && nmip < 15 && tac > 50) ) continue;
@@ -454,6 +476,7 @@ Int_t StSimpleReaderMaker::Make( )
           for ( unsigned k = 0; k < hits.size(); k++ ){
             const StEpdHit* eh = hits[k];
             if ( !eh ) continue;
+            if ( eh->side() < 0 && eh->nMIP() > 0.3 ) epd_e_nhits++;
             const float nmip = eh->nMIP();
             const int tac = eh->tac();
             if ( !(nmip > 1 && nmip < 15 && tac > 50) ) continue;

@@ -380,4 +380,51 @@ static const int kNPi0ZCls = 6;
 static const double kPi0ZEdges[kNPi0ZCls + 1] = {0.0, 0.85, 0.9, 0.95, 0.98, 0.99, 1.0001};
 static const double kPi0IsoZ = 0.98, kPi0NonIsoZ = 0.9;   // the FMS (nominal) thresholds
 
+// ------------------ Collision ("ring of fire") cut, nominal ------------------
+// Sean 2026-11-17: "If FMS did it, we should apply the cut as well". FMS Run
+// 15 jets (PRD 103 092009; BrightSTAR bbcMult > 0.5, tofTrayMult > 2.5): east
+// BBC >= 1 small tile with a signal and TOF multiplicity > 2. Jet trees
+// without the branches (before 2026-11-17: bbc_e_ntiles = -1) are not cut.
+static const int kBbcEastMinTiles = 1;
+static const int kTofMultMin = 3;
+inline bool PassCollisionCut(int bbc_e_ntiles, int tof_mult)
+{
+    if (bbc_e_ntiles < 0 || tof_mult < 0) return true;
+    return bbc_e_ntiles >= kBbcEastMinTiles && tof_mult >= kTofMultMin;
+}
+
+// ------------------ Systematic variations (yield copies) ------------------
+// Sean 2026-11-17: the cut variations are stored as copies of the default
+// yields (jets >= the default factor, E <= sqrt(s)/2), so a variation needs no
+// pass over the jet trees. Each copy has the variation's suffix at the end:
+//   photon classes: h_xF_<l>_<cls>_<side>_<spin><tag><var>,
+//                   h_abscos_ / h_xfsum_<l>_<cls><tag><var>; <tag> "" for EM
+//                   levels, kVarEmTag for JP levels (the same jet's EM result
+//                   at the default factor, for the -J union)
+//   pi0 candidates: h_xFpi_<l>_<side>_<spin>[_jponly]<var>, h_abscospi_ /
+//                   h_xfsumpi_<l>[_jponly]<var>
+// AnAsymmetry -v <var> reads them (with or without -I).
+//   _vfid25 / _vfid30  jet axis >= 25 / 30 cm inside the ECal edge (nominal 20,
+//                      RecoJets; tighter only: the JES map ends at 20 cm)
+//   _vvz60             |vz| < 60 cm (nominal 100)
+//   _vvtxmeas          a measured vertex only (EPD or BBC TAC; drops the
+//                      events at the nominal IP: the no-vertex systematic)
+//   _vbbcveto          the events the collision cut REMOVES (disjoint; the
+//                      check: their share and A_N)
+static const int kNVar = 5;
+enum { kVarFid25, kVarFid30, kVarVz60, kVarVtxMeas, kVarBbcVeto };
+static const char *const kVarSuffix[kNVar] = {"_vfid25", "_vfid30", "_vvz60", "_vvtxmeas", "_vbbcveto"};
+static const char *const kVarEmTag[2] = {"_noemd", "_emd"};  // JP copies: EM below / at the default factor
+static const double kVarFidCm[2] = {25.0, 30.0};
+static const double kVarVzCut = 60.0;
+
+// ------------------ Trigger reference tallies (trg_nominal) ------------------
+// Per job, from its trigger reference file only (an_job: the first MuDst, with
+// the reference triggers added to the filter): reference events, leading
+// trigger-value jet. h_trgref_em<l>_{n,k}: E_4x4 / hardware setting (0-4, 0.05)
+// x r = 4 H_max / E_4x4 (0-2, 0.05), events / bit set; h_trgref_jp<l>_{n,k}:
+// patch / hardware setting. TriggerPlayground/trg_nominal.cpp reads them.
+static const int kTrgRefNE = 80, kTrgRefNR = 40;
+static const double kTrgRefDE = 0.05, kTrgRefDR = 0.05;
+
 #endif

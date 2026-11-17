@@ -119,6 +119,23 @@ over the job's jet files, which are then deleted unless the job keeps them
 modules, so the job shell keeps the STAR environment root4star needs.
 Step 6 runs on the job outputs, not in the job.
 
+## Next-pass additions (2026-11-17)
+
+- **Collision cut (nominal):** east BBC >= 1 tile and TOF multiplicity > 2, as
+  the FMS (AnConfig.h `PassCollisionCut`); new SimpleTree / jet-tree branches
+  `bbc_e_ntiles`, `bbc_e_adcsum`, `epd_e_nhits`, `tof_mult`, `event_time`,
+  `zdc_coinc_rate`, `bbc_coinc_rate` (StSimpleReaderMaker, RecoJets).
+- **Systematic-variation copies** of the default yields (photon classes and
+  π⁰ candidates): `_vfid25`, `_vfid30`, `_vvz60`, `_vvtxmeas`, `_vbbcveto`
+  (AnConfig.h `kVarSuffix`); `AnAsymmetry -v <var>`;
+  `systematics/sys_variations.sh`. About +2 MB per yield file.
+- **Trigger reference file:** each job's first processed MuDst also keeps the
+  trigger reference events (`submit_an_job.sh -R`, default EM refs JP / DiJP /
+  Had / HHT / HTOT / HcalTot and JP refs DY / J/psi / ELE2), which the EM/JP
+  filter otherwise drops (2.6% / 1.5% kept, biased). AnHistograms fills
+  `h_trgref_*` from that file; `TriggerPlayground/trg_nominal.cpp` reads them
+  from the yield files.
+
 ## Files
 
 - **`AnConfig.h`**: selection and binning.

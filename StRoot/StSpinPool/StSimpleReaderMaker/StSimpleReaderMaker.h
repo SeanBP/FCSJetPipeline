@@ -178,6 +178,20 @@ class StSimpleReaderMaker : public StMaker
   Float_t epd_avgtac_e = 0, epd_avgtac_w = 0;
   Int_t epd_ntac_e = 0, epd_ntac_w = 0;
 
+  // Collision / time variables for cut variations after the pass (data only;
+  // -1 = not available or simulation), 2026-11-17:
+  //  bbc_e_ntiles: east BBC small tiles (PMT 1-16) with ADC > 0
+  //                (StTriggerData::bbcADC(east, pmt)); FMS Run 15 cut: >= 1
+  //  bbc_e_adcsum: their ADC sum
+  //  epd_e_nhits:  east EPD hits with nMIP > 0.3 (the hits of the vertex step)
+  //  tof_mult:     StTriggerData::tofMultiplicity(); FMS Run 15 cut: > 2
+  //  event_time:   StEventInfo::time() (Unix time; time in fill with the fill table)
+  //  zdc_coinc_rate, bbc_coinc_rate: StRunInfo coincidence rates (Hz), the
+  //                luminosity proxy for the luminosity split
+  Int_t bbc_e_ntiles = -1, bbc_e_adcsum = -1, epd_e_nhits = -1, tof_mult = -1;
+  UInt_t event_time = 0;
+  Float_t zdc_coinc_rate = -1, bbc_coinc_rate = -1;
+
   // Per-run sqrt(s), GeV (computeSqrtSForRun() in JetParameters.h)
   Double_t event_sqrt_s_gev = -1;
 

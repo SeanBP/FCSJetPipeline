@@ -26,6 +26,8 @@
       {{RANGEFILE}}       one "first-line number-of-lines" row per job
       {{NPROCESSES}}      number of jobs (rows of RANGEFILE)
       {{TRIGGER_FILTER}}  FCS trigger names an event must have fired
+      {{REF_TRIGGERS}}    trigger reference triggers added for the first processed
+                          MuDst of each job (ref_files.list; AnHistograms h_trgref_*)
       {{CALIB_NAME}}      EM-only point-jet JES lookup JSON, a file in
                           asymmetry/jes/ (submit_an_job.sh -c copies it there)
       {{KEEP_JETS}}       keep the calibrated jet files of every N-th job,
@@ -92,8 +94,15 @@
 
         set xrdname = "root://xrdstar.rcf.bnl.gov:1095"
         set xrdnchar = `echo $xrdname | awk '{print length($0)}'`
-        rm -f simpletree_files.list ue_pairs.list jet_files.list
-        touch simpletree_files.list jet_files.list
+        rm -f simpletree_files.list ue_pairs.list jet_files.list ref_files.list
+        touch simpletree_files.list jet_files.list ref_files.list
+        # Trigger reference file (Sean 2026-11-17): the job's first processed MuDst
+        # also keeps the reference triggers' events (trg_nominal: EM refs JP/DiJP/
+        # Had/HHT/HTOT/HcalTot, JP refs DY/J/psi/ELE2), which the EM/JP filter drops
+        # (2.6% / 1.5% kept, the rest biased); AnHistograms fills the trigger tallies
+        # (h_trgref_*) from that file only. Its extra events list no EM/JP level, so
+        # the yields do not change.
+        set REFDONE = 0
         set nonomatch
 
         set i = 1
@@ -150,8 +159,10 @@
             set INKB = `du -k ${LOCALFILE} | cut -f1`
             echo "fetch ${LOCALFILE} ${NEVCAT} ${INKB} `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
 
+            set FILT = "{{TRIGGER_FILTER}}"
+            if ( ${REFDONE} == 0 &amp;&amp; "{{REF_TRIGGERS}}" != "" ) set FILT = "{{TRIGGER_FILTER}},{{REF_TRIGGERS}}"
             set NBEFORE = `ls SimpleTree_mudst_*.root | grep -c '\.root$'`
-            /usr/bin/time -f "%e %U %S %M" -o stage.time root4star -b -q runMudst.C\(\"${LOCALFILE}\",-1,-2,\".\",1,0,\"{{TRIGGER_FILTER}}\"\) &gt;&amp;! mudst.log
+            /usr/bin/time -f "%e %U %S %M" -o stage.time root4star -b -q runMudst.C\(\"${LOCALFILE}\",-1,-2,\".\",1,0,\"${FILT}\"\) &gt;&amp;! mudst.log
             echo "mudst ${LOCALFILE} ${NEVCAT} ${INKB} `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
             rm -f ${LOCALFILE}
             set NAFTER = `ls SimpleTree_mudst_*.root | grep -c '\.root$'`
@@ -171,7 +182,7 @@
             set SUFFIX = `echo ${STFILE} | sed -e 's/^SimpleTree_mudst_//' -e 's/\.root$//'`
             echo "${STFILE}" &gt;! single_file.list
             set INKB = `du -k ${STFILE} | cut -f1`
-            /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./RecoJets single_file.list "{{TRIGGER_FILTER}}" 1 1 &gt;&amp;! recojets.log
+            /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./RecoJets single_file.list "${FILT}" 1 1 &gt;&amp;! recojets.log
             set JETSTATUS = $status
             echo "jets ${STFILE} 0 ${INKB} `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
             if ( ${JETSTATUS} != 0 || ! -f jet_output.root ) then
@@ -197,6 +208,10 @@
                 continue
             endif
             echo "jet_output_${SUFFIX}.root" >> jet_files.list
+            if ( "${FILT}" != "{{TRIGGER_FILTER}}" ) then
+                echo "jet_output_${SUFFIX}.root" >> ref_files.list
+                set REFDONE = 1
+            endif
             # this file is in the job's yields (recovery.sh: done once the job's an_hists exists)
             echo "done ${LOCALFILE} ${NEVCAT} 0 0 0 0 0 0" >> ${TIMING}
             @ i++
@@ -214,7 +229,7 @@
         echo "calib all ${NPRODUCED} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
 
         # A_N yield histograms
-        /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./AnHistograms jet_files.list an_hists_${TAG}.root
+        /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./AnHistograms jet_files.list an_hists_${TAG}.root ref_files.list
         echo "hists all ${NPRODUCED} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
         echo "output an_hists_${TAG}.root 0 `du -k an_hists_${TAG}.root | cut -f1` 0 0 0 0 0" >> ${TIMING}
         echo "jetfiles all 0 `cat jet_files.list | xargs du -ck | tail -1 | cut -f1` 0 0 0 0 0" >> ${TIMING}

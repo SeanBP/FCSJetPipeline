@@ -205,6 +205,20 @@ int main(int argc, char** argv) {
     outTree->Branch("epd_vz", &epd_vz, "epd_vz/F");
     outTree->Branch("bbc_vz_tac", &bbc_vz_tac, "bbc_vz_tac/F");
     outTree->Branch("epd_source", &epd_source, "epd_source/I");
+    // collision / time variables for cut variations (StSimpleReaderMaker,
+    // 2026-11-17; -1 / 0 when the SimpleTree has none): east BBC small tiles
+    // and ADC sum, east EPD hits, TOF multiplicity, event Unix time, ZDC / BBC
+    // coincidence rates
+    Int_t bbc_e_ntiles = -1, bbc_e_adcsum = -1, epd_e_nhits = -1, tof_mult = -1;
+    UInt_t event_time = 0;
+    Float_t zdc_coinc_rate = -1, bbc_coinc_rate = -1;
+    outTree->Branch("bbc_e_ntiles", &bbc_e_ntiles, "bbc_e_ntiles/I");
+    outTree->Branch("bbc_e_adcsum", &bbc_e_adcsum, "bbc_e_adcsum/I");
+    outTree->Branch("epd_e_nhits", &epd_e_nhits, "epd_e_nhits/I");
+    outTree->Branch("tof_mult", &tof_mult, "tof_mult/I");
+    outTree->Branch("event_time", &event_time, "event_time/i");
+    outTree->Branch("zdc_coinc_rate", &zdc_coinc_rate, "zdc_coinc_rate/F");
+    outTree->Branch("bbc_coinc_rate", &bbc_coinc_rate, "bbc_coinc_rate/F");
     // the vertex z the reco kinematics used (0 = origin; FCS_JET_VERTEX)
     Float_t reco_vz_used = 0, reco_vx_used = 0, reco_vy_used = 0;
     outTree->Branch("reco_vz_used", &reco_vz_used, "reco_vz_used/F");
@@ -293,6 +307,17 @@ int main(int argc, char** argv) {
         if ( tree->GetBranch("epd_vz") ) tree->SetBranchAddress("epd_vz", &epd_vz);
         if ( tree->GetBranch("bbc_vz_tac") ) tree->SetBranchAddress("bbc_vz_tac", &bbc_vz_tac);
         if ( tree->GetBranch("epd_source") ) tree->SetBranchAddress("epd_source", &epd_source);
+        bbc_e_ntiles = bbc_e_adcsum = epd_e_nhits = tof_mult = -1;
+        event_time = 0; zdc_coinc_rate = bbc_coinc_rate = -1;
+        if ( tree->GetBranch("bbc_e_ntiles") ) {
+            tree->SetBranchAddress("bbc_e_ntiles", &bbc_e_ntiles);
+            tree->SetBranchAddress("bbc_e_adcsum", &bbc_e_adcsum);
+            tree->SetBranchAddress("epd_e_nhits", &epd_e_nhits);
+            tree->SetBranchAddress("tof_mult", &tof_mult);
+            tree->SetBranchAddress("event_time", &event_time);
+            tree->SetBranchAddress("zdc_coinc_rate", &zdc_coinc_rate);
+            tree->SetBranchAddress("bbc_coinc_rate", &bbc_coinc_rate);
+        }
         if ( tree->GetBranch("event_vertex_z") ) {
             tree->SetBranchAddress("event_vertex_z", &event_vertex_z);
             tree->SetBranchAddress("event_vertex_source", &event_vertex_source);

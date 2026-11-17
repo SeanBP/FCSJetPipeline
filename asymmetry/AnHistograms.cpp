@@ -111,9 +111,24 @@
 // uses the constituents' momenta (points, energy along the direction from the
 // nominal vertex at the origin), so the mass carries the point energy scale
 // and no vertex correction.
+// Collision cut (2026-11-17, AnConfig.h PassCollisionCut: east BBC >= 1 tile,
+// TOF multiplicity > 2, as the FMS): events failing it fill none of the above;
+// they go only to the _vbbcveto copies below. Trees without the branches are
+// not cut.
+// Systematic variations (AnConfig.h kVarSuffix): copies of the default
+// photon-class yields (h_xF_ / h_abscos_ / h_xfsum_, JP levels split by
+// kVarEmTag) and of the pi0-candidate yields (h_xFpi_ / h_abscospi_ /
+// h_xfsumpi_, default and _jponly) with the variation's cut, suffix at the end:
+// fiducial 25 / 30 cm (distance of the jet axis from the ECal edge at z_proj,
+// from reco_x / reco_y), |vz| < 60, measured vertex only, collision-cut
+// failures. AnAsymmetry -v reads them.
+// Trigger reference tallies (AnConfig.h "Trigger reference tallies"): with a
+// third argument, a list of the job's trigger reference files, every
+// reference event of those files fills h_trgref_* (no other cut), for
+// TriggerPlayground/trg_nominal.cpp.
 // Output files of one run, or of a fill, add with hadd.
 //
-// Usage: ./AnHistograms <jet file list> <output.root>
+// Usage: ./AnHistograms <jet file list> <output.root> [trigger reference file list]
 // Build: g++ -m64 -O2 AnHistograms.cpp VectorDict.cxx -o AnHistograms -Icollins
 //            `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11
 //        (the jobs copy collins/*.h next to it, so need no -Icollins)
@@ -129,6 +144,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <set>
@@ -193,9 +209,9 @@ static int RunFromFileName(const std::string &path)
 // kBelowHalfS: those with E <= sqrt(s)/2. Not steps of the flow: kEmDefault,
 // kJpDefault, kBothDefault (jets at the default factor in the EM family, the
 // JP family, both), kVeto (_veto jets) and kCompanion (_comp jets).
-enum Cut { kAllJets, kNoLed, kTrgListed, kSpin, kVertex, kCalibrated, kXfPositive, kPtMin, kTrg115, kTrgDefault, kBelowHalfS,
+enum Cut { kAllJets, kNoLed, kTrgListed, kSpin, kVertex, kCollision, kCalibrated, kXfPositive, kPtMin, kTrg115, kTrgDefault, kBelowHalfS,
            kEmDefault, kJpDefault, kBothDefault, kVeto, kCompanion, kNCuts };
-static const char *const kCutName[kNCuts] = {"all jets", "no LED", "EM/JP trigger", "spin state", "|vz| < 100", "calibrated", "x_F > 0",
+static const char *const kCutName[kNCuts] = {"all jets", "no LED", "EM/JP trigger", "spin state", "|vz| < 100", "BBC/TOF", "calibrated", "x_F > 0",
                                              "pT > 2", "trg >= 1.15 thr", "trg >= default", "E <= sqrt(s)/2",
                                              "EM >= default", "JP >= default", "EM and JP dflt", "EM veto failed", "companion"};
 
@@ -277,7 +293,7 @@ int main(int argc, char **argv)
 {
     if (argc < 3)
     {
-        std::cerr << "Usage: " << argv[0] << " <jet file list> <output.root>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <jet file list> <output.root> [trigger reference file list]" << std::endl;
         return 1;
     }
     TChain t("jetTree");
@@ -287,6 +303,14 @@ int main(int argc, char **argv)
         while (in >> f) t.Add(f.c_str());
     }
     if (t.GetNtrees() == 0) { std::cerr << "ERROR: no files in " << argv[1] << std::endl; return 1; }
+    // trigger reference files (base names): their reference events fill h_trgref_*
+    std::set<std::string> ref_files;
+    if (argc > 3)
+    {
+        std::ifstream in(argv[3]);
+        std::string f;
+        while (in >> f) ref_files.insert(f.substr(f.find_last_of('/') + 1));
+    }
     if (!t.GetBranch("reco_E_corr")) { std::cerr << "ERROR: no reco_E_corr; run ApplyCorrections_em_only first" << std::endl; return 1; }
     if (!t.GetBranch("reco_trg_em_et")) { std::cerr << "ERROR: no reco_trg_em_et; jet files made before 2026-11-05 lack the trigger values (remake them)" << std::endl; return 1; }
 
@@ -335,6 +359,26 @@ int main(int argc, char **argv)
     // the vertex cut (JetParameters.h pass_vertex_cut) needs the 2026-11-16 vertex
     // (EPD / BBC TAC calibrated / nominal); older trees, without epd_source, are not cut
     const bool vertex_cut = t.GetBranch("epd_source") != 0;
+    // collision cut variables (jet trees from 2026-11-17 on; -1 = not cut)
+    Int_t bbc_e_ntiles = -1, tof_mult = -1;
+    if (t.GetBranch("bbc_e_ntiles")) t.SetBranchAddress("bbc_e_ntiles", &bbc_e_ntiles);
+    if (t.GetBranch("tof_mult")) t.SetBranchAddress("tof_mult", &tof_mult);
+    else std::cerr << "Warning: no bbc_e_ntiles / tof_mult (jet trees before 2026-11-17): no collision cut, _vbbcveto empty" << std::endl;
+    // trigger reference flags and the hardware bits (as trg_nominal.cpp)
+    UInt_t tcu = 0;
+    if (t.GetBranch("fcs_tcu_bits")) t.SetBranchAddress("fcs_tcu_bits", &tcu);
+    const char *ref_em_names[] = {"fcsJP2", "fcsJPA1", "fcsJPBC1", "fcsJPDE1", "fcsJPA0", "fcsJPBC0", "fcsJPDE0", "fcsDiJP", "fcsDiJPAsy",
+                                  "fcsHad0", "fcsHad1", "fcsHad2", "fcsHHT_N", "fcsHHT_S", "fcsHTOT_N", "fcsHTOT_S", "fcs_HcalTot"};
+    const char *ref_jp_names[] = {"fcsEM0", "fcsEM1", "fcsEM0_tpc", "fcsEM1_tpc", "fcsDY", "fcsDYAsy", "fcsJPsi", "fcsELE2"};
+    const int n_ref_em = sizeof(ref_em_names) / sizeof(ref_em_names[0]), n_ref_jp = sizeof(ref_jp_names) / sizeof(ref_jp_names[0]);
+    std::vector<Int_t> ref_em(n_ref_em, 0), ref_jp(n_ref_jp, 0);
+    if (!ref_files.empty())
+    {
+        // the JP flags are already bound above to the A_N variables: read them from those
+        for (int k = 7; k < n_ref_em; k++) if (t.GetBranch(ref_em_names[k])) t.SetBranchAddress(ref_em_names[k], &ref_em[k]);
+        // fcsEM0/1 and their _tpc copies are bound to em[] / em_tpc[] above
+        for (int k = 4; k < n_ref_jp; k++) if (t.GetBranch(ref_jp_names[k])) t.SetBranchAddress(ref_jp_names[k], &ref_jp[k]);
+    }
     if (!vertex_cut) std::cerr << "WARNING: no epd_source branch (jet trees before the 2026-11-16 vertex code): no vertex cut" << std::endl;
     t.SetBranchAddress("reco_eta", &eta);
     t.SetBranchAddress("reco_phi", &phi);
@@ -506,6 +550,63 @@ int main(int argc, char **argv)
     TH1D *h_cut = new TH1D("h_cutflow", ";;jets", kNCuts + 1, 0, kNCuts + 1);
     for (int c = 0; c < kNCuts; c++) h_cut->GetXaxis()->SetBinLabel(c + 1, kCutName[c]);
     h_cut->GetXaxis()->SetBinLabel(kNCuts + 1, "events read");
+    // systematic-variation copies (AnConfig.h kVarSuffix): photon classes [var][JP EM tag][level]...,
+    // pi0 candidates [var][0 default, 1 _jponly][level]...
+    static TH1D *hv[kNVar][2][kNTrgLevels][kNPhotonClasses][kNSides][kNSpinStates];
+    static TH1D *hv_cos[kNVar][2][kNTrgLevels][kNPhotonClasses], *hv_xfs[kNVar][2][kNTrgLevels][kNPhotonClasses];
+    static TH3D *hv_pi[kNVar][2][kNTrgLevels][kNSides][kNSpinStates], *hv_picos[kNVar][2][kNTrgLevels], *hv_pixfs[kNVar][2][kNTrgLevels];
+    {
+        double xa[kNXfBins + 1], ma[kNPi0MassBins + 1];
+        for (int i = 0; i <= kNXfBins; i++) xa[i] = kXfMin + i * (kXfMax - kXfMin) / kNXfBins;
+        for (int i = 0; i <= kNPi0MassBins; i++) ma[i] = i * kPi0MassMax / kNPi0MassBins;
+        const char *ax = ";#pi^{0} x_{F};M_{#gamma#gamma} (GeV);z_{em}";
+        for (int v = 0; v < kNVar; v++)
+            for (int l = 0; l < kNTrgLevels; l++)
+                for (int tg = 0; tg < (IsJpLevel(l) ? 2 : 1); tg++)
+                {
+                    const TString sfx = TString(IsJpLevel(l) ? kVarEmTag[tg] : "") + kVarSuffix[v];
+                    for (int k = 0; k < kNPhotonClasses; k++)
+                    {
+                        for (int s = 0; s < kNSides; s++)
+                            for (int p = 0; p < kNSpinStates; p++)
+                            {
+                                TString name = TString::Format("h_xF_%s_%s_%s_%s", kTrgLevelName[l], PhotonClassName(k), kSideName[s], kSpinStateName[p]) + sfx;
+                                hv[v][tg][l][k][s][p] = new TH1D(name, name + ";x_{F};jets", kNXfBins, kXfMin, kXfMax);
+                            }
+                        TString name = TString::Format("h_abscos_%s_%s", kTrgLevelName[l], PhotonClassName(k)) + sfx;
+                        hv_cos[v][tg][l][k] = new TH1D(name, name + ";x_{F};sum of |cos #phi|", kNXfBins, kXfMin, kXfMax);
+                        name = TString::Format("h_xfsum_%s_%s", kTrgLevelName[l], PhotonClassName(k)) + sfx;
+                        hv_xfs[v][tg][l][k] = new TH1D(name, name + ";x_{F};sum of x_{F}", kNXfBins, kXfMin, kXfMax);
+                    }
+                    // pi0: tg 0 default, 1 _jponly (JP levels)
+                    const TString psfx = TString(tg ? "_jponly" : "") + kVarSuffix[v];
+                    for (int s = 0; s < kNSides; s++)
+                        for (int p = 0; p < kNSpinStates; p++)
+                        {
+                            TString pn = TString::Format("h_xFpi_%s_%s_%s", kTrgLevelName[l], kSideName[s], kSpinStateName[p]) + psfx;
+                            hv_pi[v][tg][l][s][p] = new TH3D(pn, pn + ax, kNXfBins, xa, kNPi0MassBins, ma, kNPi0ZCls, kPi0ZEdges);
+                        }
+                    TString pn = TString::Format("h_abscospi_%s", kTrgLevelName[l]) + psfx;
+                    hv_picos[v][tg][l] = new TH3D(pn, pn + ax, kNXfBins, xa, kNPi0MassBins, ma, kNPi0ZCls, kPi0ZEdges);
+                    pn = TString::Format("h_xfsumpi_%s", kTrgLevelName[l]) + psfx;
+                    hv_pixfs[v][tg][l] = new TH3D(pn, pn + ax, kNXfBins, xa, kNPi0MassBins, ma, kNPi0ZCls, kPi0ZEdges);
+                }
+    }
+    // trigger reference tallies (only with a reference file list)
+    TH2D *tr_emn[kNEmLevels] = {0}, *tr_emk[kNEmLevels] = {0};
+    TH1D *tr_jpn[3] = {0}, *tr_jpk[3] = {0};
+    if (!ref_files.empty())
+        for (int l = 0; l < 3; l++)
+        {
+            tr_emn[l] = new TH2D(TString::Format("h_trgref_em%d_n", l), TString::Format("EM%d reference events;E_{4x4} / %.1f GeV;r = 4 H_{max} / E_{4x4}", l, kTrgThresholdGeV[l]),
+                                 kTrgRefNE, 0, kTrgRefNE * kTrgRefDE, kTrgRefNR, 0, kTrgRefNR * kTrgRefDR);
+            tr_emk[l] = (TH2D *)tr_emn[l]->Clone(TString::Format("h_trgref_em%d_k", l));
+            tr_emk[l]->SetTitle(TString::Format("EM%d reference events, bit set", l));
+            tr_jpn[l] = new TH1D(TString::Format("h_trgref_jp%d_n", l), TString::Format("JP%d reference events;patch / %.1f GeV;events", l, kTrgThresholdGeV[3 + l]),
+                                 kTrgRefNE, 0, kTrgRefNE * kTrgRefDE);
+            tr_jpk[l] = (TH1D *)tr_jpn[l]->Clone(TString::Format("h_trgref_jp%d_k", l));
+        }
+    long n_ref_files_read = 0;
 
     std::set<int> runs;
     Pi0Scale pi0sc;
@@ -513,18 +614,57 @@ int main(int argc, char **argv)
     std::map<int, double> pi0_used;
     std::cout << "AnHistograms: pi0 energy scale from " << pi0sc.source << std::endl;
     int tree_number = -1, file_run = 0;
+    bool is_ref = false;
     const Long64_t n = t.GetEntries();
     for (Long64_t i = 0; i < n; i++)
     {
         t.GetEntry(i);
         // the run: event_run, else from the file name (jet_output_<run>_<file>.root)
-        if (t.GetTreeNumber() != tree_number) file_run = RunFromFileName(t.GetFile()->GetName());
+        if (t.GetTreeNumber() != tree_number)
+        {
+            file_run = RunFromFileName(t.GetFile()->GetName());
+            const std::string fname = t.GetFile()->GetName();
+            is_ref = ref_files.count(fname.substr(fname.find_last_of('/') + 1)) > 0;
+            if (is_ref) n_ref_files_read++;
+        }
         tree_number = t.GetTreeNumber();
         const int cur_run = have_run && event_run > 0 ? event_run : file_run;
         const double pi0_scale = pi0sc.Of(cur_run);
         pi0_used[cur_run] = pi0_scale;
         runs.insert(cur_run);
         h_cut->Fill(kNCuts);
+        // trigger reference tallies: reference events of the reference file, no other cut
+        // (trg_nominal.cpp: leading E_4x4 jet with an HCal sum and its r; largest patch)
+        if (is_ref)
+        {
+            bool eref = jp2 || jp1[0] || jp1[1] || jp1[2] || jp0[0] || jp0[1] || jp0[2];
+            for (int k = 7; k < n_ref_em; k++) eref |= ref_em[k] != 0;
+            bool jref = em[0] || em[1] || em_tpc[0] || em_tpc[1];
+            for (int k = 4; k < n_ref_jp; k++) jref |= ref_jp[k] != 0;
+            double lE = -1, lr = -1, ljp = -1;
+            for (size_t j = 0; j < trg_em->size(); j++)
+            {
+                if ((*trg_em)[j] > lE && (*trg_hmax)[j] >= 0) { lE = (*trg_em)[j]; lr = 4 * (*trg_hmax)[j] / (*trg_em)[j]; }
+                ljp = std::max(ljp, (double)(*trg_jp)[j]);
+            }
+            const double emax = kTrgRefNE * kTrgRefDE - 1e-6, rmax = kTrgRefNR * kTrgRefDR - 1e-6;
+            if (eref && lE > 0)
+                for (int l = 0; l < 3; l++)
+                {
+                    const double xe = std::min(lE / kTrgThresholdGeV[l], emax), xr = std::min(lr, rmax);
+                    tr_emn[l]->Fill(xe, xr);
+                    if ((tcu >> (3 + l)) & 1) tr_emk[l]->Fill(xe, xr);
+                }
+            if (jref && cur_run != 23070019 && ljp > 0)  // 23070019: hot JP run
+                for (int l = 0; l < 3; l++)
+                {
+                    const int tr = 3 + l;
+                    const bool hw = tr == 5 ? ((tcu >> 6) & 1) : (((tcu >> (tr == 3 ? 10 : 7)) & 7) != 0);
+                    const double xj = std::min(ljp / kTrgThresholdGeV[tr], emax);
+                    tr_jpn[l]->Fill(xj);
+                    if (hw) tr_jpk[l]->Fill(xj);
+                }
+        }
         // listed levels; for JP0/JP1 the listed regions' patch masks
         bool listed[kNTrgLevels];
         for (int l = 0; l < kNEmLevels; l++) listed[l] = em[l] || em_tpc[l];
@@ -561,12 +701,23 @@ int main(int argc, char **argv)
         h_cut->Fill(kSpin, nj);
         if (vertex_cut && !pass_vertex_cut(vz, vz_source)) continue;
         h_cut->Fill(kVertex, nj);
-        h_events[level]->Fill(spin);
-        q_vzsrc->Fill(vz_source >= 0 && vz_source < 4 ? vz_source : 0);
-        if (vz > -9000) q_vz->Fill(vz);
-        q_sqrts->Fill(sqrt_s);
-        qa[0].njet->Fill(nj);
-        qa_lvl[0][level].njet->Fill(nj);
+        // collision cut: failing events fill only the _vbbcveto copies
+        const bool evt_nominal = PassCollisionCut(bbc_e_ntiles, tof_mult);
+        bool var_evt[kNVar];
+        var_evt[kVarFid25] = var_evt[kVarFid30] = evt_nominal;
+        var_evt[kVarVz60] = evt_nominal && (vz_source <= 0 || std::fabs(vz) < kVarVzCut);
+        var_evt[kVarVtxMeas] = evt_nominal && (vz_source == 1 || vz_source == 2);
+        var_evt[kVarBbcVeto] = !evt_nominal;
+        if (evt_nominal)
+        {
+            h_cut->Fill(kCollision, nj);
+            h_events[level]->Fill(spin);
+            q_vzsrc->Fill(vz_source >= 0 && vz_source < 4 ? vz_source : 0);
+            if (vz > -9000) q_vz->Fill(vz);
+            q_sqrts->Fill(sqrt_s);
+            qa[0].njet->Fill(nj);
+            qa_lvl[0][level].njet->Fill(nj);
+        }
         // the two constituents of each two-photon jet: pair mass and orientation (-1 if none)
         std::vector<double> mass(nj, -1), pang(nj, -1);
         // every jet's constituents (for the FMS-style pi0 pairs)
@@ -602,19 +753,25 @@ int main(int argc, char **argv)
             const double E = (*e_corr)[j];
             // sanity distributions of every jet here, by the event's level; the selected jets' below
             const double ptc0 = E > 0 ? E / std::cosh((*eta)[j]) : -1;
-            qa[0].Fill((*eta)[j], (*phi)[j], (*e_raw)[j], (*e_ue)[j], E, (*pt_raw)[j], ptc0, (*xf_corr)[j], (*nconst)[j], (*x)[j], (*y)[j]);
-            qa_lvl[0][level].Fill((*eta)[j], (*phi)[j], (*e_raw)[j], (*e_ue)[j], E, (*pt_raw)[j], ptc0, (*xf_corr)[j], (*nconst)[j], (*x)[j], (*y)[j]);
-            qa[0].FillPair(mass[j], pang[j], E);
-            qa_lvl[0][level].FillPair(mass[j], pang[j], E);
+            if (evt_nominal)
+            {
+                qa[0].Fill((*eta)[j], (*phi)[j], (*e_raw)[j], (*e_ue)[j], E, (*pt_raw)[j], ptc0, (*xf_corr)[j], (*nconst)[j], (*x)[j], (*y)[j]);
+                qa_lvl[0][level].Fill((*eta)[j], (*phi)[j], (*e_raw)[j], (*e_ue)[j], E, (*pt_raw)[j], ptc0, (*xf_corr)[j], (*nconst)[j], (*x)[j], (*y)[j]);
+                qa[0].FillPair(mass[j], pang[j], E);
+                qa_lvl[0][level].FillPair(mass[j], pang[j], E);
+            }
             if (!(E > 0)) continue;
-            h_cut->Fill(kCalibrated);
+            if (evt_nominal) h_cut->Fill(kCalibrated);
             if (!((*xf_corr)[j] > 0)) continue;
-            h_cut->Fill(kXfPositive);
+            if (evt_nominal) h_cut->Fill(kXfPositive);
             const double pt = E / std::cosh((*eta)[j]);
             if (pt <= kJetPtCorrMin) continue;
-            h_cut->Fill(kPtMin);
-            h_pt[level]->Fill(pt);
-            h_ptraw[level]->Fill((*pt_raw)[j]);
+            if (evt_nominal)
+            {
+                h_cut->Fill(kPtMin);
+                h_pt[level]->Fill(pt);
+                h_ptraw[level]->Fill((*pt_raw)[j]);
+            }
             base[j] = 1;
             // EM: the lowest listed EM level at >= 1.15 x threshold; its slice from the
             // combined EM factor f = min(E_4x4 / threshold, veto edge / r) (AnConfig.h
@@ -625,7 +782,7 @@ int main(int argc, char **argv)
             if (emL[j] >= 0)
             {
                 const double ratio = em_et / TrgThresholdGeV(emL[j], cur_run);
-                h_ratio[emL[j]]->Fill(ratio);
+                if (evt_nominal) h_ratio[emL[j]]->Fill(ratio);
                 const double fem = EmTrgFactor(em_et, (*trg_hmax)[j], emL[j], cur_run);
                 if (fem >= kTrgSliceEdge[0] - 1e-9)
                 {
@@ -646,7 +803,7 @@ int main(int argc, char **argv)
             if (jpL[j] >= 0)
             {
                 const double ratio = jp_et / TrgThresholdGeV(jpL[j], cur_run);
-                h_ratio[jpL[j]]->Fill(ratio);
+                if (evt_nominal) h_ratio[jpL[j]]->Fill(ratio);
                 jpS[j] = 0;
                 for (int sl = 1; sl < kNTrgSlices; sl++) if (ratio >= kTrgSliceEdge[sl]) jpS[j] = sl;
                 if (ratio >= kJpCutFactor - 1e-9 && jpL[j] > event_jp) event_jp = jpL[j];
@@ -672,6 +829,98 @@ int main(int argc, char **argv)
             // at the trigger-systematic factor (the "_f130" copies of the default-only histograms)
             const bool em_sys = em_on && kTrgSliceEdge[emS[j]] >= kTrgSysFactor - 1e-9;
             const bool jp_sys = jp_on && kTrgSliceEdge[jpS[j]] >= kTrgSysFactor - 1e-9;
+            // FMS-style pi0 candidates of a default jet (E <= sqrt(s)/2): every photon pair, built once
+            // for the nominal and the variation yields
+            struct PiPair { double pxf, mgg, zem, pcos, ppt_raw; int pside; };
+            std::vector<PiPair> pairs;
+            if ((em_dflt || jp_dflt) && !hi && (*e_raw)[j] > 0)
+            {
+                const std::vector<int> &cj = cons[j];
+                // photon at the ECal face (z_proj), from the vertex the jets were made from;
+                // inside the ECal rectangle by half a tower
+                std::vector<char> fid(cj.size(), 0);
+                for (size_t a = 0; a < cj.size(); a++)
+                {
+                    const int c = cj[a];
+                    if (!((*c_pz)[c] > 0)) continue;
+                    const double sc = (z_proj - vz_used) / (*c_pz)[c];
+                    const double px_ = vx_used + sc * (*c_px)[c], py_ = vy_used + sc * (*c_py)[c];
+                    const FiducialRect &rr = kFiducialRectEcal;
+                    fid[a] = std::fabs(px_) >= rr.x_inner + kPi0EdgeMargin && std::fabs(px_) <= rr.x_outer - kPi0EdgeMargin &&
+                             py_ >= rr.y_min + kPi0EdgeMargin && py_ <= rr.y_max - kPi0EdgeMargin;
+                }
+                for (size_t a = 0; a < cj.size(); a++)
+                    for (size_t b = a + 1; b < cj.size(); b++)
+                    {
+                        if (!fid[a] || !fid[b]) continue;
+                        const int ca = cj[a], cb = cj[b];
+                        const double ea = (*c_e)[ca], eb = (*c_e)[cb];
+                        if (!(ea > 0 && eb > 0) || std::fabs(ea - eb) / (ea + eb) >= kPi0ZggMax) continue;
+                        const double ppx = (*c_px)[ca] + (*c_px)[cb], ppy = (*c_py)[ca] + (*c_py)[cb], ppz = (*c_pz)[ca] + (*c_pz)[cb], pe = ea + eb;
+                        const double m2 = pe * pe - ppx * ppx - ppy * ppy - ppz * ppz;
+                        // mass, pT and x_F on the pi0 energy scale (AnConfig.h
+                        // kPi0EnergyScale or the pi0_scale.txt table: the data peak moved to the pi0 mass); raw
+                        // pT for the trigger cut (the trigger value is uncorrected)
+                        const double mgg = pi0_scale * (m2 > 0 ? std::sqrt(m2) : 0);
+                        if (mgg >= kPi0MassMax) continue;
+                        const double ppt_raw = std::hypot(ppx, ppy), ppt = pi0_scale * ppt_raw;
+                        if (ppt <= kPi0PtMin) continue;
+                        const double pxf = 2 * pi0_scale * ppz / sqrt_s;
+                        if (!(pxf > 0)) continue;
+                        PiPair pp;
+                        pp.pxf = pxf; pp.mgg = mgg; pp.ppt_raw = ppt_raw; pp.pcos = std::fabs(ppx) / ppt;
+                        // raw over raw: one scale for all points cancels
+                        pp.zem = pe / (*e_raw)[j];
+                        pp.pside = computeSide(vx_used + (z_proj - vz_used) * ppx / ppz) > 0 ? 1 : 0;
+                        pairs.push_back(pp);
+                    }
+            }
+            // the pi0 itself above the level's cut (FMS: pi0 pT above the trigger
+            // threshold; Sean 2026-11-16: factor x threshold, as the host jet's
+            // trigger value); the union (_jponly) is per pi0: JP pi0s not passing in EM
+            auto pi0Ok = [&](const PiPair &pp, bool &em_ok, bool &jp_ok)
+            {
+                em_ok = em_dflt && pp.ppt_raw >= kEmCutFactor * TrgThresholdGeV(emL[j], cur_run);
+                jp_ok = jp_dflt && pp.ppt_raw >= kJpCutFactor * TrgThresholdGeV(jpL[j], cur_run);
+            };
+            // systematic-variation copies: default jets, E <= sqrt(s)/2 (AnConfig.h kVarSuffix)
+            if ((em_dflt || jp_dflt) && !hi)
+            {
+                // distance of the jet axis from the ECal edge at z_proj (nominal >= 20 cm, RecoJets)
+                const FiducialRect &fr = kFiducialRectEcal;
+                const double ax_ = std::fabs((*x)[j]), ay_ = (*y)[j];
+                const double edge = std::min(std::min(ax_ - fr.x_inner, fr.x_outer - ax_), std::min(ay_ - fr.y_min, fr.y_max - ay_));
+                for (int v = 0; v < kNVar; v++)
+                {
+                    if (!var_evt[v]) continue;
+                    if (v == kVarFid25 && edge < kVarFidCm[0]) continue;
+                    if (v == kVarFid30 && edge < kVarFidCm[1]) continue;
+                    auto vfill = [&](int tg, int l)
+                    {
+                        hv[v][tg][l][cls][side][spin]->Fill(xf);
+                        hv_xfs[v][tg][l][cls]->Fill(xf, xf);
+                        hv_cos[v][tg][l][cls]->Fill(xf, acos_);
+                    };
+                    if (em_dflt) vfill(0, emL[j]);
+                    if (jp_dflt) vfill(em_dflt ? 1 : 0, jpL[j]);
+                    for (size_t q = 0; q < pairs.size(); q++)
+                    {
+                        const PiPair &pp = pairs[q];
+                        bool em_ok, jp_ok;
+                        pi0Ok(pp, em_ok, jp_ok);
+                        auto vpi = [&](int tg, int l)
+                        {
+                            hv_pi[v][tg][l][pp.pside][spin]->Fill(pp.pxf, pp.mgg, pp.zem);
+                            hv_picos[v][tg][l]->Fill(pp.pxf, pp.mgg, pp.zem, pp.pcos);
+                            hv_pixfs[v][tg][l]->Fill(pp.pxf, pp.mgg, pp.zem, pp.pxf);
+                        };
+                        if (em_ok) vpi(0, emL[j]);
+                        if (jp_ok) vpi(0, jpL[j]);
+                        if (jp_ok && !em_ok) vpi(1, jpL[j]);
+                    }
+                }
+            }
+            if (!evt_nominal) continue;  // collision-cut failures: only the _vbbcveto copies
             // fill one (sample, tag, level)
             auto fill = [&](int g, int tg, int l)
             {
@@ -747,66 +996,26 @@ int main(int argc, char **argv)
                 }
             }
             // FMS-style pi0 candidates: every photon pair of a default jet (and _jponly)
-            if ((em_dflt || jp_dflt) && !hi && (*e_raw)[j] > 0)
+            for (size_t q = 0; q < pairs.size(); q++)
             {
-                const std::vector<int> &cj = cons[j];
-                // photon at the ECal face (z_proj), from the vertex the jets were made from;
-                // inside the ECal rectangle by half a tower
-                std::vector<char> fid(cj.size(), 0);
-                for (size_t a = 0; a < cj.size(); a++)
+                const PiPair &pp = pairs[q];
+                auto pifill = [&](int mg, int l)
                 {
-                    const int c = cj[a];
-                    if (!((*c_pz)[c] > 0)) continue;
-                    const double sc = (z_proj - vz_used) / (*c_pz)[c];
-                    const double px_ = vx_used + sc * (*c_px)[c], py_ = vy_used + sc * (*c_py)[c];
-                    const FiducialRect &rr = kFiducialRectEcal;
-                    fid[a] = std::fabs(px_) >= rr.x_inner + kPi0EdgeMargin && std::fabs(px_) <= rr.x_outer - kPi0EdgeMargin &&
-                             py_ >= rr.y_min + kPi0EdgeMargin && py_ <= rr.y_max - kPi0EdgeMargin;
-                }
-                for (size_t a = 0; a < cj.size(); a++)
-                    for (size_t b = a + 1; b < cj.size(); b++)
-                    {
-                        if (!fid[a] || !fid[b]) continue;
-                        const int ca = cj[a], cb = cj[b];
-                        const double ea = (*c_e)[ca], eb = (*c_e)[cb];
-                        if (!(ea > 0 && eb > 0) || std::fabs(ea - eb) / (ea + eb) >= kPi0ZggMax) continue;
-                        const double ppx = (*c_px)[ca] + (*c_px)[cb], ppy = (*c_py)[ca] + (*c_py)[cb], ppz = (*c_pz)[ca] + (*c_pz)[cb], pe = ea + eb;
-                        const double m2 = pe * pe - ppx * ppx - ppy * ppy - ppz * ppz;
-                        // mass, pT and x_F on the pi0 energy scale (AnConfig.h
-                        // kPi0EnergyScale or the pi0_scale.txt table: the data peak moved to the pi0 mass); raw
-                        // pT for the trigger cut (the trigger value is uncorrected)
-                        const double mgg = pi0_scale * (m2 > 0 ? std::sqrt(m2) : 0);
-                        if (mgg >= kPi0MassMax) continue;
-                        const double ppt_raw = std::hypot(ppx, ppy), ppt = pi0_scale * ppt_raw;
-                        if (ppt <= kPi0PtMin) continue;
-                        const double pxf = 2 * pi0_scale * ppz / sqrt_s;
-                        if (!(pxf > 0)) continue;
-                        // raw over raw: one scale for all points cancels
-                        const double zem = pe / (*e_raw)[j];
-                        const int pside = computeSide(vx_used + (z_proj - vz_used) * ppx / ppz) > 0 ? 1 : 0;
-                        const double pcos = std::fabs(ppx) / ppt;
-                        auto pifill = [&](int mg, int l)
-                        {
-                            h_pi[mg][l][pside][spin]->Fill(pxf, mgg, zem);
-                            h_picos[mg][l]->Fill(pxf, mgg, zem, pcos);
-                            h_pixfs[mg][l]->Fill(pxf, mgg, zem, pxf);
-                        };
-                        // the pi0 itself above the level's cut (FMS: pi0 pT above the
-                        // trigger threshold; Sean 2026-11-16: factor x threshold, as the
-                        // host jet's trigger value). The union (_jponly) is per pi0:
-                        // JP pi0s that do not pass in EM
-                        const bool em_ok = em_dflt && ppt_raw >= kEmCutFactor * TrgThresholdGeV(emL[j], cur_run);
-                        const bool jp_ok = jp_dflt && ppt_raw >= kJpCutFactor * TrgThresholdGeV(jpL[j], cur_run);
-                        if (em_ok) pifill(0, emL[j]);
-                        if (jp_ok) pifill(0, jpL[j]);
-                        if (jp_ok && !em_ok) pifill(1, jpL[j]);
-                        // the same at the trigger-systematic factor (host jet and pi0 pT)
-                        const bool em_oks = em_sys && ppt_raw >= kTrgSysFactor * TrgThresholdGeV(emL[j], cur_run);
-                        const bool jp_oks = jp_sys && ppt_raw >= kTrgSysFactor * TrgThresholdGeV(jpL[j], cur_run);
-                        if (em_oks) pifill(2, emL[j]);
-                        if (jp_oks) pifill(2, jpL[j]);
-                        if (jp_oks && !em_oks) pifill(3, jpL[j]);
-                    }
+                    h_pi[mg][l][pp.pside][spin]->Fill(pp.pxf, pp.mgg, pp.zem);
+                    h_picos[mg][l]->Fill(pp.pxf, pp.mgg, pp.zem, pp.pcos);
+                    h_pixfs[mg][l]->Fill(pp.pxf, pp.mgg, pp.zem, pp.pxf);
+                };
+                bool em_ok, jp_ok;
+                pi0Ok(pp, em_ok, jp_ok);
+                if (em_ok) pifill(0, emL[j]);
+                if (jp_ok) pifill(0, jpL[j]);
+                if (jp_ok && !em_ok) pifill(1, jpL[j]);
+                // the same at the trigger-systematic factor (host jet and pi0 pT)
+                const bool em_oks = em_sys && pp.ppt_raw >= kTrgSysFactor * TrgThresholdGeV(emL[j], cur_run);
+                const bool jp_oks = jp_sys && pp.ppt_raw >= kTrgSysFactor * TrgThresholdGeV(jpL[j], cur_run);
+                if (em_oks) pifill(2, emL[j]);
+                if (jp_oks) pifill(2, jpL[j]);
+                if (jp_oks && !em_oks) pifill(3, jpL[j]);
             }
             // Collins yields: default jets (EM and JP levels) and JP-not-EM (_jponly)
             const double gg = have_gup && j < gup->size() ? (*gup)[j] : -9;
@@ -848,6 +1057,8 @@ int main(int argc, char **argv)
         for (std::map<int, double>::const_iterator r = pi0_used.begin(); r != pi0_used.end(); ++r) ps << " " << r->first << "=" << TString::Format("%.6f", r->second).Data();
         TNamed("pi0_scale", ps.str().c_str()).Write();
     }
+    if (!ref_files.empty()) TNamed("trgref_files", TString::Format("%ld of %zu listed trigger reference files read", n_ref_files_read, ref_files.size()).Data()).Write();
+    TNamed("variations", "systematic-variation copies (AnConfig.h kVarSuffix): _vfid25 _vfid30 _vvz60 _vvtxmeas _vbbcveto; collision cut east BBC >= 1, TOF > 2").Write();
     if (!have_plead) TNamed("plead_missing", "jet files without reco_pi0_lead_prob: h_xFP_* empty").Write();
     if (!have_gup) TNamed("collins_missing", "jet files without reco_pi0_lead_gup: h_xFg_* empty").Write();
     if (!have_z) TNamed("pz_missing", "jet files without reco_pi0_lead_z1: h_xFPz_* empty").Write();

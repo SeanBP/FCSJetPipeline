@@ -132,6 +132,12 @@
 // subtracted pi0 A_N, as the FMS did. Same restrictions as -p; excludes -m,
 // -p, -z.
 //
+// Systematic variations (-v <fid25|fid30|vz60|vtxmeas|bbcveto>, 2026-11-17):
+// the yields come from AnHistograms' copies of the default yields with that
+// cut (AnConfig.h kVarSuffix; JP levels split by kVarEmTag for the -J union);
+// with -I the pi0-candidate copies. Default factor only; excludes -E, -C, -A,
+// -V, -m, -p, -z. systematics/sys_variations.sh runs them against the nominal.
+//
 // Outputs: <out.root> with the graphs and TNamed "bad_runs" (-r), and
 // <out.root minus .root>.txt, the table of every point (level, photon class,
 // beam, x_F bin, <x_F>, A_N, stat error, jets, <|cos phi|>, <P>).
@@ -326,6 +332,8 @@ struct Sums
     bool pi0_mode = false;
     // -m / -p / -z / -I at the trigger-systematic factor: read the "_f130" copies
     std::string fsfx;
+    // -v: a systematic-variation copy of the default yields (AnConfig.h kVarSuffix)
+    std::string vsfx;
     std::map<std::string, TH2D *> pimass;
     static bool StartsWith(const std::string &a, const char *b) { return a.compare(0, std::strlen(b), b) == 0; }
     // -p: a yield (h_xF_<l>_<cls>_<side>_<spin>) or sum (h_abscos_ / h_xfsum_<l>_<cls>)
@@ -432,6 +440,18 @@ struct Sums
     std::vector<std::string> Suffixes(bool jp, bool jp_only) const
     {
         std::vector<std::string> v;
+        // -v: the variation copy (default jets only); JP levels split by the same jet's EM result
+        // at the default factor (kVarEmTag), the union taking the "not EM" part
+        if (!vsfx.empty())
+        {
+            if (!jp) v.push_back(vsfx);
+            else
+            {
+                v.push_back(std::string(kVarEmTag[0]) + vsfx);
+                if (!jp_only) v.push_back(std::string(kVarEmTag[1]) + vsfx);
+            }
+            return v;
+        }
         if (use_trig)
             for (int g = 0; g < kNTrgSlices; g++)
             {
@@ -660,7 +680,7 @@ int main(int argc, char **argv)
     // "all"; -V: add the EM jets failing only the veto margin
     bool hi_e = false, comp_only = false, comp_add = false, jp_in_all = false, add_veto = false;
     double factor_em = kEmCutFactor, factor_jp = kJpCutFactor;
-    std::string mass_opt, plead_opt, z_opt, pi0_opt, pi0_bad_path, xf_edges_opt;
+    std::string mass_opt, plead_opt, z_opt, pi0_opt, pi0_bad_path, xf_edges_opt, var_opt;
     {
         int m = 1;
         for (int i = 1; i < argc; i++)
@@ -680,6 +700,7 @@ int main(int argc, char **argv)
             if (a == "-I" && i + 1 < argc) { pi0_opt = argv[++i]; continue; }
             if (a == "-Q" && i + 1 < argc) { pi0_bad_path = argv[++i]; continue; }
             if (a == "-x" && i + 1 < argc) { xf_edges_opt = argv[++i]; continue; }
+            if (a == "-v" && i + 1 < argc) { var_opt = argv[++i]; continue; }
             argv[m++] = argv[i];
         }
         argc = m;
@@ -700,6 +721,22 @@ int main(int argc, char **argv)
     const bool at_dflt = std::fabs(factor_em - kEmCutFactor) < 1e-6 && std::fabs(factor_jp - kJpCutFactor) < 1e-6;
     const bool at_sys = std::fabs(factor_em - kTrgSysFactor) < 1e-6 && std::fabs(factor_jp - kTrgSysFactor) < 1e-6;
     const bool dflt_or_sys = at_dflt || at_sys;
+    // -v <variation>: fid25, fid30, vz60, vtxmeas, bbcveto (with or without "_v")
+    std::string var_sfx;
+    if (!var_opt.empty())
+    {
+        std::string w = var_opt;
+        if (w.compare(0, 2, "_v") == 0) w = w.substr(2);
+        else if (w.compare(0, 1, "v") == 0 && w != "vz60" && w != "vtxmeas") w = w.substr(1);
+        for (int v = 0; v < kNVar; v++)
+            if (std::string(kVarSuffix[v]) == "_v" + w) var_sfx = kVarSuffix[v];
+        if (var_sfx.empty()) { std::cerr << "ERROR: -v takes fid25, fid30, vz60, vtxmeas or bbcveto" << std::endl; return 1; }
+        if (!at_dflt || hi_e || comp_only || comp_add || add_veto || !mass_opt.empty() || !plead_opt.empty() || !z_opt.empty())
+        {
+            std::cerr << "ERROR: -v (variation copies of the default yields) works at the default factor only, without -E, -C, -A, -V, -m, -p, -z (-I is allowed)" << std::endl;
+            return 1;
+        }
+    }
     const bool per_run = argc > 1 && std::string(argv[1]) == "-r";
     // -M <merged.root> <out.root> [rebin]: an AnMerge output (masked, with the
     // run-polarization-weighted yields); rewritten into the single-file form
@@ -734,7 +771,8 @@ int main(int argc, char **argv)
                   << "     (M_gg 0-0.2) or sideband (0.2-0.3) window, binned in pi0 x_F; background subtraction: pi0_bgsub.C\n"
                   << "  -Q <list>: (-r) also mask the runs flagged in this pi0-peak bad-run list (pi0_peak_runs.C <out>_bad_runs.txt)\n"
                   << "  -M <merged.root> <out.root> [rebin]: read one AnMerge output (sums, masked runs subtracted, P-weighted yields) instead of -r\n"
-                  << "  -x <e0,e1,...>: variable x_F bin edges on the stored 0.025 grid (e.g. 0,0.1,0.15,0.175,0.2,0.25,0.35,0.5); replaces rebin" << std::endl;
+                  << "  -x <e0,e1,...>: variable x_F bin edges on the stored 0.025 grid (e.g. 0,0.1,0.15,0.175,0.2,0.25,0.35,0.5); replaces rebin\n"
+                  << "  -v <fid25|fid30|vz60|vtxmeas|bbcveto>: a systematic-variation copy of the default yields (AnConfig.h kVarSuffix; with -I too)" << std::endl;
         return 1;
     }
     const int rebin = argc > 5 ? std::atoi(argv[5]) : 2;
@@ -744,6 +782,7 @@ int main(int argc, char **argv)
 
     Sums sums;
     if (at_sys && !at_dflt) sums.fsfx = kSysSuffix;
+    if (!var_sfx.empty()) { sums.vsfx = var_sfx; sums.fsfx = var_sfx; }
     sums.hi_e = hi_e;
     sums.use_trig = !comp_only;
     sums.use_comp = comp_only || comp_add;

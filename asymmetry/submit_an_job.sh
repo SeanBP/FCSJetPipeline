@@ -4,7 +4,7 @@
 # Usage:
 #   ./submit_an_job.sh -f <listfile> -o <outdir> [-n <files_per_job>] \
 #       [-c <calib json>] [-t <triggers>] [-l <label>] [-k <0|1>] [-J <N>]
-#       [-S <seed>] [-s <pi0 scale table>] [-L <node fail limit>] [-K] [-N]
+#       [-S <seed>] [-s <pi0 scale table>] [-L <node fail limit>] [-R <triggers>] [-K] [-N]
 #
 #   -f  MakeRunList.pl-format list ("<url or path>/<events>" per line)
 #   -o  output directory; histograms go to <outdir>/hists/, timing tables
@@ -23,6 +23,12 @@
 #       event listing only a _tpc copy is a valid EM event) and the jet
 #       patches fcsJP2, fcsJPA1, fcsJPBC1, fcsJPDE1, fcsJPA0, fcsJPBC0, fcsJPDE0
 #       (EM only before 2026-11-05)
+#   -R  trigger reference triggers (trg_nominal), added to the filter for the
+#       first processed MuDst of each job only; AnHistograms fills the trigger
+#       tallies (h_trgref_*) from that file. Default: EM refs fcsDiJP, fcsDiJPAsy,
+#       fcsHad0-2, fcsHHT_N/S, fcsHTOT_N/S, fcs_HcalTot; JP refs fcsDY,
+#       fcsDYAsy, fcsJPsi, fcsELE2 (2026-11-17: the EM/JP filter keeps 2.6% / 1.5%
+#       of them, biased). "" = none
 #   -l  label for the generated XML, default "an"
 #   -k  1 = save stdout/stderr under <outdir>/log/, default 0
 #   -J  keep the calibrated jet files (UE-subtracted, JES applied) of every
@@ -52,6 +58,7 @@ OUTDIR=""
 FILES_PER_JOB=40
 CALIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../jet_calibration/JES_Lookups" && pwd)/JetEnergyScale_lookup_em_only.json"
 TRIGGER_FILTER="fcsEM0,fcsEM1,fcsEM2,fcsEM0_tpc,fcsEM1_tpc,fcsEM2_tpc,fcsJP2,fcsJPA1,fcsJPBC1,fcsJPDE1,fcsJPA0,fcsJPBC0,fcsJPDE0"
+REF_TRIGGERS="fcsDiJP,fcsDiJPAsy,fcsHad0,fcsHad1,fcsHad2,fcsHHT_N,fcsHHT_S,fcsHTOT_N,fcsHTOT_S,fcs_HcalTot,fcsDY,fcsDYAsy,fcsJPsi,fcsELE2"
 LABEL="an"
 KEEPLOGS=0
 KEEP_JETS=0
@@ -61,7 +68,7 @@ PI0_TABLE=""
 NODE_FAIL_LIMIT=3
 NO_NODEMAP=0
 
-while getopts "f:o:n:c:t:l:k:J:S:s:L:KNh" opt; do
+while getopts "f:o:n:c:t:l:k:J:S:s:L:R:KNh" opt; do
   case $opt in
     f) LISTFILE="$OPTARG" ;;
     o) OUTDIR="$OPTARG" ;;
@@ -74,9 +81,10 @@ while getopts "f:o:n:c:t:l:k:J:S:s:L:KNh" opt; do
     S) SHUFFLE_SEED="$OPTARG" ;;
     s) PI0_TABLE="$OPTARG" ;;
     L) NODE_FAIL_LIMIT="$OPTARG" ;;
+    R) REF_TRIGGERS="$OPTARG" ;;
     K) NO_NODEMAP=1 ;;
     N) DRYRUN=1 ;;
-    h|*) sed -n '2,42p' "$0"; exit 0 ;;
+    h|*) sed -n '2,48p' "$0"; exit 0 ;;
   esac
 done
 
@@ -96,7 +104,7 @@ OUTXML="${SCRIPT_DIR}/an_job_${LABEL}.xml"
 
 # Trigger names must exist in FcsTriggerDefs.h
 VALID_NAMES=$(awk '/kTrigFlagName\[kNTrigFlags\]/{flag=1; next} flag && /};/{flag=0} flag' "${PIPELINE_ROOT}/data_to_jet/FcsTriggerDefs.h" | sed -e 's/^[[:space:]]*"//' -e 's/",$//')
-IFS=',' read -ra REQUESTED <<< "$TRIGGER_FILTER"
+IFS=',' read -ra REQUESTED <<< "${TRIGGER_FILTER}${REF_TRIGGERS:+,${REF_TRIGGERS}}"
 for name in "${REQUESTED[@]}"; do
     grep -qxF "$name" <<< "$VALID_NAMES" || { echo "Error: unknown trigger name '$name'"; exit 1; }
 done
@@ -169,6 +177,7 @@ sed -e "s#{{LISTFILE}}#${SORTEDLIST}#g" \
     -e "s#{{RANGEFILE}}#${RANGEFILE}#g" \
     -e "s/{{NPROCESSES}}/${NPROC}/g" \
     -e "s/{{TRIGGER_FILTER}}/${TRIGGER_FILTER}/g" \
+    -e "s/{{REF_TRIGGERS}}/${REF_TRIGGERS}/g" \
     -e "s/{{CALIB_NAME}}/${CALIB_NAME}/g" \
     -e "s/{{KEEP_JETS}}/${KEEP_JETS}/g" \
     -e "s#{{OUTDIR}}#${OUTDIR}#g" \
@@ -192,6 +201,7 @@ nProcesses=${NPROC}
 files_per_job=${FILES_PER_JOB}
 calib_json=${CALIB}
 trigger_filter=${TRIGGER_FILTER}
+ref_triggers=${REF_TRIGGERS}
 keep_logs=${KEEPLOGS}
 keep_jets_every=${KEEP_JETS}
 shuffle_seed=${SHUFFLE_SEED}
