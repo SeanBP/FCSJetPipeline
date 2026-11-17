@@ -39,6 +39,8 @@ subset): `sys_slices.py an_f115.txt an_f130.txt ...`.
 | `sys_variations.sh` | The cut variations stored as yield copies (AnConfig.h `kVarSuffix`, `AnAsymmetry -v`): fiducial 25 / 30 cm, \|vz\| < 60, measured vertex only (nested, Barlow), and the collision-cut failures (disjoint check, plus their share per row in `bbcveto_share.txt`); photon classes (`-J`) and iso / noniso π⁰. On a report folder; outputs in `<report>/sys_variations/`. |
 | `combine_sys.py` | The combine step: nominal table + components (`--comp NAME=sys_slices output`, `--comp-max` for the larger of several variations, `--sysf` for the π⁰ signal-fraction column, `--rel` for flat relative pieces) → per-bin stat, each component, quadrature total, stat ⊕ sys and the x_F uncertainty (`--xf-rel`, FMS 3%). The polarization scale is quoted separately. |
 | `plot_an_final.C` | The final plots of one row from a combined table: `_stat`, `_sys` (total boxes), `_sys_components`, `_combined` (stat bars + sys boxes), `_total` (stat ⊕ sys bars), on the common A_N axes. |
+| `misid_response.cpp` | Photon-class response from simulation (JES production `jet_output_*`, cross-section weighted): reco class × true class per truth-x_F bin, true photons with E >= 1 GeV (`--truth-emin`), offline trigger-value cut (the production's emulated flags are 0); `<out>.txt` per class and `<out>_merged.txt` for np12 / np3plus. |
+| `misid_sys.py` | Misidentification systematic for the merged classes: dA = f(other \| reco) × (A_other − A), Barlow-reduced by the difference's statistical error; `combine_sys.py --comp-simple misid=<out>.txt`. |
 | `pol_uncertainty.py`, `dump_run_jets.C` | Fill-to-fill and profile polarization uncertainty (a note; not used: only the overall scale is quoted, as FMS). |
 
 ## Merged flow for subsets
@@ -70,4 +72,4 @@ combine_sys.py --nominal sys_variations/an_nominal.txt --comp trigger=sys_trig.t
 root -b -q 'plot_an_final.C+("final_jets.txt","final_all_all","all","all","EM + JP union")'
 ```
 
-Photon-class misidentification will come from simulation later (not here).
+Photon-class misidentification: `misid_response` on the JES simulation, then `misid_sys.py` on the nominal table (merged classes, Sean 2026-11-17).

@@ -13,6 +13,10 @@ Inputs
                     per component, e.g. trigger=sys_trig.txt fiducial=sys_fid25_jets.txt
                     vertex=sys_vz60_jets.txt novertex=sys_vtxmeas_jets.txt
                     isolation=pi0_iso_sys/sys_iso_tight.txt
+  --comp-simple NAME=FILE
+                    a component from a table whose last column is the
+                    systematic, rows 'level class beam xF_lo xF_hi ...'
+                    (misid_sys.py)
   --comp-max NAME=FILE1,FILE2,...
                     one component as the per-bin maximum of several variations
                     (e.g. fiducial=sys_fid25_jets.txt,sys_fid30_jets.txt)
@@ -71,11 +75,25 @@ def read_sys(path):
     return d
 
 
+def read_simple(path):
+    """'level class beam xF_lo xF_hi ... sys' (last column), e.g. misid_sys.py."""
+    d = {}
+    for line in open(path):
+        if line.startswith('#'):
+            continue
+        t = line.split()
+        if len(t) < 6:
+            continue
+        d[key_of(t, False)] = float(t[-1])
+    return d
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--nominal', required=True)
     ap.add_argument('--comp', action='append', default=[])
     ap.add_argument('--comp-max', action='append', default=[])
+    ap.add_argument('--comp-simple', action='append', default=[])
     ap.add_argument('--sysf', default='')
     ap.add_argument('--rel', action='append', default=[])
     ap.add_argument('--xf-rel', type=float, default=0.03)
@@ -91,6 +109,9 @@ def main():
     for c in a.comp:
         name, path = c.split('=', 1)
         comps.append((name, read_sys(path), path))
+    for c in a.comp_simple:
+        name, path = c.split('=', 1)
+        comps.append((name, read_simple(path), path))
     for c in a.comp_max:
         name, paths = c.split('=', 1)
         tabs = [read_sys(p) for p in paths.split(',')]
