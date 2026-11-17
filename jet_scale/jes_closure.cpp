@@ -1,7 +1,7 @@
 // Closure test of an EM-only JES map (CalibrationMap_em_only JSON) on
 // cross-section-weighted simulation: applies the map in memory exactly as
 // jet_calibration/ApplyCorrections_em_only.cpp does (bilinear interpolation
-// of A, B at the jet's |x|, y; one evaluation at the jet's own energy
+// of A, B, and of per-bin C, D when the map has them, at the jet's |x|, y; one evaluation at the jet's own energy
 // held at 2 GeV below and at sqrt(s)/2 above; E_corr = E / scale) and reports the central
 // value of E_corr / E_truth in bins of truth energy, for all positions and three
 // radial bands, with the estimators the map is built from (arXiv:1609.05195,
@@ -70,8 +70,8 @@
 struct Map
 {
     std::vector<double> x, y;
-    std::vector<std::vector<double> > par[2];   // A B
-    double C, D, Emin, Emax;                    // the same everywhere
+    std::vector<std::vector<double> > par[4];   // A B C D (C, D per bin when the map has them, else face-wide)
+    double C, D, Emin, Emax;                    // face-wide C, D
     double xmin, xmax, ymin, ymax;
     int imin, imax, jmin, jmax;                 // the bins' index range
 };
@@ -120,9 +120,9 @@ static bool ReadMap(const std::string &file, Map &m)
     m.Emax = JsonNumber(json, "Emax");
     m.x = JsonArray(json, "x_grid");
     m.y = JsonArray(json, "y_grid");
-    for (int k = 0; k < 2; k++)
+    for (int k = 0; k < 4; k++)
         m.par[k].assign(m.x.size(), std::vector<double>(m.y.size(), std::numeric_limits<double>::quiet_NaN()));
-    const char *names[2] = {"A", "B"};
+    const char *names[4] = {"A", "B", "C", "D"};
     int imin = 1 << 30, imax = -1, jmin = 1 << 30, jmax = -1;
     size_t pos = json.find('[', json.find("\"bins\"")) + 1;
     while (true)
@@ -132,13 +132,18 @@ static bool ReadMap(const std::string &file, Map &m)
         const size_t end = json.find('}', pos);
         const std::string obj = json.substr(pos, end - pos + 1);
         pos = end + 1;
-        auto field = [&](const std::string &k) {
+        // per-bin C, D (maps with free_params 3 or 4; CalibrationMap_em_only argv[8])
+        // when present, else the face-wide values
+        auto field = [&](const std::string &k, double fallback) {
             size_t p = obj.find("\"" + k + "\"");
+            if (p == std::string::npos) return fallback;
             p = obj.find(':', p) + 1;
             return std::strtod(obj.c_str() + p, nullptr);
         };
-        const int i = (int)field("i"), j = (int)field("j");
-        for (int k = 0; k < 2; k++) m.par[k][i][j] = field(names[k]);
+        const int i = (int)field("i", -1), j = (int)field("j", -1);
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const double fb[4] = {nan, nan, m.C, m.D};
+        for (int k = 0; k < 4; k++) m.par[k][i][j] = field(names[k], fb[k]);
         imin = std::min(imin, i); imax = std::max(imax, i); jmin = std::min(jmin, j); jmax = std::max(jmax, j);
     }
     if (imax < 0) return false;
@@ -164,8 +169,8 @@ static double Scale(const Map &m, double x, double y, double E)
     const int i = std::min(std::max(FindIndex(m.x, x), m.imin), m.imax - 1);
     const int j = std::min(std::max(FindIndex(m.y, y), m.jmin), m.jmax - 1);
     const double tx = (x - m.x[i]) / (m.x[i + 1] - m.x[i]), ty = (y - m.y[j]) / (m.y[j + 1] - m.y[j]);
-    double p[2];
-    for (int k = 0; k < 2; k++)
+    double p[4];
+    for (int k = 0; k < 4; k++)
     {
         const std::vector<std::vector<double> > &Z = m.par[k];
         const double a = Z[i][j] * (1 - tx) + Z[i + 1][j] * tx, b = Z[i][j + 1] * (1 - tx) + Z[i + 1][j + 1] * tx;
@@ -174,7 +179,7 @@ static double Scale(const Map &m, double x, double y, double E)
     // as ApplyCorrections_em_only: held at kJesEvalMinGeV below and at sqrt(s)/2
     // (simulation's) above (JetParameters.h; before 2026-11-06 the map's [Emin, Emax])
     const double l = std::log(std::min(std::max(E, kJesEvalMinGeV), 0.5 * kSqrtS_MainRun22_GeV));
-    return p[0] + l * (p[1] + l * (m.C + l * m.D));
+    return p[0] + l * (p[1] + l * (p[2] + l * p[3]));
 }
 
 static const double core_min_neff = 250;

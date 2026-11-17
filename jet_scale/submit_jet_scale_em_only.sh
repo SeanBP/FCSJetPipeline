@@ -15,6 +15,10 @@
 #   -t  jet type: em (default) or full (ECAL+HCAL jets, sim_to_jet -J
 #       jet_full_*.root): the full-jet fiducial region in the grid, the map
 #       mask and the closure; same log-cubic model, grid and pooling
+#   -F  free-parameter variants to build, each with its closure, from the same
+#       fine grid (quoted list, default "2"): 2 = A, B per position (C, D
+#       face-wide; the map), 3 = C also per position, 4 = C and D also per
+#       position (<json>_free3/4.json, jes_closure_free3/4.*); e.g. -F "2 3 4"
 #
 # Example:
 #   ./submit_jet_scale_em_only.sh -i /star/data01/pwg/seanp/pipeline_output/em_only_production \
@@ -30,8 +34,9 @@ SAVE_CALIBRATION_ROOT="0"
 LABEL="run"
 KEEPLOGS=0
 JET_TYPE="em"
+FREE_LIST="2"
 
-while getopts "i:o:n:s:l:k:t:h" opt; do
+while getopts "i:o:n:s:l:k:t:F:h" opt; do
   case $opt in
     i) JETTREES_DIR="$OPTARG" ;;
     o) OUTDIR="$OPTARG" ;;
@@ -40,6 +45,7 @@ while getopts "i:o:n:s:l:k:t:h" opt; do
     l) LABEL="$OPTARG" ;;
     k) KEEPLOGS="$OPTARG" ;;
     t) JET_TYPE="$OPTARG" ;;
+    F) FREE_LIST="$OPTARG" ;;
     h|*)
       sed -n '2,22p' "$0"
       exit 0
@@ -94,6 +100,9 @@ if [ "$JET_TYPE" != "em" ] && [ "$JET_TYPE" != "full" ]; then
     echo "Error: -t must be em or full (got '$JET_TYPE')"
     exit 1
 fi
+for f in $FREE_LIST; do
+    case "$f" in 2|3|4) ;; *) echo "Error: -F entries must be 2, 3 or 4 (got '$f')"; exit 1 ;; esac
+done
 sed -e "s#{{JETTREES_DIR}}#${JETTREES_DIR}#g" \
     -e "s#{{OUTDIR}}#${OUTDIR}#g" \
     -e "s/{{JSON_NAME}}/${JSON_NAME}/g" \
@@ -105,6 +114,7 @@ sed -e "s#{{JETTREES_DIR}}#${JETTREES_DIR}#g" \
     -e "s#{{MAP_TUNE}}#${MAP_TUNE}#g" \
     -e "s#{{MAP_COMMIT}}#${MAP_COMMIT}#g" \
     -e "s#{{JET_TYPE}}#${JET_TYPE}#g" \
+    -e "s#{{FREE_LIST}}#${FREE_LIST}#g" \
     "${SCRIPT_DIR}/jet_scale_em_only.xml" > "${OUTXML}"
 
 echo "Generated ${OUTXML}"

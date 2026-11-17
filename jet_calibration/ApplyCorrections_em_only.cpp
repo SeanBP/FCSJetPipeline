@@ -3,6 +3,8 @@
 //
 // scale(x,y,E) = A + B lnE + C ln^2E + D ln^3E, with A, B interpolated from
 // the map's bins and C, D global (the JSON must say "model": "logcubic"),
+// or C (and D) interpolated per bin too when the map has them (free_params 3
+// or 4, CalibrationMap_em_only argv[8]; 2026-11-17),
 // evaluated at the jet's own UE-subtracted energy E = reco_E - reco_ue_E,
 // held at kJesEvalMinGeV = 2 GeV below it and at sqrt(s)/2 above it
 // (JetParameters.h):
@@ -41,7 +43,8 @@ struct LookupGrid
 
     std::vector<std::vector<double>> A;
     std::vector<std::vector<double>> B;
-    double C, D; // the same everywhere
+    std::vector<std::vector<double>> Cb, Db; // per bin: the bin's own C, D, or the face-wide ones
+    double C, D; // face-wide
     double Emin, Emax; // fitted response range (information only; the evaluation range is JetParameters.h's)
 };
 
@@ -293,6 +296,8 @@ int main(int argc, char** argv)
 
     init_grid_2d(grid.A);
     init_grid_2d(grid.B);
+    init_grid_2d(grid.Cb);
+    init_grid_2d(grid.Db);
 
     {
         size_t pos = json.find("\"bins\"");
@@ -362,6 +367,8 @@ int main(int argc, char** argv)
 
             grid.A[bi][bj] = get_field("A");
             grid.B[bi][bj] = get_field("B");
+            grid.Cb[bi][bj] = obj.find("\"C\"") != std::string::npos ? get_field("C") : grid.C;
+            grid.Db[bi][bj] = obj.find("\"D\"") != std::string::npos ? get_field("D") : grid.D;
 
             imin = std::min(imin, bi);
             imax = std::max(imax, bi);
@@ -534,11 +541,13 @@ int main(int argc, char** argv)
 
                 double A_grid = bilinear(grid.x,grid.y,grid.A,x,y,imin,imax,jmin,jmax);
                 double B_grid = bilinear(grid.x,grid.y,grid.B,x,y,imin,imax,jmin,jmax);
+                double C_grid = bilinear(grid.x,grid.y,grid.Cb,x,y,imin,imax,jmin,jmax);
+                double D_grid = bilinear(grid.x,grid.y,grid.Db,x,y,imin,imax,jmin,jmax);
 
                 double E_eval = clamp(E,kJesEvalMinGeV,0.5*event_sqrt_s_gev);
 
                 double l = std::log(E_eval);
-                double F_grid = A_grid + l*(B_grid + l*(grid.C + l*grid.D));
+                double F_grid = A_grid + l*(B_grid + l*(C_grid + l*D_grid));
 
                 if(invalid(F_grid) || std::fabs(F_grid)<=1e-8)
                 {

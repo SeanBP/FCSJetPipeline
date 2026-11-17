@@ -73,9 +73,6 @@
         g++ -m64 CalibrationMap_em_only.cpp -o CalibrationMap_em_only \
             `root-config --cflags --libs` -std=c++11
 
-        echo "Running CalibrationMap_em_only..."
-        ./CalibrationMap_em_only jet_calibration.root {{JSON_NAME}} "{{MAP_SAMPLE}}" "{{MAP_K}}" "{{MAP_TUNE}}" "{{MAP_COMMIT}}" {{JET_TYPE}}
-
         # Closure on the same UE-subtracted jets (Gaussian core or kernel peak of
         # E_corr / E_truth, and the map against the points it was fitted to)
         echo "Compiling jes_closure..."
@@ -83,8 +80,24 @@
             `root-config --cflags --libs` \
             `fastjet-config --cxxflags --libs` -std=c++11
         find "${INDIR}" -maxdepth 1 -name "*.root" | sort > closure_files.list
-        ./jes_closure closure_files.list {{JSON_NAME}} ue jes_closure jet_calibration.root >&amp;! jes_closure.txt
-        tail -40 jes_closure.txt
+
+        # One map + closure per variant of free parameters per position
+        # (2 = A, B per position, C, D face-wide: {{JSON_NAME}}, jes_closure.*;
+        # 3 = C also free, 4 = C and D also free: &lt;json&gt;_free3/4.json,
+        # jes_closure_free3/4.*), all from the same fine grid
+        foreach FREE ({{FREE_LIST}})
+            if ( "${FREE}" == "2" ) then
+                set JSON = {{JSON_NAME}}
+                set CBASE = jes_closure
+            else
+                set JSON = `basename {{JSON_NAME}} .json`_free${FREE}.json
+                set CBASE = jes_closure_free${FREE}
+            endif
+            echo "Running CalibrationMap_em_only (${FREE} free per position) -> ${JSON}..."
+            ./CalibrationMap_em_only jet_calibration.root ${JSON} "{{MAP_SAMPLE}}" "{{MAP_K}}" "{{MAP_TUNE}}" "{{MAP_COMMIT}}" {{JET_TYPE}} ${FREE}
+            ./jes_closure closure_files.list ${JSON} ue ${CBASE} jet_calibration.root >&amp;! ${CBASE}.txt
+            tail -40 ${CBASE}.txt
+        end
 
         if ( {{SAVE_CALIBRATION_ROOT}} == 0 ) then
             rm -f jet_calibration.root
@@ -124,5 +137,7 @@
     <output fromScratch="jes_closure.txt" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="jes_closure.root" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="jes_closure.png" toURL="file:{{OUTDIR}}/" />
+    <!-- the C / C,D-free variants (FREE_LIST 3, 4): maps, side files, closures -->
+    <output fromScratch="*_free*" toURL="file:{{OUTDIR}}/" />
 
 </job>

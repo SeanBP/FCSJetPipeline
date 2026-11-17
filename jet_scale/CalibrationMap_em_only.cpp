@@ -54,13 +54,27 @@
 // <out>.free_fits.csv: the all-free per-position fits (positions with at
 // least 6 points), to map how C and D vary.
 //
-// Usage: ./CalibrationMap_em_only <bins.root> <out.json> [sample] [k] [tune] [commit] [em|full]
+// Free parameters per position (2026-11-17, Sean: C, maybe D, may not be
+// constant over the face; the map must be testable both ways): argv[8] = 2
+// (default; A, B per position, C, D face-wide, the map above), 3 (A, B, C per
+// position, D face-wide) or 4 (all four per position). The face-wide ones
+// come from the nested fit (fit_nested, as the uniformity test); a position
+// needs at least free + 2 points to be fit (others are filled by the
+// smoothing). The free part is smoothed as the scale at `free` anchor
+// energies (ANCHOR_E_FREE), each anchor map separately, and solved back per
+// cell, as A and B always were. The JSON then carries per-bin "C" (3, 4) and
+// "D" (4) next to the face-wide values, and "free_params"; the evaluators
+// (ApplyCorrections_em_only, jes_closure) interpolate per-bin C and D
+// bilinearly when present and use the face-wide ones otherwise.
+//
+// Usage: ./CalibrationMap_em_only <bins.root> <out.json> [sample] [k] [tune] [commit] [em|full] [2|3|4]
 //        (filled in by submit_jet_scale_em_only.sh; "unknown" if left out)
 // Build: g++ -m64 -O2 CalibrationMap_em_only.cpp -o CalibrationMap_em_only `root-config --cflags --libs` -std=c++11
 
 #include <TFile.h>
 #include <TTree.h>
 #include <TROOT.h>
+#include <TString.h>
 
 #include <iostream>
 #include <fstream>
@@ -104,6 +118,12 @@ const double MIN_NEFF = 3.0;
 // invertible) rather than coefficient by coefficient, which could pair one
 // position's A with its neighbours' B and put spots in the scale
 const double ANCHOR_E[2] = {3.0, 30.0};
+// With C (and D) free per position, as many anchors as free parameters,
+// spread in ln E over the range most positions have points in (the outer
+// ones have few reliable points above ~40 GeV)
+const double ANCHOR_E3[3] = {3.0, 10.0, 35.0};
+const double ANCHOR_E4[4] = {3.0, 7.0, 18.0, 45.0};
+int g_free = 2; // argv[8]
 
 // Copied from shared/JetParameters.h (keep in sync; that header needs
 // fastjet). Upstream, JetEnergyScaleFineGrid only fills grid points inside
@@ -156,7 +176,7 @@ struct Cell
 struct FitRow
 {
     double x_center, y_center;
-    double A, B;
+    double A, B, C, D; // C, D: the face-wide values unless free per position
     double Emin, Emax;
     double chi2;
     int ndof;
@@ -340,6 +360,8 @@ std::vector<FitRow> fit_cells(const std::vector<Cell> &cells, double C, double D
         f.y_center = c.y_center;
         f.A = (s2 * r0 - s1 * r1) / det;
         f.B = (s0 * r1 - s1 * r0) / det;
+        f.C = C;
+        f.D = D;
         f.Emin = c.Emin;
         f.Emax = c.Emax;
         f.chi2 = 0.0;
@@ -443,6 +465,47 @@ bool fit_nested(const std::vector<Cell> &cells, int k, double &chi2, long &ndof,
     }
     ndof = n_points - (long)k * (long)cells.size() - g;
     return true;
+}
+
+// The map's fits with the first k of (A, B, C, D) free per position (k = 3, 4)
+// and the rest at the face-wide values glob (from fit_nested on the same
+// cells): per position a weighted linear fit of scale minus the face-wide
+// part on the free columns. Positions with fewer than k + 2 points are
+// skipped (filled by the smoothing).
+std::vector<FitRow> fit_cells_free(const std::vector<Cell> &cells, int k, const double glob[4])
+{
+    std::vector<FitRow> fits;
+    for (const Cell &c : cells)
+    {
+        if ((int)c.l.size() < k + 2) continue;
+        double M[4][4] = {{0}}, v[4] = {0}, x[4] = {0};
+        for (size_t i = 0; i < c.l.size(); i++)
+        {
+            const double l = c.l[i], col[4] = {1.0, l, l * l, l * l * l};
+            double r = c.y[i];
+            for (int a = k; a < 4; a++) r -= glob[a] * col[a];
+            for (int a = 0; a < k; a++) { v[a] += c.w[i] * col[a] * r; for (int b = 0; b < k; b++) M[a][b] += c.w[i] * col[a] * col[b]; }
+        }
+        if (!solve_small(k, M, v, x)) continue;
+        double p[4];
+        for (int a = 0; a < 4; a++) p[a] = a < k ? x[a] : glob[a];
+        FitRow f;
+        f.x_center = c.x_center;
+        f.y_center = c.y_center;
+        f.A = p[0]; f.B = p[1]; f.C = p[2]; f.D = p[3];
+        f.Emin = c.Emin;
+        f.Emax = c.Emax;
+        f.chi2 = 0.0;
+        for (size_t i = 0; i < c.l.size(); i++)
+        {
+            const double l = c.l[i];
+            const double d = c.y[i] - (p[0] + l * (p[1] + l * (p[2] + l * p[3])));
+            f.chi2 += c.w[i] * d * d;
+        }
+        f.ndof = (int)c.l.size() - k;
+        fits.push_back(f);
+    }
+    return fits;
 }
 
 // The uniformity test (see the header): nested models on the positions with
@@ -745,38 +808,55 @@ void write_calibration_json(
     const std::vector<double> &xs,
     const std::vector<double> &ys,
     const std::string &save_file,
-    Grid2D &As_out, Grid2D &Bs_out)
+    Grid2D Ps_out[4])
 {
     const size_t nx = xs.size(), ny = ys.size();
-    const double l0 = std::log(ANCHOR_E[0]), l1 = std::log(ANCHOR_E[1]);
+    const int k = g_free;
+    const double *anchor = k == 2 ? ANCHOR_E : (k == 3 ? ANCHOR_E3 : ANCHOR_E4);
+    double la[4];
+    for (int m = 0; m < k; m++) la[m] = std::log(anchor[m]);
 
-    // A + B l at the anchor energies (the C, D part is the same everywhere)
-    Grid2D A = coarse_map(fits, xs, ys, [](const FitRow &f) { return f.A; });
-    Grid2D B = coarse_map(fits, xs, ys, [](const FitRow &f) { return f.B; });
-    Grid2D a0 = make_nan_grid((int)nx, (int)ny), a1 = make_nan_grid((int)nx, (int)ny);
-    for (size_t i = 0; i < nx; i++)
-        for (size_t j = 0; j < ny; j++)
-        {
-            a0[i][j] = A[i][j] + B[i][j] * l0; // NaN where the position has no fit
-            a1[i][j] = A[i][j] + B[i][j] * l1;
-        }
-    a0 = smooth_map(a0);
-    a1 = smooth_map(a1);
+    // The free part sum_{p<k} par_p l^p at the k anchor energies (the face-wide
+    // part is the same everywhere); with k = 2 this is A + B l at 3 and 30 GeV
+    Grid2D P[4];
+    P[0] = coarse_map(fits, xs, ys, [](const FitRow &f) { return f.A; });
+    P[1] = coarse_map(fits, xs, ys, [](const FitRow &f) { return f.B; });
+    P[2] = coarse_map(fits, xs, ys, [](const FitRow &f) { return f.C; });
+    P[3] = coarse_map(fits, xs, ys, [](const FitRow &f) { return f.D; });
+    Grid2D an[4];
+    for (int m = 0; m < k; m++)
+    {
+        an[m] = make_nan_grid((int)nx, (int)ny);
+        for (size_t i = 0; i < nx; i++)
+            for (size_t j = 0; j < ny; j++)
+            {
+                double v = 0, lp = 1; // NaN where the position has no fit
+                for (int q = 0; q < k; q++) { v += P[q][i][j] * lp; lp *= la[m]; }
+                an[m][i][j] = v;
+            }
+        an[m] = smooth_map(an[m]);
+    }
+    // back from the anchors: solve sum_q par_q la_m^q = an_m (Vandermonde, exact)
+    double V[4][4];
+    for (int m = 0; m < k; m++) { double lp = 1; for (int q = 0; q < k; q++) { V[m][q] = lp; lp *= la[m]; } }
 
     long n_unfit = 0, n_filled = 0, n_outside_fiducial = 0;
-    struct SavedBin { int i, j; double A, B; };
+    struct SavedBin { int i, j; double p[4]; };
     std::vector<SavedBin> bins_out;
-    As_out = make_nan_grid((int)nx, (int)ny);
-    Bs_out = make_nan_grid((int)nx, (int)ny);
+    for (int q = 0; q < 4; q++) Ps_out[q] = make_nan_grid((int)nx, (int)ny);
     for (size_t i = 0; i < nx; i++)
         for (size_t j = 0; j < ny; j++)
         {
-            const double Bs = (a1[i][j] - a0[i][j]) / (l1 - l0);
-            const double As = a0[i][j] - Bs * l0;
-            const bool defined = std::isfinite(As) && std::isfinite(Bs);
-            As_out[i][j] = As;
-            Bs_out[i][j] = Bs;
-            if (!std::isfinite(A[i][j]))
+            double rhs[4], x[4], M[4][4];
+            bool defined = true;
+            for (int m = 0; m < k; m++) { rhs[m] = an[m][i][j]; defined = defined && std::isfinite(rhs[m]); }
+            for (int m = 0; m < k; m++) for (int q = 0; q < k; q++) M[m][q] = V[m][q];
+            if (defined) defined = solve_small(k, M, rhs, x);
+            double ps[4];
+            for (int q = 0; q < 4; q++)
+                ps[q] = !defined ? std::numeric_limits<double>::quiet_NaN() : (q < k ? x[q] : (q == 2 ? C : D));
+            for (int q = 0; q < 4; q++) Ps_out[q][i][j] = ps[q];
+            if (!std::isfinite(P[0][i][j]))
             {
                 n_unfit++;
                 if (defined)
@@ -789,7 +869,7 @@ void write_calibration_json(
                 continue;
             }
             if (defined)
-                bins_out.push_back({(int)i, (int)j, As, Bs});
+                bins_out.push_back({(int)i, (int)j, {ps[0], ps[1], ps[2], ps[3]}});
         }
 
     std::cout << "Filled " << n_filled << "/" << n_unfit
@@ -810,6 +890,9 @@ void write_calibration_json(
     // Evaluators refuse a map without this tag (earlier forms)
     out << "  \"model\": \"logcubic\",\n";
     out << "  \"jet_type\": \"" << (g_full_jets ? "full" : "em") << "\",\n";
+    // how many of A, B, C, D are per position (2: C, D face-wide); with 3 or 4
+    // the face-wide "C" / "D" below are the nested fit's (unused where per-bin)
+    out << "  \"free_params\": " << k << ",\n";
     for (int i = 0; i < 4; i++)
         out << "  \"" << MAP_INFO_KEY[i] << "\": \"" << map_info[i] << "\",\n";
     out << "  \"C\": ";
@@ -847,9 +930,11 @@ void write_calibration_json(
     {
         const SavedBin &b = bins_out[k];
         out << "    {\"i\": " << b.i << ", \"j\": " << b.j << ", \"A\": ";
-        write_double(out, b.A);
+        write_double(out, b.p[0]);
         out << ", \"B\": ";
-        write_double(out, b.B);
+        write_double(out, b.p[1]);
+        if (k >= 3) { out << ", \"C\": "; write_double(out, b.p[2]); }
+        if (k >= 4) { out << ", \"D\": "; write_double(out, b.p[3]); }
         out << "}" << (k + 1 < bins_out.size() ? "," : "") << "\n";
     }
     out << "  ]\n";
@@ -869,7 +954,7 @@ void write_chi2_csv(const std::vector<FitRow> &fits, const std::string &save_fil
     {
         if (r.ndof <= 0)
             continue;
-        out << r.x_center << "," << r.y_center << "," << r.chi2 << "," << r.ndof << ",2,"
+        out << r.x_center << "," << r.y_center << "," << r.chi2 << "," << r.ndof << "," << g_free << ","
             << (r.chi2 / r.ndof) << "\n";
     }
     out.close();
@@ -879,8 +964,7 @@ void write_chi2_csv(const std::vector<FitRow> &fits, const std::string &save_fil
 // Side CSV of each fitted position's chi2 against the smoothed map (the A, B
 // of the JSON at that grid point), over the same points as the direct fit.
 // No parameter is fitted to the position's points there, so ndof = points.
-void write_chi2_smoothed_csv(const std::vector<Cell> &cells, double C, double D,
-                             const Grid2D &As, const Grid2D &Bs, const std::vector<double> &xs,
+void write_chi2_smoothed_csv(const std::vector<Cell> &cells, const Grid2D Ps[4], const std::vector<double> &xs,
                              const std::vector<double> &ys, const std::string &save_file)
 {
     std::map<double, int> ix, iy;
@@ -892,8 +976,9 @@ void write_chi2_smoothed_csv(const std::vector<Cell> &cells, double C, double D,
     out << "x,y,chi2,ndof,n_params,reduced_chi2\n";
     for (const Cell &c : cells)
     {
-        const double A = As[ix.at(c.x_center)][iy.at(c.y_center)], B = Bs[ix.at(c.x_center)][iy.at(c.y_center)];
-        if (!std::isfinite(A) || !std::isfinite(B))
+        const int ci = ix.at(c.x_center), cj = iy.at(c.y_center);
+        const double A = Ps[0][ci][cj], B = Ps[1][ci][cj], C = Ps[2][ci][cj], D = Ps[3][ci][cj];
+        if (!std::isfinite(A) || !std::isfinite(B) || !std::isfinite(C) || !std::isfinite(D))
             continue;
         double chi2 = 0.0;
         for (size_t i = 0; i < c.l.size(); i++)
@@ -910,14 +995,13 @@ void write_chi2_smoothed_csv(const std::vector<Cell> &cells, double C, double D,
 }
 
 // Side CSV of the direct (pre-smoothing) per-position fits (diagnostics only)
-void write_direct_fits_csv(const std::vector<FitRow> &fits, double C, double D,
-                           const std::string &save_file)
+void write_direct_fits_csv(const std::vector<FitRow> &fits, const std::string &save_file)
 {
     std::ofstream out(save_file.c_str());
     out << "x,y,A,B,C,D,Emin,Emax\n";
     for (const auto &r : fits)
-        out << r.x_center << "," << r.y_center << "," << r.A << "," << r.B << "," << C << ","
-            << D << "," << r.Emin << "," << r.Emax << "\n";
+        out << r.x_center << "," << r.y_center << "," << r.A << "," << r.B << "," << r.C << ","
+            << r.D << "," << r.Emin << "," << r.Emax << "\n";
     out.close();
     std::cout << "Direct (unsmoothed) fit CSV saved to " << save_file << std::endl;
 }
@@ -937,6 +1021,9 @@ int main(int argc, char **argv)
         map_info[i] = argv[i + 3];
     g_full_jets = argc > 7 && std::string(argv[7]) == "full";
     std::cout << "Jet type: " << (g_full_jets ? "full (ECAL+HCAL)" : "EM-only") << std::endl;
+    if (argc > 8) g_free = std::atoi(argv[8]);
+    if (g_free < 2 || g_free > 4) { std::cerr << "ERROR: free parameters per position must be 2, 3 or 4" << std::endl; return 1; }
+    std::cout << "Free per position: " << (g_free == 2 ? "A, B (C, D face-wide)" : g_free == 3 ? "A, B, C (D face-wide)" : "A, B, C, D") << std::endl;
 
     std::cout << "Loading " << input_file << " ..." << std::endl;
     std::vector<BinRow> rows = load_bins(input_file);
@@ -945,7 +1032,24 @@ int main(int argc, char **argv)
     std::vector<Cell> cells = build_cells(rows);
     double C, D;
     fit_global_CD(cells, C, D);
-    std::vector<FitRow> fits = fit_cells(cells, C, D);
+    std::vector<FitRow> fits;
+    if (g_free == 2)
+        fits = fit_cells(cells, C, D);
+    else
+    {
+        // face-wide values of the non-free parameters from the nested fit on
+        // the positions that can take k free (k + 2 points); C, D in the JSON
+        // are then those (for k = 4: the k = 2 global fit, for reference)
+        std::vector<Cell> fc;
+        for (const Cell &c : cells) if ((int)c.l.size() >= g_free + 2) fc.push_back(c);
+        double glob[4], ch; long nd;
+        if (!fit_nested(fc, g_free, ch, nd, glob)) { std::cerr << "ERROR: nested fit failed" << std::endl; return 1; }
+        if (g_free == 3) D = glob[3];
+        const double gv[4] = {NAN, NAN, C, D};
+        fits = fit_cells_free(fc, g_free, gv);
+        std::printf("Nested fit (%d free per position) over %zu positions: chi2/ndof = %.1f/%ld%s\n", g_free, fc.size(), ch, nd,
+                    g_free == 3 ? Form(", face-wide D = %.6f", D) : "");
+    }
     std::cout << "Fit " << fits.size() << " position bins" << std::endl;
     double Emin = fits.front().Emin, Emax = fits.front().Emax;
     for (const FitRow &f : fits)
@@ -964,11 +1068,11 @@ int main(int argc, char **argv)
     std::vector<double> xs(xs_set.begin(), xs_set.end());
     std::vector<double> ys(ys_set.begin(), ys_set.end());
 
-    Grid2D As, Bs;
-    write_calibration_json(fits, C, D, Emin, Emax, xs, ys, output_file, As, Bs);
+    Grid2D Ps[4];
+    write_calibration_json(fits, C, D, Emin, Emax, xs, ys, output_file, Ps);
     write_chi2_csv(fits, output_file + ".chi2.csv");
-    write_chi2_smoothed_csv(cells, C, D, As, Bs, xs, ys, output_file + ".chi2_smoothed.csv");
-    write_direct_fits_csv(fits, C, D, output_file + ".direct_fits.csv");
+    write_chi2_smoothed_csv(cells, Ps, xs, ys, output_file + ".chi2_smoothed.csv");
+    write_direct_fits_csv(fits, output_file + ".direct_fits.csv");
     write_uniformity(cells, output_file + ".uniformity.txt", output_file + ".free_fits.csv");
 
     return 0;
