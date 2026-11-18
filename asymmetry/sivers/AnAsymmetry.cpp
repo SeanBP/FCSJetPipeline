@@ -132,7 +132,7 @@
 // subtracted pi0 A_N, as the FMS did. Same restrictions as -p; excludes -m,
 // -p, -z.
 //
-// Systematic variations (-v <fid25|fid30|vz60|vtxmeas|bbcveto>, 2026-11-17):
+// Systematic variations (-v <fid25|fid30|vz60|vtxmeas|bbcveto|jesup|jesdn>, 2026-11-17; jesup / jesdn: photon classes only, not with -I):
 // the yields come from AnHistograms' copies of the default yields with that
 // cut (AnConfig.h kVarSuffix; JP levels split by kVarEmTag for the -J union);
 // with -I the pi0-candidate copies. Default factor only; excludes -E, -C, -A,
@@ -730,7 +730,8 @@ int main(int argc, char **argv)
         else if (w.compare(0, 1, "v") == 0 && w != "vz60" && w != "vtxmeas") w = w.substr(1);
         for (int v = 0; v < kNVar; v++)
             if (std::string(kVarSuffix[v]) == "_v" + w) var_sfx = kVarSuffix[v];
-        if (var_sfx.empty()) { std::cerr << "ERROR: -v takes fid25, fid30, vz60, vtxmeas or bbcveto" << std::endl; return 1; }
+        if (var_sfx.empty()) { std::cerr << "ERROR: -v takes fid25, fid30, vz60, vtxmeas, bbcveto, jesup or jesdn" << std::endl; return 1; }
+        if ((var_sfx == kVarSuffix[kVarJesUp] || var_sfx == kVarSuffix[kVarJesDn]) && !pi0_opt.empty()) { std::cerr << "ERROR: -v jesup / jesdn have no pi0 copies (the pi0 candidates do not use the JES); drop -I" << std::endl; return 1; }
         if (!at_dflt || hi_e || comp_only || comp_add || add_veto || !mass_opt.empty() || !plead_opt.empty() || !z_opt.empty())
         {
             std::cerr << "ERROR: -v (variation copies of the default yields) works at the default factor only, without -E, -C, -A, -V, -m, -p, -z (-I is allowed)" << std::endl;
@@ -772,7 +773,7 @@ int main(int argc, char **argv)
                   << "  -Q <list>: (-r) also mask the runs flagged in this pi0-peak bad-run list (pi0_peak_runs.C <out>_bad_runs.txt)\n"
                   << "  -M <merged.root> <out.root> [rebin]: read one AnMerge output (sums, masked runs subtracted, P-weighted yields) instead of -r\n"
                   << "  -x <e0,e1,...>: variable x_F bin edges on the stored 0.025 grid (e.g. 0,0.1,0.15,0.175,0.2,0.25,0.35,0.5); replaces rebin\n"
-                  << "  -v <fid25|fid30|vz60|vtxmeas|bbcveto>: a systematic-variation copy of the default yields (AnConfig.h kVarSuffix; with -I too)" << std::endl;
+                  << "  -v <fid25|fid30|vz60|vtxmeas|bbcveto|jesup|jesdn>: a systematic-variation copy of the default yields (AnConfig.h kVarSuffix; with -I too, except jesup / jesdn)" << std::endl;
         return 1;
     }
     const int rebin = argc > 5 ? std::atoi(argv[5]) : 2;

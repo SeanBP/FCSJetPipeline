@@ -432,12 +432,15 @@ Int_t StSimpleReaderMaker::Make( )
       if ( td ){
         bbc_tac_diff = (int)td->bbcTimeDifference() - 4096;
         if ( bbc_tac_diff != 0 && bbc_tac_diff != -4096 ) bbc_vz_tac = bbc_tac_diff * -0.2475;
-        // east BBC small tiles (PMT 1-16) with a signal, and TOF multiplicity
-        // (the FMS Run 15 "ring of fire" cut: BBC east >= 1, TOF > 2)
+        // east BBC small tiles (PMT 1-16) fired with the FMS definition
+        // (100 < TDC < 2400, ADC > 50), and TOF multiplicity (the FMS Run 15
+        // "ring of fire" cut: BBC east >= 1, TOF > 2; see the header)
         bbc_e_ntiles = 0; bbc_e_adcsum = 0;
         for ( int pmt = 1; pmt <= 16; pmt++ ){
           const int adc = (int)td->bbcADC(east, pmt, 0);
-          if ( adc > 0 ){ bbc_e_ntiles++; bbc_e_adcsum += adc; }
+          const int tdc = (int)td->bbcTDC(east, pmt, 0);
+          if ( adc > 0 ) bbc_e_adcsum += adc;
+          if ( tdc > 100 && tdc < 2400 && adc > 50 ) bbc_e_ntiles++;
         }
         tof_mult = (int)td->tofMultiplicity(0);
       }

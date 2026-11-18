@@ -229,7 +229,7 @@
         echo "calib all ${NPRODUCED} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
 
         # A_N yield histograms
-        /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./AnHistograms jet_files.list an_hists_${TAG}.root ref_files.list
+        /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./AnHistograms jet_files.list an_hists_${TAG}.root ref_files.list --jes-error=calib.json
         echo "hists all ${NPRODUCED} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
         echo "output an_hists_${TAG}.root 0 `du -k an_hists_${TAG}.root | cut -f1` 0 0 0 0 0" >> ${TIMING}
         echo "jetfiles all 0 `cat jet_files.list | xargs du -ck | tail -1 | cut -f1` 0 0 0 0 0" >> ${TIMING}

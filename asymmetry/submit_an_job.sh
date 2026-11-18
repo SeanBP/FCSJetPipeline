@@ -17,7 +17,8 @@
 #   -c  EM-only point-jet JES lookup JSON, default
 #       jet_calibration/JES_Lookups/JetEnergyScale_lookup_em_only.json
 #       (copied into asymmetry/jes/ for the SandBox). It must be a
-#       "logcubic" map
+#       "logcubic" map, with its error vs energy (jes_error_* arrays,
+#       jet_scale/jes_map_compare.py error) for the JES uncertainty copies
 #   -t  FCS trigger names an event must have fired, default the triggers
 #       AnHistograms counts: fcsEM0,fcsEM1,fcsEM2 and their _tpc copies (an
 #       event listing only a _tpc copy is a valid EM event) and the jet
@@ -94,6 +95,11 @@ fi
 [ -f "$LISTFILE" ] || { echo "Error: listfile '$LISTFILE' does not exist"; exit 1; }
 [ -f "$CALIB" ] || { echo "Error: calibration JSON '$CALIB' does not exist"; exit 1; }
 grep -q '"model": *"logcubic"' "$CALIB" || { echo "Error: $CALIB is not a log-cubic EM-only map (CalibrationMap_em_only); pass one with -c"; exit 1; }
+# the map's error vs energy (jet_scale/jes_map_compare.py error): AnHistograms'
+# _vjesup / _vjesdn copies (the JES uncertainty); without it they stay empty
+if ! grep -q '"jes_error_total"' "$CALIB"; then
+    echo "WARNING: $CALIB has no jes_error_E / jes_error_total arrays (jes_map_compare.py error): the JES uncertainty copies (_vjesup / _vjesdn) will be empty"
+fi
 [[ "$FILES_PER_JOB" =~ ^[1-9][0-9]*$ ]] || { echo "Error: -n must be a positive integer"; exit 1; }
 [[ "$KEEP_JETS" =~ ^[0-9]+$ ]] || { echo "Error: -J must be a non-negative integer"; exit 1; }
 [[ "$SHUFFLE_SEED" =~ ^[0-9]+$ ]] || { echo "Error: -S must be a non-negative integer"; exit 1; }
@@ -200,6 +206,7 @@ files=$(wc -l < "${SORTEDLIST}")
 nProcesses=${NPROC}
 files_per_job=${FILES_PER_JOB}
 calib_json=${CALIB}
+calib_jes_error=$(grep -q '"jes_error_total"' "$CALIB" && echo yes || echo no)
 trigger_filter=${TRIGGER_FILTER}
 ref_triggers=${REF_TRIGGERS}
 keep_logs=${KEEPLOGS}

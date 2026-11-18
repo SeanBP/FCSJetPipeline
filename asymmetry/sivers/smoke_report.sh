@@ -14,6 +14,9 @@
 #   an_vs_xf_pi0_<class>[_fms].png  those A_N (FMS isolated / non-isolated overlaid)
 #   pi0_peak_runs.png, .txt    the candidates' pi0 peak and width run by run
 #                              (scale factor check; PeakShift / Wide / LowStat flags)
+#   event_cuts_<var>.png, _all.png, .txt  each event-level cut variable (vertex z,
+#                              vertex source, east BBC tiles, TOF multiplicity),
+#                              N-1, with the cut (solid) and variations (dotted)
 #   pi0_peak_runs_bad_runs.txt its flagged runs (D. Kapukchyan's format), masked in
 #                              every A_N above with AnAsymmetry -Q (with his list)
 #   pi0_peak_runs_scale_{global,per_period,per_run}.txt  pi0 scale tables for a rehist
@@ -54,7 +57,7 @@
 set -e
 OUTDIR="$(cd "$1" && pwd)"
 GOOD="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
-[ -d "${OUTDIR}/hists" ] && [ -f "$GOOD" ] || { sed -n '2,24p' "$0"; exit 1; }
+[ -d "${OUTDIR}/hists" ] && [ -f "$GOOD" ] || { sed -n '2,27p' "$0"; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # a file of this script's directory, else of the one above (repo layout:
 # asymmetry/sivers/ with the pass-level files in asymmetry/; a frozen report
@@ -62,7 +65,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 src() { if [ -e "${HERE}/$1" ]; then echo "${HERE}/$1"; else echo "${HERE}/../$1"; fi; }
 REP="${OUTDIR}/${3:-report}"
 mkdir -p "${REP}/build"
-cp "$(src AnAsymmetry.cpp)" "$(src AnPlots.cpp)" "$(src AnConfig.h)" "$(src AnRunTools.h)" "$(src AnMerge.cpp)" "$(src pi0_bgsub.C)" "$(src pi0_peak_runs.C)" "${REP}/build/"
+cp "$(src AnAsymmetry.cpp)" "$(src AnPlots.cpp)" "$(src AnConfig.h)" "$(src AnRunTools.h)" "$(src AnMerge.cpp)" "$(src pi0_bgsub.C)" "$(src pi0_peak_runs.C)" "$(src plot_event_cuts.C)" "${REP}/build/"
 find -L "${OUTDIR}/hists" -maxdepth 1 -name 'an_hists_*.root' -mmin +10 | sort > "${REP}/yields.list"
 # jobs submitted so far, over all batches of the pass
 NJOBS=$(cat "${OUTDIR}"/run_params_*.txt 2>/dev/null | awk -F= '$1 == "nProcesses" && $2 > 0 { n += $2 } END { if (n) print n }')
@@ -103,6 +106,10 @@ QOPT=""
 rm -f "${REP}/pi0_peak_runs_bad_runs.txt"
 container "root -b -q -l 'build/pi0_peak_runs.C+(\"${PIN}\",\"pi0_peak_runs\")'" > "${REP}/pi0_peak_runs.log" 2>&1
 grep "^pi0_peak_runs:" "${REP}/pi0_peak_runs.log" || true
+# event-level cut variables with the cut (solid) and its variations (dotted), N-1
+# (Sean 2026-11-17; yield files from 2026-11-17 on, else it only warns)
+container "root -b -q -l 'build/plot_event_cuts.C+(\"${PIN}\",\"event_cuts\")'" > "${REP}/event_cuts.log" 2>&1 || true
+grep "^plot_event_cuts:" "${REP}/event_cuts.log" || true
 if [ -s "${REP}/pi0_peak_runs_bad_runs.txt" ] && [ -z "${SMOKE_NO_PI0_MASK}" ]; then
     QOPT="-Q pi0_peak_runs_bad_runs.txt"
     echo "pi0-peak bad runs masked: $(grep -c '^[0-9]' "${REP}/pi0_peak_runs_bad_runs.txt")"

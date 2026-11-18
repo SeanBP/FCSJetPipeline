@@ -180,11 +180,17 @@ class StSimpleReaderMaker : public StMaker
 
   // Collision / time variables for cut variations after the pass (data only;
   // -1 = not available or simulation), 2026-11-17:
-  //  bbc_e_ntiles: east BBC small tiles (PMT 1-16) with ADC > 0
-  //                (StTriggerData::bbcADC(east, pmt)); FMS Run 15 cut: >= 1
-  //  bbc_e_adcsum: their ADC sum
+  //  bbc_e_ntiles: east BBC small tiles (PMT 1-16) fired as in the FMS EM-jet
+  //                analysis (BrightSTAR TStNanoJetTreeMaker, PRD 103 092009):
+  //                100 < TDC < 2400 and ADC > 50 (StTriggerData::bbcTDC /
+  //                bbcADC(east, pmt)); FMS Run 15 cut: >= 1 (Sean 2026-11-17;
+  //                ADC > 0 alone passed 99.96% of events: pedestal noise)
+  //  bbc_e_adcsum: ADC sum of the tiles with ADC > 0
   //  epd_e_nhits:  east EPD hits with nMIP > 0.3 (the hits of the vertex step)
-  //  tof_mult:     StTriggerData::tofMultiplicity(); FMS Run 15 cut: > 2
+  //  tof_mult:     StTriggerData::tofMultiplicity(); FMS Run 15 cut: > 2 (FMS
+  //                used StMuEvent::btofTrayMultiplicity(), 0 in every st_fwd
+  //                event: no barrel TOF hits; the trigger count is the one
+  //                available, as in StFcsPi0FinderForEcal for Run 22)
   //  event_time:   StEventInfo::time() (Unix time; time in fill with the fill table)
   //  zdc_coinc_rate, bbc_coinc_rate: StRunInfo coincidence rates (Hz), the
   //                luminosity proxy for the luminosity split

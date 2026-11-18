@@ -86,7 +86,7 @@ struct Merged
     std::vector<FileEntry> files;
     std::vector<std::string> skipped;
     std::set<std::string> flags;       // *_missing notes of any input
-    std::string spin_conv, trg_rule, pi0_source;
+    std::string spin_conv, trg_rule, pi0_source, cut_lines;
     int n_files = 0;
 
     static void AddTo(std::map<std::string, TH1 *> &m, const std::string &name, TH1 *h, double c)
@@ -119,6 +119,7 @@ struct Merged
             std::cerr << "ERROR: " << fname << " has a different spin_convention or trigger_rule from the earlier files" << std::endl;
             return false;
         }
+        if (TNamed *cl = (TNamed *)f.Get("event_cut_lines")) if (cut_lines.empty()) cut_lines = cl->GetTitle();  // plot_event_cuts.C
         const char *fl[3] = {"plead_missing", "collins_missing", "pz_missing"};
         for (int i = 0; i < 3; i++) if (f.Get(fl[i])) flags.insert(fl[i]);
         return true;
@@ -267,6 +268,7 @@ struct Merged
         TNamed("trigger_rule", trg_rule.c_str()).Write();
         TNamed("pi0_scale", sc.str().c_str()).Write();
         TNamed("pi0_scale_source", pi0_source.c_str()).Write();
+        if (!cut_lines.empty()) TNamed("event_cut_lines", cut_lines.c_str()).Write();
         for (std::set<std::string>::const_iterator f = flags.begin(); f != flags.end(); ++f) TNamed(f->c_str(), "set by at least one input file").Write();
         if (masked) { TNamed("masked", "yes").Write(); TNamed("bad_runs", bad_note.c_str()).Write(); }
         WriteRunRows(rows);

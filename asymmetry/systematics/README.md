@@ -31,7 +31,7 @@ subset): `sys_slices.py an_f115.txt an_f130.txt ...`.
 
 | file | what it does |
 |---|---|
-| `sys_slices.py` | Δ, σ_diff, w, the slice's A_N, Barlow sys and pull per bin from two AnAsymmetry `.txt` tables (`--disjoint` for independent samples). Writes `<prefix>.txt` and `<prefix>_summary.txt` (χ², p-value per row). |
+| `sys_slices.py` | Δ, σ_diff, w, the slice's A_N, Barlow sys and pull per bin from two AnAsymmetry `.txt` tables (`--disjoint` for independent samples, `--shifted` for the same events with other jet kinematics, the JES: sys = \|Δ\|). Writes `<prefix>.txt` and `<prefix>_summary.txt` (χ², p-value per row). |
 | `plot_sys_slices.C` | One row: A_N of the tight, loose and slice samples on the common A_N axes, and Δ ± σ_diff with the Barlow band. |
 | `time_in_fill.py` | Hours in fill per run: t_mid from `../run22_polarization.txt` minus the fill start from the polarimetry fill table. Splits a yield list into bins: `--edges` in hours (default 2, as in FMS) or `--quantiles N`. |
 | `sys_an_job.sh`, `submit_sys_an.sh` | AnAsymmetry -r over a list of yield files as condor jobs. This is the per-file flow; the merged flow is faster for whole passes. |
@@ -41,6 +41,8 @@ subset): `sys_slices.py an_f115.txt an_f130.txt ...`.
 | `plot_an_final.C` | The final plots of one row from a combined table: `_stat`, `_sys` (total boxes), `_sys_components`, `_combined` (stat bars + sys boxes), `_total` (stat ⊕ sys bars), on the common A_N axes. |
 | `misid_response.cpp` | Photon-class response from simulation (JES production `jet_output_*`, cross-section weighted): reco class × true class per truth-x_F bin, true photons with E >= 1 GeV (`--truth-emin`), offline trigger-value cut (the production's emulated flags are 0); `<out>.txt` per class and `<out>_merged.txt` for np12 / np3plus. |
 | `misid_sys.py` | Misidentification systematic for the merged classes: dA = f(other \| reco) × (A_other − A), Barlow-reduced by the difference's statistical error; `combine_sys.py --comp-simple misid=<out>.txt`. |
+| `jes_data_subsets.sh` | The pass's yield files in k random groups (default 2, 4, 8, plus the full sample): per group the union A_N nominal, `-v jesup` and `-v jesdn` (`AnAsymmetry -r`) → `groups_jesup.txt`, `groups_jesdn.txt`. |
+| `jes_noise_scaling.py` | `groups`: Δ_g² = δ² + k s² per bin (per-k means, variance-weighted): the JES effect δ and the full-sample noise s of the `_vjesup` / `_vjesdn` shift, also pooled per row in stat units. `pairs`: subset-map pairs, <d²>/(2k) per k (flat if the map noise scales as 1/√n; `--model k+sqrtk` for the moving-jet part) and σ₁ per bin. |
 | `pol_uncertainty.py`, `dump_run_jets.C` | Fill-to-fill and profile polarization uncertainty (a note; not used: only the overall scale is quoted, as FMS). |
 
 ## Merged flow for subsets
@@ -73,3 +75,44 @@ root -b -q 'plot_an_final.C+("final_jets.txt","final_all_all","all","all","EM + 
 ```
 
 Photon-class misidentification: `misid_response` on the JES simulation, then `misid_sys.py` on the nominal table (merged classes, Sean 2026-11-17).
+
+## JES uncertainty: the standard map and its error (Sean 2026-11-18)
+
+One standard map; its error vs energy is part of the map (`jes_error_*` arrays)
+and AnHistograms applies it as a coherent scale ±δ(E) (`_vjesup` / `_vjesdn`).
+
+1. **Statistical (the standard map's own noise).** `jet_scale/jes_subset_maps.sh
+   -i <flat jet dir of the standard sample> -o <dir>`: maps on disjoint 1/2,
+   1/4, 1/8 subsets (stratified per ptHat bin, same settings; `-N` folders only).
+   `jet_scale/jes_map_compare.py noise <dir>/manifest.txt`: σ₁ per node and
+   energy (flat in k if the noise scales as 1/√n; the core share must stay put).
+2. **Systematic (generator / tune).** A smaller sample of each alternative, mapped
+   at the standard settings. `jes_map_compare.py error --base <map> --sigma
+   <noise>_sigma.csv --nbase N --alt NAME=<map>:N ... --write-map <map with
+   error>`: per energy, the difference smoothed over the grid (Gaussian, 5 bins)
+   less the noise of both maps after the same smoothing, measured from the
+   smoothed subset maps (`noise` writes it; the alternative's scaled by its
+   smaller sample): sys² = <d_sm²> − <noise_sm²> over the grid; RMS (or max) over
+   the alternatives, total = stat ⊕ sys. The unsmoothed per-node version is
+   printed as a cross-check (`_sys_node`). `plot_jes_error.C` draws it. The written map
+   replaces the standard copy (`jet_calibration/JES_Lookups/`).
+   **Plots (ROOT):** `jet_scale/plot_jes_noise.C("<noise>.txt", <full sample, M
+   events>, "<out>", emin, emax)`: the standard map's statistical error vs energy
+   (band: spatial std. dev.) and vs sample size (subset maps measured at N/k, the
+   1/√N curve, the full map extrapolated). `jet_scale/plot_jes_error.C("<err>.txt",
+   "<out>")`: the systematic per alternative vs energy (band: spatial std. dev.)
+   and stat / sys / total. The per-node subset error is corrected for the few maps
+   per division (mean / c₄(k): 0.80, 0.92, 0.97 for 2, 4, 8 maps) and the band for
+   that estimate's own scatter.
+3. **Check of the projection (Sean):** `jes_map_compare.py test old.json new.json
+   --sigma ...`: two maps from independent samples at the same settings; ratio
+   of observed to predicted RMS difference (1 = all noise).
+4. **Data-side noise of the shifted A_N** (jets moving between x_F bins):
+   `jes_data_subsets.sh`, then `jes_noise_scaling.py groups`.
+
+Tests (2026-11-17/18, synthetic maps and tables with known noise): σ₁ flat in k;
+pure noise gives ratio 0.99, RMS pull 1.00; an injected energy-dependent offset
+(2.9%, 1.9%, 1.1%, 0.26% at 3, 10, 30, 100 GeV) is recovered with the smoothed
+estimate (2.9%, 1.9%, 1.1%, 0.19%; per node 2.8%, 1.8%, 1.0%, 0); zero error reproduces nominal exactly in `_vjesup` / `_vjesdn`; the
+groups fit is unbiased over 300 trials. δ is resolved only if it is not much
+below the noise.

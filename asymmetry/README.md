@@ -122,13 +122,30 @@ Step 6 runs on the job outputs, not in the job.
 ## Next-pass additions (2026-11-17)
 
 - **Collision cut (nominal):** east BBC >= 1 tile and TOF multiplicity > 2, as
-  the FMS (AnConfig.h `PassCollisionCut`); new SimpleTree / jet-tree branches
+  the FMS (AnConfig.h `PassCollisionCut`). A tile is fired as in the FMS
+  EM-jet code (BrightSTAR): 100 < TDC < 2400 and ADC > 50. TOF is the trigger
+  multiplicity (the FMS's barrel TOF tray multiplicity is 0 in st_fwd). New SimpleTree / jet-tree branches
   `bbc_e_ntiles`, `bbc_e_adcsum`, `epd_e_nhits`, `tof_mult`, `event_time`,
   `zdc_coinc_rate`, `bbc_coinc_rate` (StSimpleReaderMaker, RecoJets).
 - **Systematic-variation copies** of the default yields (photon classes and
   π⁰ candidates): `_vfid25`, `_vfid30`, `_vvz60`, `_vvtxmeas`, `_vbbcveto`
   (AnConfig.h `kVarSuffix`); `AnAsymmetry -v <var>`;
   `systematics/sys_variations.sh`. About +2 MB per yield file.
+- **JES uncertainty (one map with its error):** the standard map carries its
+  error vs energy (`jes_error_E` / `_stat` / `_sys` / `_total` arrays, written by
+  `jet_scale/jes_map_compare.py error`: statistical from subset maps, systematic
+  from smaller alternative-generator samples with the noise removed). an_job
+  passes the map to AnHistograms (`--jes-error=calib.json`), which fills
+  `_vjesup` / `_vjesdn` copies of the photon-class yields: each jet's E, pT and
+  x_F × (1 ± δ(E)), same events and trigger results; no π⁰ copies.
+  `AnAsymmetry -v jesup|jesdn`; `sys_variations.sh` compares them with
+  `sys_slices.py --shifted`; `combine_sys.py --comp-max jes=<up>,<dn>`.
+  submit_an_job.sh warns if the map has no error arrays.
+- **Event-cut plots:** AnHistograms fills each event-level cut variable N-1
+  (`qa_cut_vz`, `qa_cut_vz_source`, `qa_cut_bbc_e_ntiles`, `qa_cut_tof_mult`);
+  `sivers/plot_event_cuts.C` draws them with the cut (solid) and its
+  variations (dotted) and the share each removes (smoke_report.sh:
+  `event_cuts_*.png`).
 - **Trigger reference file:** each job's first processed MuDst also keeps the
   trigger reference events (`submit_an_job.sh -R`, default EM refs JP / DiJP /
   Had / HHT / HTOT / HcalTot and JP refs DY / J/psi / ELE2), which the EM/JP

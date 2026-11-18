@@ -22,12 +22,19 @@ chi^2 = sum (delta / sig_diff)^2 over the bins, its ndf and p-value.
 fill, time_in_fill.py): delta = A_1 - A_2, sig_diff = sqrt(sig_1^2 + sig_2^2),
 no slice; a consistency check (chi^2), sys still printed for reference.
 
+--shifted: the same events with different jet kinematics (the JES systematic,
+AnAsymmetry -v jesup / jesdn: jets move between x_F bins and across the cuts), neither
+nested nor independent: delta = A_first - A_second and sys = |delta| (the full
+shift, conservative: its statistical part from the migrating jets is not
+subtracted, the two samples being too correlated for either formula above);
+sig_diff, w, pull and chi^2 are not defined (written as -1 / nan).
+
 Bins are matched on (level, class, beam, x_F low edge, high edge), so both
 tables must use the same x_F binning (AnAsymmetry rebin / -x).
 
 Usage:
   sys_slices.py <loose.txt> <tight.txt> <out prefix> [--label NAME]
-                [--min-jets N] [--rows level:class[,level:class...]] [--disjoint]
+                [--min-jets N] [--rows level:class[,level:class...]] [--disjoint | --shifted]
 Writes <out prefix>.txt (per bin) and <out prefix>_summary.txt (per row);
 plot_sys_slices.C draws them.
 """
@@ -99,15 +106,19 @@ def main():
     ap.add_argument('--min-jets', type=int, default=100, help='skip bins with fewer tight-sample jets (default 100)')
     ap.add_argument('--rows', default='', help='level:class list to keep (default: all rows)')
     ap.add_argument('--disjoint', action='store_true', help='independent samples: sig_diff = sqrt(sig_1^2 + sig_2^2)')
+    ap.add_argument('--shifted', action='store_true', help='same events, shifted kinematics (JES): sys = |delta|')
     a = ap.parse_args()
+    if a.disjoint and a.shifted:
+        sys.exit('sys_slices: --disjoint and --shifted exclude each other')
+    kind_name = 'disjoint-sample check' if a.disjoint else 'shifted-kinematics systematic' if a.shifted else 'nested-cut systematic'
 
     loose, hl = read_table(a.loose)
     tight, ht = read_table(a.tight)
     keep = set(tuple(r.split(':')) for r in a.rows.split(',') if r)
 
     out = open(a.out + '.txt', 'w')
-    out.write('# %s%s: %s %s, %s %s\n' % ('disjoint-sample check' if a.disjoint else 'nested-cut systematic', ' (' + a.label + ')' if a.label else '',
-              'first' if a.disjoint else 'loose', a.loose, 'second' if a.disjoint else 'tight', a.tight))
+    out.write('# %s%s: %s %s, %s %s\n' % (kind_name, ' (' + a.label + ')' if a.label else '',
+              'first' if a.disjoint or a.shifted else 'loose', a.loose, 'second' if a.disjoint or a.shifted else 'tight', a.tight))
     for h in hl[:3]:
         out.write('# loose ' + h.lstrip('# ') + '\n')
     for h in ht[:3]:
@@ -118,7 +129,7 @@ def main():
               'w A_slice stat_slice delta sig_diff pull sys flag\n')
 
     summ = {}
-    nflag = 0
+    nflag = nbins = 0
     for key in sorted(tight):
         lvl, cls, beam, lo, hi = key
         if keep and (lvl, cls) not in keep:
@@ -129,7 +140,10 @@ def main():
         if T['jets'] < a.min_jets or not (T['err'] > 0 and L['err'] > 0):
             continue
         delta = L['an'] - T['an']
-        if a.disjoint:
+        if a.shifted:
+            d2, flag = float('nan'), 'shifted'
+            w = float('nan')
+        elif a.disjoint:
             d2, flag = T['err'] ** 2 + L['err'] ** 2, 'disjoint'
             w = float('nan')
         else:
@@ -142,17 +156,21 @@ def main():
             if flag == 'NOT_NESTED':
                 nflag += 1
             w = 1 - L['err'] ** 2 / T['err'] ** 2 if d2 > 0 else float('nan')
-        sd = math.sqrt(abs(d2))
+        sd = math.sqrt(abs(d2)) if d2 == d2 else float('nan')
         if w == w and w > 1e-6:
             a_s = (L['an'] - (1 - w) * T['an']) / w
             e_s = L['err'] / math.sqrt(w)
         else:
             a_s = e_s = float('nan')
         pull = delta / sd if sd > 0 else float('nan')
-        sysv = math.sqrt(delta ** 2 - sd ** 2) if sd > 0 and abs(delta) > sd else 0.0
+        if a.shifted:
+            sysv = abs(delta)
+        else:
+            sysv = math.sqrt(delta ** 2 - sd ** 2) if sd > 0 and abs(delta) > sd else 0.0
         out.write('%s %s %s %.3f %.3f %.4f %+.6f %.6f %+.6f %.6f %d %d %.4f %+.6f %.6f %+.6f %.6f %+.3f %.6f %s\n' % (
             lvl, cls, beam, lo, hi, T['xf'], L['an'], L['err'], T['an'], T['err'], L['jets'], T['jets'],
-            w if w == w else -1, a_s if a_s == a_s else -1, e_s if e_s == e_s else -1, delta, sd, pull, sysv, flag))
+            w if w == w else -1, a_s if a_s == a_s else -1, e_s if e_s == e_s else -1, delta, sd if sd == sd else -1, pull, sysv, flag))
+        nbins += 1
         s = summ.setdefault((lvl, cls, beam), dict(chi2=0.0, ndf=0, nsig=0, maxsys=0.0, maxrel=0.0))
         if sd > 0:
             s['chi2'] += pull ** 2
@@ -164,7 +182,8 @@ def main():
     out.close()
 
     with open(a.out + '_summary.txt', 'w') as f:
-        kind = 'disjoint-sample consistency check (sys columns for reference only)' if a.disjoint else 'nested-cut systematic'
+        kind = ('disjoint-sample consistency check (sys columns for reference only)' if a.disjoint else
+                'shifted-kinematics systematic (sys = |delta|; no chi^2)' if a.shifted else 'nested-cut systematic')
         f.write('# %s%s, per row: chi2 = sum (delta/sig_diff)^2 over x_F bins, p-value; '
                 'bins with |delta| > sig_diff (expected ~32%% of ndf by chance); largest sys, and largest sys / stat of the second table\n'
                 % (kind, ' (' + a.label + ')' if a.label else ''))
@@ -175,7 +194,7 @@ def main():
             f.write('%s %s %s %d %.2f %.2f %.3f %d %.6f %.2f\n' % (k + (s['ndf'], s['chi2'], s['chi2'] / s['ndf'] if s['ndf'] else float('nan'),
                                                                   p, s['nsig'], s['maxsys'], s['maxrel'])))
     print('sys_slices: %d rows, %d bins written to %s.txt; summary %s_summary.txt%s' % (
-        len(summ), sum(s['ndf'] for s in summ.values()), a.out, a.out,
+        len(summ), nbins, a.out, a.out,
         '; WARNING: %d bins not nested (loose error >= tight error)' % nflag if nflag else ''))
 
 

@@ -78,6 +78,11 @@
 // pair's own. These feed AnAsymmetry -I and sivers/pi0_bgsub.C.
 // Also written:
 //   h_cutflow                    jets (and events) at each cut
+//   qa_cut_vz, qa_cut_vz_source, qa_cut_bbc_e_ntiles, qa_cut_tof_mult
+//                                each event-level cut variable, N-1 (every
+//                                other event cut passed), with TNamed
+//                                event_cut_lines (the cut and variation
+//                                positions) for sivers/plot_event_cuts.C
 //   h_events_<level>             events per spin state, by the highest listed
 //                                EM level, or JP level if no EM is listed
 //   h_ptcorr_<level>, h_ptraw_<level>  corrected / uncorrected pT before the
@@ -121,7 +126,9 @@
 // h_xfsumpi_, default and _jponly) with the variation's cut, suffix at the end:
 // fiducial 25 / 30 cm (distance of the jet axis from the ECal edge at z_proj,
 // from reco_x / reco_y), |vz| < 60, measured vertex only, collision-cut
-// failures. AnAsymmetry -v reads them.
+// failures; and _vjesup / _vjesdn (photon classes only): every jet's E, pT and
+// x_F scaled by 1 +- delta(E), the JES map's error (--jes-error=<map json>),
+// same events and trigger results. AnAsymmetry -v reads them.
 // Trigger reference tallies (AnConfig.h "Trigger reference tallies"): with a
 // third argument, a list of the job's trigger reference files, every
 // reference event of those files fills h_trgref_* (no other cut), for
@@ -289,11 +296,75 @@ struct QaSet
     }
 };
 
+// The JES map's error vs energy (Sean 2026-11-18): the "jes_error_E" and
+// "jes_error_total" arrays of the map JSON (relative, statistical (+)
+// systematic; jet_scale/jes_map_compare.py error). delta(E) is linear in E
+// between the points and held at the end values outside them.
+struct JesError
+{
+    std::vector<double> e, d;
+    bool ok() const { return e.size() >= 2 && e.size() == d.size(); }
+    double at(double E) const
+    {
+        if (E <= e.front()) return d.front();
+        if (E >= e.back()) return d.back();
+        size_t i = 1;
+        while (e[i] < E) i++;
+        const double t = (E - e[i - 1]) / (e[i] - e[i - 1]);
+        return d[i - 1] + t * (d[i] - d[i - 1]);
+    }
+};
+static std::vector<double> JsonArray(const std::string &js, const std::string &key)
+{
+    std::vector<double> v;
+    size_t p = js.find("\"" + key + "\"");
+    if (p == std::string::npos) return v;
+    p = js.find('[', p);
+    const size_t q = js.find(']', p);
+    if (p == std::string::npos || q == std::string::npos) return v;
+    std::string body = js.substr(p + 1, q - p - 1);
+    for (size_t i = 0; i < body.size(); i++) if (body[i] == ',') body[i] = ' ';
+    std::istringstream in(body);
+    double x;
+    while (in >> x) v.push_back(x);
+    return v;
+}
+static JesError ReadJesError(const std::string &path)
+{
+    JesError je;
+    std::ifstream in(path.c_str());
+    if (!in) return je;
+    std::stringstream ss;
+    ss << in.rdbuf();
+    je.e = JsonArray(ss.str(), "jes_error_E");
+    je.d = JsonArray(ss.str(), "jes_error_total");
+    for (size_t i = 1; i < je.e.size(); i++) if (!(je.e[i] > je.e[i - 1])) { je.e.clear(); break; }
+    return je;
+}
+
 int main(int argc, char **argv)
 {
+    // --jes-error=<map json>: the map's error vs energy for the _vjesup /
+    // _vjesdn copies (an_job passes the JES map it applied)
+    std::string jes_err_path;
+    {
+        int n = 1;
+        for (int i = 1; i < argc; i++)
+        {
+            const std::string a = argv[i];
+            if (a.compare(0, 12, "--jes-error=") == 0) jes_err_path = a.substr(12);
+            else argv[n++] = argv[i];
+        }
+        argc = n;
+    }
+    const JesError jes_err = jes_err_path.empty() ? JesError() : ReadJesError(jes_err_path);
+    const bool have_jes_err = jes_err.ok();
+    if (!have_jes_err)
+        std::cerr << "Warning: no JES error (" << (jes_err_path.empty() ? "no --jes-error" : "no jes_error_E / jes_error_total arrays in " + jes_err_path)
+                  << "): _vjesup / _vjesdn copies empty" << std::endl;
     if (argc < 3)
     {
-        std::cerr << "Usage: " << argv[0] << " <jet file list> <output.root> [trigger reference file list]" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <jet file list> <output.root> [trigger reference file list] [--jes-error=<JES map json>]" << std::endl;
         return 1;
     }
     TChain t("jetTree");
@@ -550,6 +621,15 @@ int main(int argc, char **argv)
     TH1D *h_cut = new TH1D("h_cutflow", ";;jets", kNCuts + 1, 0, kNCuts + 1);
     for (int c = 0; c < kNCuts; c++) h_cut->GetXaxis()->SetBinLabel(c + 1, kCutName[c]);
     h_cut->GetXaxis()->SetBinLabel(kNCuts + 1, "events read");
+    // event-level cut variables (Sean 2026-11-17), N-1: events with no LED, a
+    // listed trigger and a spin state, passing every other event cut; drawn by
+    // sivers/plot_event_cuts.C with the cut (solid) and its variations (dotted)
+    // from the TNamed "event_cut_lines"
+    TH1D *q_cut_vz = new TH1D("qa_cut_vz", "measured vertex (EPD or BBC TAC), collision cut passed;event vertex z (cm);events", 120, -300, 300);
+    TH1D *q_cut_vzsrc = new TH1D("qa_cut_vz_source", "collision cut passed;vertex source;events", 4, 0, 4);
+    for (int i = 0; i < 4; i++) q_cut_vzsrc->GetXaxis()->SetBinLabel(i + 1, vz_name[i]);
+    TH1D *q_cut_bbc = new TH1D("qa_cut_bbc_e_ntiles", "vertex and TOF cuts passed;east BBC small tiles fired (100 < TDC < 2400, ADC > 50);events", 18, -1.5, 16.5);
+    TH1D *q_cut_tof = new TH1D("qa_cut_tof_mult", "vertex and BBC cuts passed;TOF trigger multiplicity;events", 101, -1.5, 99.5);
     // systematic-variation copies (AnConfig.h kVarSuffix): photon classes [var][JP EM tag][level]...,
     // pi0 candidates [var][0 default, 1 _jponly][level]...
     static TH1D *hv[kNVar][2][kNTrgLevels][kNPhotonClasses][kNSides][kNSpinStates];
@@ -578,7 +658,8 @@ int main(int argc, char **argv)
                         name = TString::Format("h_xfsum_%s_%s", kTrgLevelName[l], PhotonClassName(k)) + sfx;
                         hv_xfs[v][tg][l][k] = new TH1D(name, name + ";x_{F};sum of x_{F}", kNXfBins, kXfMin, kXfMax);
                     }
-                    // pi0: tg 0 default, 1 _jponly (JP levels)
+                    // pi0: tg 0 default, 1 _jponly (JP levels); none for the JES copy
+                    if (!VarHasPi0(v)) continue;
                     const TString psfx = TString(tg ? "_jponly" : "") + kVarSuffix[v];
                     for (int s = 0; s < kNSides; s++)
                         for (int p = 0; p < kNSpinStates; p++)
@@ -699,6 +780,19 @@ int main(int argc, char **argv)
         q_spin->Fill(spin_config);
         if (spin < 0) continue;
         h_cut->Fill(kSpin, nj);
+        {
+            // N-1 distributions of the event-level cut variables
+            const bool vz_ok = !vertex_cut || pass_vertex_cut(vz, vz_source);
+            const bool bbc_ok = bbc_e_ntiles < 0 || bbc_e_ntiles >= kBbcEastMinTiles;
+            const bool tof_ok = tof_mult < 0 || tof_mult >= kTofMultMin;
+            if (bbc_ok && tof_ok)
+            {
+                q_cut_vzsrc->Fill(vz_source >= 0 && vz_source < 4 ? vz_source : 0);
+                if ((vz_source == 1 || vz_source == 2) && vz > -9000) q_cut_vz->Fill(vz);
+            }
+            if (vz_ok && tof_ok && bbc_e_ntiles >= 0) q_cut_bbc->Fill(bbc_e_ntiles);
+            if (vz_ok && bbc_ok && tof_mult >= 0) q_cut_tof->Fill(tof_mult);
+        }
         if (vertex_cut && !pass_vertex_cut(vz, vz_source)) continue;
         h_cut->Fill(kVertex, nj);
         // collision cut: failing events fill only the _vbbcveto copies
@@ -708,6 +802,7 @@ int main(int argc, char **argv)
         var_evt[kVarVz60] = evt_nominal && (vz_source <= 0 || std::fabs(vz) < kVarVzCut);
         var_evt[kVarVtxMeas] = evt_nominal && (vz_source == 1 || vz_source == 2);
         var_evt[kVarBbcVeto] = !evt_nominal;
+        var_evt[kVarJesUp] = var_evt[kVarJesDn] = evt_nominal && have_jes_err;
         if (evt_nominal)
         {
             h_cut->Fill(kCollision, nj);
@@ -746,7 +841,12 @@ int main(int argc, char **argv)
         // per jet, every cut but the trigger passed (base); then, independently,
         // its EM result (level, slice; or veto failure) and JP result (level,
         // slice), -1 if none
+        // baseJ[0 / 1]: the same with the energy scaled by 1 + / - delta(E) (the
+        // _vjesup / _vjesdn copies; E, pT and x_F scale alike at fixed eta);
+        // a jet passing only there gets its trigger results too, nothing nominal
         std::vector<int> base(nj, 0), emL(nj, -1), emS(nj, -1), emVeto(nj, 0), jpL(nj, -1), jpS(nj, -1);
+        std::vector<int> baseJ[2] = {std::vector<int>(nj, 0), std::vector<int>(nj, 0)};
+        std::vector<double> fJ[2] = {std::vector<double>(nj, 1.0), std::vector<double>(nj, 1.0)};
         int event_em = -1, event_jp = -1;  // highest EM / JP level among jets at >= the default factor x threshold
         for (size_t j = 0; j < nj; j++)
         {
@@ -760,19 +860,30 @@ int main(int argc, char **argv)
                 qa[0].FillPair(mass[j], pang[j], E);
                 qa_lvl[0][level].FillPair(mass[j], pang[j], E);
             }
-            if (!(E > 0)) continue;
-            if (evt_nominal) h_cut->Fill(kCalibrated);
-            if (!((*xf_corr)[j] > 0)) continue;
-            if (evt_nominal) h_cut->Fill(kXfPositive);
-            const double pt = E / std::cosh((*eta)[j]);
-            if (pt <= kJetPtCorrMin) continue;
-            if (evt_nominal)
+            if (var_evt[kVarJesUp] && E > 0)
+            {
+                const double dl = jes_err.at(E);
+                for (int u = 0; u < 2; u++)
+                {
+                    fJ[u][j] = u == 0 ? 1 + dl : 1 - dl;
+                    baseJ[u][j] = fJ[u][j] > 0 && (*xf_corr)[j] > 0 && fJ[u][j] * E / std::cosh((*eta)[j]) > kJetPtCorrMin;
+                }
+            }
+            // the nominal chain (cutflow); a jet failing it goes on only for baseJ
+            bool b1 = E > 0;
+            if (b1 && evt_nominal) h_cut->Fill(kCalibrated);
+            b1 = b1 && (*xf_corr)[j] > 0;
+            if (b1 && evt_nominal) h_cut->Fill(kXfPositive);
+            const double pt = E > 0 ? E / std::cosh((*eta)[j]) : -1;
+            b1 = b1 && pt > kJetPtCorrMin;
+            if (b1 && evt_nominal)
             {
                 h_cut->Fill(kPtMin);
                 h_pt[level]->Fill(pt);
                 h_ptraw[level]->Fill((*pt_raw)[j]);
             }
-            base[j] = 1;
+            base[j] = b1;
+            if (!b1 && !baseJ[0][j] && !baseJ[1][j]) continue;
             // EM: the lowest listed EM level at >= 1.15 x threshold; its slice from the
             // combined EM factor f = min(E_4x4 / threshold, veto edge / r) (AnConfig.h
             // EmTrgFactor, 2026-11-17: threshold and veto move together as one cut)
@@ -782,13 +893,13 @@ int main(int argc, char **argv)
             if (emL[j] >= 0)
             {
                 const double ratio = em_et / TrgThresholdGeV(emL[j], cur_run);
-                if (evt_nominal) h_ratio[emL[j]]->Fill(ratio);
+                if (evt_nominal && b1) h_ratio[emL[j]]->Fill(ratio);
                 const double fem = EmTrgFactor(em_et, (*trg_hmax)[j], emL[j], cur_run);
                 if (fem >= kTrgSliceEdge[0] - 1e-9)
                 {
                     emS[j] = 0;
                     for (int sl = 1; sl < kNTrgSlices; sl++) if (fem >= kTrgSliceEdge[sl] - 1e-9) emS[j] = sl;
-                    if (fem >= kEmCutFactor - 1e-9 && emL[j] > event_em) event_em = emL[j];
+                    if (b1 && fem >= kEmCutFactor - 1e-9 && emL[j] > event_em) event_em = emL[j];
                 }
                 else emVeto[j] = 1;
             }
@@ -803,10 +914,10 @@ int main(int argc, char **argv)
             if (jpL[j] >= 0)
             {
                 const double ratio = jp_et / TrgThresholdGeV(jpL[j], cur_run);
-                if (evt_nominal) h_ratio[jpL[j]]->Fill(ratio);
+                if (evt_nominal && b1) h_ratio[jpL[j]]->Fill(ratio);
                 jpS[j] = 0;
                 for (int sl = 1; sl < kNTrgSlices; sl++) if (ratio >= kTrgSliceEdge[sl]) jpS[j] = sl;
-                if (ratio >= kJpCutFactor - 1e-9 && jpL[j] > event_jp) event_jp = jpL[j];
+                if (b1 && ratio >= kJpCutFactor - 1e-9 && jpL[j] > event_jp) event_jp = jpL[j];
             }
         }
         // companions go to the highest EM level of the event's default jets, else the highest JP level
@@ -814,7 +925,7 @@ int main(int argc, char **argv)
         int nsel = 0, ncomp = 0;
         for (size_t j = 0; j < nj; j++)
         {
-            if (!base[j]) continue;
+            if (!base[j] && !baseJ[0][j] && !baseJ[1][j]) continue;
             const double E = (*e_corr)[j];
             const double pt = E / std::cosh((*eta)[j]);
             // above sqrt(s)/2: kept apart (the FMS cut), in the _hiE histograms
@@ -829,6 +940,23 @@ int main(int argc, char **argv)
             // at the trigger-systematic factor (the "_f130" copies of the default-only histograms)
             const bool em_sys = em_on && kTrgSliceEdge[emS[j]] >= kTrgSysFactor - 1e-9;
             const bool jp_sys = jp_on && kTrgSliceEdge[jpS[j]] >= kTrgSysFactor - 1e-9;
+            // the JES copies: this jet with E, pT, x_F x (1 +- delta(E)) (default
+            // trigger factor, E <= sqrt(s)/2 with the scaled energy)
+            for (int u = 0; u < 2; u++)
+            {
+                if (!baseJ[u][j] || !(em_dflt || jp_dflt) || fJ[u][j] * E > 0.5 * sqrt_s) continue;
+                const int vj = u == 0 ? kVarJesUp : kVarJesDn;
+                const double xfj = fJ[u][j] * xf;
+                auto jfill = [&](int tg, int l)
+                {
+                    hv[vj][tg][l][cls][side][spin]->Fill(xfj);
+                    hv_xfs[vj][tg][l][cls]->Fill(xfj, xfj);
+                    hv_cos[vj][tg][l][cls]->Fill(xfj, acos_);
+                };
+                if (em_dflt) jfill(0, emL[j]);
+                if (jp_dflt) jfill(em_dflt ? 1 : 0, jpL[j]);
+            }
+            if (!base[j]) continue;  // the rest is nominal
             // FMS-style pi0 candidates of a default jet (E <= sqrt(s)/2): every photon pair, built once
             // for the nominal and the variation yields
             struct PiPair { double pxf, mgg, zem, pcos, ppt_raw; int pside; };
@@ -892,7 +1020,7 @@ int main(int argc, char **argv)
                 const double edge = std::min(std::min(ax_ - fr.x_inner, fr.x_outer - ax_), std::min(ay_ - fr.y_min, fr.y_max - ay_));
                 for (int v = 0; v < kNVar; v++)
                 {
-                    if (!var_evt[v]) continue;
+                    if (!var_evt[v] || IsJesVar(v)) continue;  // _vjesup / _vjesdn: filled above
                     if (v == kVarFid25 && edge < kVarFidCm[0]) continue;
                     if (v == kVarFid30 && edge < kVarFidCm[1]) continue;
                     auto vfill = [&](int tg, int l)
@@ -1058,7 +1186,18 @@ int main(int argc, char **argv)
         TNamed("pi0_scale", ps.str().c_str()).Write();
     }
     if (!ref_files.empty()) TNamed("trgref_files", TString::Format("%ld of %zu listed trigger reference files read", n_ref_files_read, ref_files.size()).Data()).Write();
-    TNamed("variations", "systematic-variation copies (AnConfig.h kVarSuffix): _vfid25 _vfid30 _vvz60 _vvtxmeas _vbbcveto; collision cut east BBC >= 1, TOF > 2").Write();
+    TNamed("variations", "systematic-variation copies (AnConfig.h kVarSuffix): _vfid25 _vfid30 _vvz60 _vvtxmeas _vbbcveto _vjesup _vjesdn (JES: photon classes only); collision cut east BBC >= 1, TOF > 2").Write();
+    if (have_jes_err)
+    {
+        std::ostringstream je;
+        je << jes_err_path << ": delta(E)";
+        for (size_t i = 0; i < jes_err.e.size(); i++) je << " " << jes_err.e[i] << "=" << jes_err.d[i];
+        TNamed("jes_error", je.str().c_str()).Write();
+    }
+    else TNamed("jes_error_missing", "no JES map error (--jes-error): _vjesup / _vjesdn copies empty").Write();
+    // cut positions for plot_event_cuts.C: "<hist>:<nominal edges>:<variation edges>[:<variation label>];..."
+    TNamed("event_cut_lines", TString::Format("qa_cut_vz:%g,%g:%g,%g:|v_{z}| < %g cm;qa_cut_bbc_e_ntiles:%g::;qa_cut_tof_mult:%g::",
+                                              -kVertexZCut, kVertexZCut, -kVarVzCut, kVarVzCut, kVarVzCut, kBbcEastMinTiles - 0.5, kTofMultMin - 0.5).Data()).Write();
     if (!have_plead) TNamed("plead_missing", "jet files without reco_pi0_lead_prob: h_xFP_* empty").Write();
     if (!have_gup) TNamed("collins_missing", "jet files without reco_pi0_lead_gup: h_xFg_* empty").Write();
     if (!have_z) TNamed("pz_missing", "jet files without reco_pi0_lead_z1: h_xFPz_* empty").Write();

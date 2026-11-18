@@ -12,6 +12,10 @@
 #     fid25, fid30    jet axis >= 25 / 30 cm inside the ECal edge (nominal 20)
 #     vz60            |vz| < 60 cm (nominal 100)
 #     vtxmeas         measured vertex only (the no-vertex systematic)
+#   shifted (same events, other jet kinematics; sys = |A_N shift|):
+#     jesup, jesdn    jet E, pT, x_F x (1 +- delta(E)), the JES map's error
+#                     (photon classes only: the pi0 candidates do not use the
+#                     JES); combine_sys.py --comp-max jes=<up>,<dn>
 #   disjoint (a check, not a box):
 #     bbcveto         the events the collision cut removes vs the nominal
 #                     sample; also their share of the jets per row
@@ -20,14 +24,14 @@
 # and pi0). Outputs: <report>/sys_variations/sys_<var>_<sample>.txt,
 # _summary.txt, .png; combine_sys.py collects them. Needs yield files made
 # from 2026-11-17 on (AnAsymmetry stops otherwise).
-# Usage: sys_variations.sh <report dir> [AnAsymmetry input, default "-M masked.root"] [variations, default "fid25 fid30 vz60 vtxmeas bbcveto"]
+# Usage: sys_variations.sh <report dir> [AnAsymmetry input, default "-M masked.root"] [variations, default "fid25 fid30 vz60 vtxmeas bbcveto jesup jesdn"]
 set -e
 REP="$(cd "$1" && pwd)"
 ANIN="${2:--M masked.root}"
-VARS="${3:-fid25 fid30 vz60 vtxmeas bbcveto}"
+VARS="${3:-fid25 fid30 vz60 vtxmeas bbcveto jesup jesdn}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="${REP}/sys_variations"
-[ -x "${REP}/build/AnAsymmetry" ] || { sed -n '2,25p' "$0"; echo "no ${REP}/build/AnAsymmetry"; exit 1; }
+[ -x "${REP}/build/AnAsymmetry" ] || { sed -n '2,26p' "$0"; echo "no ${REP}/build/AnAsymmetry"; exit 1; }
 mkdir -p "$OUT"
 cp "${HERE}/plot_sys_slices.C" "$OUT/"
 container() {
@@ -40,6 +44,7 @@ run_sel() {  # tag, AnAsymmetry variation option ("" = nominal)
     local tag="$1" vopt="$2"
     container "./build/AnAsymmetry -J ${vopt} ${ANIN} sys_variations/an_${tag}.root" > "${OUT}/an_${tag}.log" 2>&1 \
         || { tail -3 "${OUT}/an_${tag}.log"; exit 1; }
+    [[ "$tag" == jes* ]] && { echo "sys_variations: ${tag} done (photon classes only)"; return; }
     for cls in iso noniso; do
         for w in sig sb; do
             container "./build/AnAsymmetry -J -I ${cls}:${w} ${vopt} ${ANIN} sys_variations/an_${cls}_${tag}_${w}.root" > "${OUT}/an_${cls}_${tag}_${w}.log" 2>&1 \
@@ -58,10 +63,12 @@ cmp() {  # name, loose table, tight table, label, extra sys_slices options, plot
     container "cd sys_variations; root -b -q -l 'plot_sys_slices.C+(\"sys_$1.txt\",\"sys_$1.png\",\"$6\",\"$7\",\"blue\",\"$4\")'" > "${OUT}/plot_$1.log" 2>&1 || true
 }
 declare -A LABEL=([fid25]="fiducial 20 vs 25 cm" [fid30]="fiducial 20 vs 30 cm" [vz60]="|v_{z}| < 100 vs < 60 cm"
-                  [vtxmeas]="all vertices vs measured only" [bbcveto]="collision cut: kept vs removed events")
+                  [vtxmeas]="all vertices vs measured only" [bbcveto]="collision cut: kept vs removed events"
+                  [jesup]="JES scale +delta(E)" [jesdn]="JES scale -delta(E)")
 for v in $VARS; do
-    opt=""; [ "$v" = bbcveto ] && opt="--disjoint"
+    opt=""; [ "$v" = bbcveto ] && opt="--disjoint"; [[ "$v" == jes* ]] && opt="--shifted"
     cmp "${v}_jets" "${OUT}/an_nominal.txt" "${OUT}/an_${v}.txt" "${LABEL[$v]}" "$opt" all all
+    [[ "$v" == jes* ]] && continue
     for cls in iso noniso; do
         cmp "${v}_pi0${cls}" "${OUT}/pi0_${cls}_nominal.txt" "${OUT}/pi0_${cls}_${v}.txt" "${LABEL[$v]} (${cls} #pi^{0})" "$opt" all pi0
     done

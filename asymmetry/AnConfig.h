@@ -411,9 +411,21 @@ inline bool PassCollisionCut(int bbc_e_ntiles, int tof_mult)
 //                      events at the nominal IP: the no-vertex systematic)
 //   _vbbcveto          the events the collision cut REMOVES (disjoint; the
 //                      check: their share and A_N)
-static const int kNVar = 5;
-enum { kVarFid25, kVarFid30, kVarVz60, kVarVtxMeas, kVarBbcVeto };
-static const char *const kVarSuffix[kNVar] = {"_vfid25", "_vfid30", "_vvz60", "_vvtxmeas", "_vbbcveto"};
+//   _vjesup / _vjesdn  the JES uncertainty (Sean 2026-11-18): the same events
+//                      and trigger results, each jet's corrected E, pT and x_F
+//                      scaled by 1 +- delta(E), delta = the map's total error at
+//                      the jet's corrected energy (statistical (+) systematic,
+//                      the "jes_error_*" arrays of the map JSON, written by
+//                      jet_scale/jes_map_compare.py error; AnHistograms
+//                      --jes-error=<map json>). Jets migrate between x_F bins
+//                      and across the pT / E cuts, so it is not nested:
+//                      sys_slices.py --shifted. Photon classes only: the pi0
+//                      candidates do not use the JES (no pi0 copies).
+static const int kNVar = 7;
+enum { kVarFid25, kVarFid30, kVarVz60, kVarVtxMeas, kVarBbcVeto, kVarJesUp, kVarJesDn };
+static const char *const kVarSuffix[kNVar] = {"_vfid25", "_vfid30", "_vvz60", "_vvtxmeas", "_vbbcveto", "_vjesup", "_vjesdn"};
+inline bool IsJesVar(int v) { return v == kVarJesUp || v == kVarJesDn; }
+inline bool VarHasPi0(int v) { return !IsJesVar(v); }
 static const char *const kVarEmTag[2] = {"_noemd", "_emd"};  // JP copies: EM below / at the default factor
 static const double kVarFidCm[2] = {25.0, 30.0};
 static const double kVarVzCut = 60.0;
