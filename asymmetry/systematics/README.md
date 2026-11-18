@@ -5,6 +5,11 @@ is in FCSJetAnalysis/ANALYSIS_ROADMAP.md ("Systematics plan").
 
 ## Method
 
+**Every systematic is symmetric per bin (Sean 2026-11-18).** A component with
+two sides (up / down, or several variations) takes the larger |ΔA_N| of its
+sides and applies it as ±; components then add in quadrature. Nothing in the
+chain carries an asymmetric box (`combine_sys.py`, `plot_an_final.C`).
+
 **Nested cut variations.** A loose cut contains a tight one, for example trigger
 value ≥ 1.15 vs ≥ 1.3 × threshold. Vary one cut at a time and keep the others at
 nominal. Per x_F bin:
@@ -42,7 +47,7 @@ subset): `sys_slices.py an_f115.txt an_f130.txt ...`.
 | `misid_response.cpp` | Photon-class response from simulation (JES production `jet_output_*`, cross-section weighted): reco class × true class per truth-x_F bin, true photons with E >= 1 GeV (`--truth-emin`), offline trigger-value cut (the production's emulated flags are 0); `<out>.txt` per class and `<out>_merged.txt` for np12 / np3plus. |
 | `misid_sys.py` | Misidentification systematic for the merged classes: dA = f(other \| reco) × (A_other − A), Barlow-reduced by the difference's statistical error; `combine_sys.py --comp-simple misid=<out>.txt`. |
 | `jes_data_subsets.sh` | The pass's yield files in k random groups (default 2, 4, 8, plus the full sample): per group the union A_N nominal, `-v jesup` and `-v jesdn` (`AnAsymmetry -r`) → `groups_jesup.txt`, `groups_jesdn.txt`. |
-| `jes_noise_scaling.py` | `groups`: Δ_g² = δ² + k s² per bin (per-k means, variance-weighted): the JES effect δ and the full-sample noise s of the `_vjesup` / `_vjesdn` shift, also pooled per row in stat units. `pairs`: subset-map pairs, <d²>/(2k) per k (flat if the map noise scales as 1/√n; `--model k+sqrtk` for the moving-jet part) and σ₁ per bin. |
+| `jes_noise_scaling.py` | `groups`: Δ_g² = δ² + k s² per bin (per-k means, variance-weighted): the JES effect δ and the full-sample noise s of the `_vjesup` / `_vjesdn` shift, also pooled per row in stat units. Optional check only: the JES systematic is the raw \|Δ\| (Sean 2026-11-18: this noise is taken as negligible). |
 | `pol_uncertainty.py`, `dump_run_jets.C` | Fill-to-fill and profile polarization uncertainty (a note; not used: only the overall scale is quoted, as FMS). |
 
 ## Merged flow for subsets
@@ -70,6 +75,7 @@ Example (photon classes):
 combine_sys.py --nominal sys_variations/an_nominal.txt --comp trigger=sys_trig.txt \
     --comp-max fiducial=sys_variations/sys_fid25_jets.txt,sys_variations/sys_fid30_jets.txt \
     --comp vertex=sys_variations/sys_vz60_jets.txt --comp novertex=sys_variations/sys_vtxmeas_jets.txt \
+    --comp-max jes=sys_variations/sys_jesup_jets.txt,sys_variations/sys_jesdn_jets.txt \
     --out final_jets
 root -b -q 'plot_an_final.C+("final_jets.txt","final_all_all","all","all","EM + JP union")'
 ```
@@ -77,6 +83,18 @@ root -b -q 'plot_an_final.C+("final_jets.txt","final_all_all","all","all","EM + 
 Photon-class misidentification: `misid_response` on the JES simulation, then `misid_sys.py` on the nominal table (merged classes, Sean 2026-11-17).
 
 ## JES uncertainty: the standard map and its error (Sean 2026-11-18)
+
+**The A_N systematic.** The calibration is repeated with the map shifted by its
+own error up and down, and the bin-by-bin A_N difference is the systematic,
+symmetric: sys = max(|A_up − A|, |A_dn − A|). In the pass this is one job:
+`AnHistograms --jes-error=calib.json` fills `_vjesup` / `_vjesdn`, every jet's E,
+pT and x_F × (1 ± δ), δ at the map's own lookup energy (UE-subtracted reco E),
+same events and raw trigger values. That equals rerunning
+`jet_calibration/ApplyCorrections_em_only <list> <map> --jes-shift=+1` (or `-1`,
+F → F / (1 ± δ)) and a nominal AnHistograms: checked on one 23087036 file,
+540 histograms per side, bin for bin identical (2026-11-18). Then
+`sys_variations.sh` (`sys_jesup_jets.txt`, `sys_jesdn_jets.txt`, `--shifted`:
+|Δ|) and `combine_sys.py --comp-max jes=<up>,<dn>`. Photon classes only.
 
 One standard map; its error vs energy is part of the map (`jes_error_*` arrays)
 and AnHistograms applies it as a coherent scale ±δ(E) (`_vjesup` / `_vjesdn`).
@@ -107,8 +125,10 @@ and AnHistograms applies it as a coherent scale ±δ(E) (`_vjesup` / `_vjesdn`).
 3. **Check of the projection (Sean):** `jes_map_compare.py test old.json new.json
    --sigma ...`: two maps from independent samples at the same settings; ratio
    of observed to predicted RMS difference (1 = all noise).
-4. **Data-side noise of the shifted A_N** (jets moving between x_F bins):
-   `jes_data_subsets.sh`, then `jes_noise_scaling.py groups`.
+4. **Data-side noise of the shifted A_N** (jets moving between x_F bins): taken
+   as negligible (Sean 2026-11-18); the A_N systematic is the raw |Δ|, not
+   noise-subtracted. `jes_data_subsets.sh` + `jes_noise_scaling.py groups`
+   remain as an optional check.
 
 Tests (2026-11-17/18, synthetic maps and tables with known noise): σ₁ flat in k;
 pure noise gives ratio 0.99, RMS pull 1.00; an injected energy-dependent offset

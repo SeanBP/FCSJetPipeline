@@ -20,6 +20,13 @@
 // ("No UE estimate") or outside the map ("Invalid entries": NaN beyond the
 // buffered fiducial region). A file without reco_ue_E is an error unless
 // "noue" is given (map built without subtraction).
+// --jes-shift=+1 / -1 (Sean 2026-11-18, the JES systematic): the calibration
+// repeated with the map shifted by its own error, F -> F / (1 +- delta(E)),
+// i.e. reco_E_corr x (1 +- delta); delta(E) from the map's "jes_error_E" /
+// "jes_error_total" arrays (jet_scale/jes_map_compare.py error --write-map),
+// at the lookup energy E_eval, linear in E between the points, held outside.
+// The A_N job does the same in one pass (AnHistograms --jes-error, the
+// _vjesup / _vjesdn copies); this is the explicit version and its check.
 
 #include <TFile.h>
 #include <TTree.h>
@@ -119,6 +126,32 @@ bool invalid(double v)
 }
 
 // Minimal JSON parsing (fixed structure)
+// a flat JSON number array "key": [..] (the JES error arrays)
+static std::vector<double> json_array(const std::string &js, const std::string &key)
+{
+    std::vector<double> v;
+    size_t p = js.find("\"" + key + "\"");
+    if (p == std::string::npos) return v;
+    p = js.find('[', p);
+    const size_t q = js.find(']', p);
+    if (p == std::string::npos || q == std::string::npos) return v;
+    std::string body = js.substr(p + 1, q - p - 1);
+    for (size_t i = 0; i < body.size(); i++) if (body[i] == ',') body[i] = ' ';
+    std::istringstream in(body);
+    double x;
+    while (in >> x) v.push_back(x);
+    return v;
+}
+
+static double interp_held(const std::vector<double> &e, const std::vector<double> &d, double E)
+{
+    if (E <= e.front()) return d.front();
+    if (E >= e.back()) return d.back();
+    size_t i = 1;
+    while (e[i] < E) i++;
+    return d[i - 1] + (E - e[i - 1]) / (e[i] - e[i - 1]) * (d[i] - d[i - 1]);
+}
+
 void read_array_1d(std::ifstream& in, std::vector<double>& out)
 {
     out.clear();
@@ -177,7 +210,7 @@ int main(int argc, char** argv)
 {
     if (argc < 3)
     {
-        std::cerr << "Usage: " << argv[0] << " file_list.list calibration.json [noue]" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " file_list.list calibration.json [noue] [--jes-shift=+1|-1]" << std::endl;
         return 1;
     }
 
@@ -187,7 +220,16 @@ int main(int argc, char** argv)
 
     std::string list_fname = argv[1];
     std::string calib_json = argv[2];
-    const bool subtract_ue = !(argc > 3 && std::string(argv[3]) == "noue");
+    bool subtract_ue = true;
+    int jes_shift = 0;
+    for (int a = 3; a < argc; a++)
+    {
+        const std::string o = argv[a];
+        if (o == "noue") subtract_ue = false;
+        else if (o == "--jes-shift=+1" || o == "--jes-shift=1") jes_shift = 1;
+        else if (o == "--jes-shift=-1") jes_shift = -1;
+        else { std::cerr << "ERROR: unknown option " << o << std::endl; return 1; }
+    }
     long no_ue_counter = 0;
     std::string tree_name = "jetTree";
 
@@ -208,6 +250,19 @@ int main(int argc, char** argv)
     std::stringstream buffer;
     buffer << in.rdbuf();
     std::string json = buffer.str();
+
+    std::vector<double> jes_err_e, jes_err_d;
+    if (jes_shift)
+    {
+        jes_err_e = json_array(json, "jes_error_E");
+        jes_err_d = json_array(json, "jes_error_total");
+        if (jes_err_e.size() < 2 || jes_err_e.size() != jes_err_d.size())
+        {
+            std::cerr << "ERROR: --jes-shift needs the jes_error_E / jes_error_total arrays in " << calib_json << std::endl;
+            return 1;
+        }
+        std::cout << "JES shift " << (jes_shift > 0 ? "+" : "-") << "delta(E): reco_E_corr x (1 " << (jes_shift > 0 ? "+" : "-") << " delta)" << std::endl;
+    }
 
     // Only the log-cubic form is evaluated here; maps of earlier forms
     // (log-normal peak, skew Gaussian) are refused
@@ -474,6 +529,14 @@ int main(int argc, char** argv)
             tree->SetBranchAddress("reco_ue_E",&reco_ue_E);
         }
 
+        // the file is updated in place: a second pass would add duplicate
+        // branches that every reader silently ignores (the first copy wins)
+        if (tree->GetBranch("reco_E_corr") || tree->GetBranch("reco_x_F_corr"))
+        {
+            std::cerr << "ERROR: " << root_files[fidx] << " already has reco_E_corr / reco_x_F_corr; calibrate a fresh copy" << std::endl;
+            return 1;
+        }
+
         std::vector<float> reco_E_corr;
         std::vector<float>* reco_E_corr_ptr = &reco_E_corr;
         TBranch* b_corr =
@@ -558,6 +621,7 @@ int main(int argc, char** argv)
                 }
 
                 double E_corr_val = E/F_grid;
+                if (jes_shift) E_corr_val *= 1 + jes_shift * interp_held(jes_err_e, jes_err_d, E_eval);
                 corrected++;
                 reco_E_corr.push_back(E_corr_val);
                 reco_x_F_corr.push_back(

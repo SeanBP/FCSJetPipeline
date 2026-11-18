@@ -14,8 +14,9 @@
 #     vtxmeas         measured vertex only (the no-vertex systematic)
 #   shifted (same events, other jet kinematics; sys = |A_N shift|):
 #     jesup, jesdn    jet E, pT, x_F x (1 +- delta(E)), the JES map's error
-#                     (photon classes only: the pi0 candidates do not use the
-#                     JES); combine_sys.py --comp-max jes=<up>,<dn>
+#                     (= the calibration rerun with the map shifted; photon
+#                     classes only: the pi0 candidates do not use the JES);
+#                     symmetric, the larger side: combine_sys.py --comp-max jes=<up>,<dn>
 #   disjoint (a check, not a box):
 #     bbcveto         the events the collision cut removes vs the nominal
 #                     sample; also their share of the jets per row

@@ -19,7 +19,9 @@ Inputs
                     (misid_sys.py)
   --comp-max NAME=FILE1,FILE2,...
                     one component as the per-bin maximum of several variations
-                    (e.g. fiducial=sys_fid25_jets.txt,sys_fid30_jets.txt)
+                    (e.g. fiducial=sys_fid25_jets.txt,sys_fid30_jets.txt; the
+                    JES up / down: jes=sys_jesup_jets.txt,sys_jesdn_jets.txt)
+Every component is symmetric (Sean 2026-11-18): the larger side, applied as +-.
   --sysf NAME       (pi0 tables) take the nominal table's own sys_f column (the
                     signal-fraction fit, pi0_bgsub.C) as component NAME
   --rel NAME=X      a flat relative component, X x |A_N| (e.g. a scale)

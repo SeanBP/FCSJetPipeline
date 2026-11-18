@@ -127,8 +127,11 @@
 // fiducial 25 / 30 cm (distance of the jet axis from the ECal edge at z_proj,
 // from reco_x / reco_y), |vz| < 60, measured vertex only, collision-cut
 // failures; and _vjesup / _vjesdn (photon classes only): every jet's E, pT and
-// x_F scaled by 1 +- delta(E), the JES map's error (--jes-error=<map json>),
-// same events and trigger results. AnAsymmetry -v reads them.
+// x_F scaled by 1 +- delta(E), the JES map's error (--jes-error=<map json>) at
+// the map's lookup energy: the calibration repeated with the map shifted to
+// F / (1 +- delta) (identical to ApplyCorrections_em_only --jes-shift=+1 / -1
+// and a nominal pass), same events and raw trigger values. AnAsymmetry -v reads
+// them; the systematic is max(|A_up - A|, |A_dn - A|) per bin, symmetric.
 // Trigger reference tallies (AnConfig.h "Trigger reference tallies"): with a
 // third argument, a list of the job's trigger reference files, every
 // reference event of those files fills h_trgref_* (no other cut), for
@@ -862,7 +865,11 @@ int main(int argc, char **argv)
             }
             if (var_evt[kVarJesUp] && E > 0)
             {
-                const double dl = jes_err.at(E);
+                // delta at the map's lookup energy (UE-subtracted reco E, held as in
+                // ApplyCorrections_em_only), so the copy equals the calibration rerun
+                // with the shifted map (ApplyCorrections_em_only --jes-shift=+1 / -1)
+                const double e_map = std::min(std::max((double)(*e_raw)[j] - std::max((double)(*e_ue)[j], 0.0), kJesEvalMinGeV), 0.5 * sqrt_s);
+                const double dl = jes_err.at(e_map);
                 for (int u = 0; u < 2; u++)
                 {
                     fJ[u][j] = u == 0 ? 1 + dl : 1 - dl;
