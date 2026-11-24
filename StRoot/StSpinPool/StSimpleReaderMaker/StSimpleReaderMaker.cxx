@@ -1,6 +1,7 @@
 // Class StSimpleReaderMaker
 
 #include "StSimpleReaderMaker.h"
+#include "FcsChannelMask.h"
 
 #include <iostream>
 
@@ -114,6 +115,14 @@ StSimpleReaderMaker::StSimpleReaderMaker( StMuDstMaker* maker ) : StMaker("StSim
 
 StSimpleReaderMaker::~StSimpleReaderMaker() 
 { // Destroy and/or zero out all public/private data members here.
+}
+
+int StSimpleReaderMaker::SetChannelMask(const char* file)
+{
+  if ( !mChannelMask ) mChannelMask = new FcsChannelMask();
+  const int n = mChannelMask->Load(file);
+  LOG_INFO << "StSimpleReaderMaker: channel mask " << file << ": " << n << " rows" << endm;
+  return n;
 }
 
 Int_t StSimpleReaderMaker::Init( )
@@ -521,6 +530,9 @@ Int_t StSimpleReaderMaker::Make( )
 
         if( det < kFcsNDet ){ // Some entries in MuDST file have detid > 5
 
+		// hot / dead channel mask (data): masked hits are left out entirely
+		if ( mChannelMask && det <= kFcsHcalSouthDetId && mChannelMask->Masked(event_run, det, hit->id()) ) { mNMaskedHits++; continue; }
+
     		Cal_detid[Cal_nhits] = det;
    		Cal_hitid[Cal_nhits] = hit->id();
     		Cal_adcsum[Cal_nhits] = hit->adcSum();
@@ -879,7 +891,9 @@ bool StSimpleReaderMaker::SetVertexSmear(const char* file, unsigned int seed)
 }
 
 Int_t StSimpleReaderMaker::Finish( )
-{ // Do once at the end the analysis
+{
+  // Do once at the end the analysis
+  if ( mChannelMask ) LOG_INFO << "StSimpleReaderMaker: " << mNMaskedHits << " masked FCS hits left out" << endm;
 
   // trigger 2x2 centres, one entry
   if ( !mTrgGeomDone ) buildTrgGeom();

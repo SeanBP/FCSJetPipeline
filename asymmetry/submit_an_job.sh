@@ -37,6 +37,12 @@
 #       job (hadd in the job's scratch; the tree has event_run, event_id per
 #       event): 1 = all, 0 = none (default). About 0.75 MB per MuDst with the
 #       JP events and trigger values
+#   -Q  1 = channel QA: also write <outdir>/occ/occ_<file>.root per MuDst, the
+#       per-channel hit counts and energies (channel_qa/channel_occupancy.cpp)
+#       for the hot / dead channel masks; 0 = off (default)
+#   -M  hot / dead channel mask (channel_qa/channel_mask.cpp's channel_mask.txt,
+#       or a filtered copy): masked hits are dropped before reclustering, from
+#       the hit list and from the trigger sums, per run period. Default none
 #   -S  shuffle the job order with this seed (condor starts jobs roughly in
 #       order, so the jobs finished at any time are then a random spread over
 #       the runs, not the earliest runs; 0 = run order, default)
@@ -63,13 +69,15 @@ REF_TRIGGERS="fcsDiJP,fcsDiJPAsy,fcsHad0,fcsHad1,fcsHad2,fcsHHT_N,fcsHHT_S,fcsHT
 LABEL="an"
 KEEPLOGS=0
 KEEP_JETS=0
+CHANNEL_QA=0
+CHANNEL_MASK=""
 DRYRUN=0
 SHUFFLE_SEED=0
 PI0_TABLE=""
 NODE_FAIL_LIMIT=3
 NO_NODEMAP=0
 
-while getopts "f:o:n:c:t:l:k:J:S:s:L:R:KNh" opt; do
+while getopts "f:o:n:c:t:l:k:J:Q:M:S:s:L:R:KNh" opt; do
   case $opt in
     f) LISTFILE="$OPTARG" ;;
     o) OUTDIR="$OPTARG" ;;
@@ -79,13 +87,15 @@ while getopts "f:o:n:c:t:l:k:J:S:s:L:R:KNh" opt; do
     l) LABEL="$OPTARG" ;;
     k) KEEPLOGS="$OPTARG" ;;
     J) KEEP_JETS="$OPTARG" ;;
+    Q) CHANNEL_QA="$OPTARG" ;;
+    M) CHANNEL_MASK="$OPTARG" ;;
     S) SHUFFLE_SEED="$OPTARG" ;;
     s) PI0_TABLE="$OPTARG" ;;
     L) NODE_FAIL_LIMIT="$OPTARG" ;;
     R) REF_TRIGGERS="$OPTARG" ;;
     K) NO_NODEMAP=1 ;;
     N) DRYRUN=1 ;;
-    h|*) sed -n '2,48p' "$0"; exit 0 ;;
+    h|*) sed -n '2,54p' "$0"; exit 0 ;;
   esac
 done
 
@@ -117,6 +127,14 @@ done
 
 mkdir -p "${OUTDIR}/hists" "${OUTDIR}/timing"
 [ "$KEEP_JETS" != "0" ] && mkdir -p "${OUTDIR}/jets"
+[ "$CHANNEL_QA" = "0" ] || [ "$CHANNEL_QA" = "1" ] || { echo "Error: -Q must be 0 or 1"; exit 1; }
+[ "$CHANNEL_QA" = "1" ] && mkdir -p "${OUTDIR}/occ"
+MASK_NAME=""
+if [ -n "$CHANNEL_MASK" ]; then
+    [ -f "$CHANNEL_MASK" ] || { echo "Error: channel mask $CHANNEL_MASK not found"; exit 1; }
+    MASK_NAME="${LABEL}_$(basename "$CHANNEL_MASK")"
+    cp -p "$CHANNEL_MASK" "${SCRIPT_DIR}/channel_qa/masks/${MASK_NAME}"
+fi
 CALIB_NAME=$(basename "$CALIB")
 cp -p "$CALIB" "${SCRIPT_DIR}/jes/${CALIB_NAME}"
 # pi0 energy scale table (-s): copied into asymmetry/pi0_scale/ for the SandBox
@@ -186,6 +204,8 @@ sed -e "s#{{LISTFILE}}#${SORTEDLIST}#g" \
     -e "s/{{REF_TRIGGERS}}/${REF_TRIGGERS}/g" \
     -e "s/{{CALIB_NAME}}/${CALIB_NAME}/g" \
     -e "s/{{KEEP_JETS}}/${KEEP_JETS}/g" \
+    -e "s/{{CHANNEL_QA}}/${CHANNEL_QA}/g" \
+    -e "s/{{CHANNEL_MASK}}/${MASK_NAME}/g" \
     -e "s#{{OUTDIR}}#${OUTDIR}#g" \
     -e "s#{{STDOUT_URL}}#${STDOUT_URL}#g" \
     -e "s#{{STDERR_URL}}#${STDERR_URL}#g" \
@@ -211,6 +231,8 @@ trigger_filter=${TRIGGER_FILTER}
 ref_triggers=${REF_TRIGGERS}
 keep_logs=${KEEPLOGS}
 keep_jets_every=${KEEP_JETS}
+channel_qa=${CHANNEL_QA}
+channel_mask=${CHANNEL_MASK:-none}
 shuffle_seed=${SHUFFLE_SEED}
 pi0_scale_table=asymmetry/${PI0SCALE}${PI0_TABLE:+ (from ${PI0_TABLE})}
 node_fail_limit=${NODE_FAIL_LIMIT}

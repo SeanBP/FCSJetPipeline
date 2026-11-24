@@ -30,6 +30,11 @@
                           MuDst of each job (ref_files.list; AnHistograms h_trgref_*)
       {{CALIB_NAME}}      EM-only point-jet JES lookup JSON, a file in
                           asymmetry/jes/ (submit_an_job.sh -c copies it there)
+      {{CHANNEL_QA}}      1 = also write occ_<file>.root per MuDst: per-channel hit
+                          counts and energies (channel_qa/channel_occupancy.cpp)
+                          for the hot / dead channel masks; 0 = off
+      {{CHANNEL_MASK}}    hot / dead channel mask file in asymmetry/channel_qa/masks/
+                          (copied as channel_mask.txt for runMudst.C); empty = none
       {{KEEP_JETS}}       keep the calibrated jet files of every N-th job,
                           merged per job (to <outdir>/jets/), 0 = none
       {{OUTDIR}}          absolute output directory
@@ -54,6 +59,9 @@
         cp underlying_event/* .
         cp jet_calibration/ApplyCorrections_em_only.cpp .
         cp asymmetry/AnConfig.h asymmetry/AnHistograms.cpp .
+        cp asymmetry/channel_qa/channel_occupancy.cpp .
+        # hot / dead channel mask (submit -M): runMudst.C reads channel_mask.txt
+        if ( "{{CHANNEL_MASK}}" != "" ) cp asymmetry/channel_qa/masks/{{CHANNEL_MASK}} channel_mask.txt
         cp asymmetry/{{PI0SCALE}} pi0_scale.txt
         cp asymmetry/collins/CollinsConfig.h asymmetry/collins/CollinsHistograms.h .
         cp asymmetry/jes/{{CALIB_NAME}} calib.json
@@ -83,7 +91,7 @@
         # the STAR (stardev) environment root4star needs: a module purge here
         # cannot be undone (stardev fails after it). The programs then run
         # with the modules' library path (MOD_LD).
-        /usr/bin/time -f "%e %U %S %M" -o stage.time tcsh -c 'module purge; module load fastjet-3.3.4; module load root-5.34.38; printenv LD_LIBRARY_PATH &gt;! modules_ld.txt; g++ -m64 -O2 RecoJets.cpp VectorDict.cxx -o RecoJets `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11 &amp;&amp; g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent `root-config --cflags --libs` -std=c++11 &amp;&amp; g++ -m64 -O2 ApplyCorrections_em_only.cpp VectorDict.cxx -o ApplyCorrections_em_only `root-config --cflags --libs` -std=c++11 &amp;&amp; g++ -m64 -O2 AnHistograms.cpp VectorDict.cxx -o AnHistograms `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11'
+        /usr/bin/time -f "%e %U %S %M" -o stage.time tcsh -c 'module purge; module load fastjet-3.3.4; module load root-5.34.38; printenv LD_LIBRARY_PATH &gt;! modules_ld.txt; g++ -m64 -O2 RecoJets.cpp VectorDict.cxx -o RecoJets `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11 &amp;&amp; g++ -m64 -O2 UnderlyingEvent.cpp VectorDict.cxx -o UnderlyingEvent `root-config --cflags --libs` -std=c++11 &amp;&amp; g++ -m64 -O2 ApplyCorrections_em_only.cpp VectorDict.cxx -o ApplyCorrections_em_only `root-config --cflags --libs` -std=c++11 &amp;&amp; g++ -m64 -O2 AnHistograms.cpp VectorDict.cxx -o AnHistograms `root-config --cflags --libs` `fastjet-config --cxxflags --libs` -std=c++11 &amp;&amp; g++ -m64 -O2 channel_occupancy.cpp -o channel_occupancy `root-config --cflags --libs` -std=c++11'
         set COMPILESTATUS = $status
         echo "compile all 0 0 `tail -1 stage.time` 0" &gt;&gt; ${TIMING}
         if ( ${COMPILESTATUS} != 0 || ! -x RecoJets || ! -x UnderlyingEvent || ! -x ApplyCorrections_em_only || ! -x AnHistograms ) then
@@ -182,6 +190,12 @@
             set SUFFIX = `echo ${STFILE} | sed -e 's/^SimpleTree_mudst_//' -e 's/\.root$//'`
             echo "${STFILE}" &gt;! single_file.list
             set INKB = `du -k ${STFILE} | cut -f1`
+            # Channel QA (submit -Q 1): per-channel hit counts and energies of this
+            # SimpleTree for the hot / dead channel masks (channel_qa/)
+            if ( {{CHANNEL_QA}} == 1 ) then
+                env LD_LIBRARY_PATH="${MOD_LD}" ./channel_occupancy ${STFILE} occ_${SUFFIX}.root &gt;&amp;! occ.log
+                if ( $status != 0 ) tail -5 occ.log
+            endif
             /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./RecoJets single_file.list "${FILT}" 1 1 &gt;&amp;! recojets.log
             set JETSTATUS = $status
             echo "jets ${STFILE} 0 ${INKB} `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
@@ -280,6 +294,8 @@
             <File>file:./jet_calibration/ApplyCorrections_em_only.cpp</File>
             <File>file:./asymmetry/AnConfig.h</File>
             <File>file:./asymmetry/AnHistograms.cpp</File>
+            <File>file:./asymmetry/channel_qa/channel_occupancy.cpp</File>
+            <File>file:./asymmetry/channel_qa/masks</File>
             <File>file:./asymmetry/{{PI0SCALE}}</File>
             <File>file:./asymmetry/collins/CollinsConfig.h</File>
             <File>file:./asymmetry/collins/CollinsHistograms.h</File>
@@ -293,5 +309,6 @@
     <output fromScratch="an_hists_*.root" toURL="file:{{OUTDIR}}/hists/" />
     <output fromScratch="timing_*.txt" toURL="file:{{OUTDIR}}/timing/" />
     <output fromScratch="jets_*.root" toURL="file:{{OUTDIR}}/jets/" />
+    <output fromScratch="occ_*.root" toURL="file:{{OUTDIR}}/occ/" />
 
 </job>

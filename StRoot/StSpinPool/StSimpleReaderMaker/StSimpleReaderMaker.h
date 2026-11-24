@@ -17,6 +17,7 @@ class fcs_trg_base ;
 class StSpinDbMaker ;
 class TH1          ;
 class TRandom3     ;
+class FcsChannelMask ;
 
 class StSimpleReaderMaker : public StMaker
 {
@@ -261,6 +262,9 @@ class StSimpleReaderMaker : public StMaker
   float mHcalCorrFactor[2][24][32]; // [ns][dep][ch] -- kFcsNorthSouth/kFcsMaxDepBd/kFcsMaxDepCh (StEnumerations.h)
   int mHcalCorrCurrentDate = -1;
 
+  FcsChannelMask* mChannelMask = 0; //! (FcsChannelMask.h, kept out of the dictionary)
+  int mNMaskedHits = 0;
+
   void loadHcalCorrManifest();
   void loadHcalCorrFile(const TString& filename);
   float getHcalRetroCorr(int det, int id);
@@ -326,6 +330,13 @@ class StSimpleReaderMaker : public StMaker
   // Data: enable the HCAL gain correction; manifestDir holds manifest.txt and
   // the correction files
   void SetHcalRetroactiveGainCorr(const char* manifestDir) { mUseHcalRetroCorr = true; mHcalCorrDir = manifestDir; }
+
+  // Data: hot / dead channel mask (FcsChannelMask.h, channel_mask.txt rows
+  // "period first_run last_run det id ..."): masked hits are left out of the
+  // hit list and the offline trigger 2x2 sums. Use the same file in
+  // StFcsMuToEventMaker::SetChannelMask, which removes them from reclustering.
+  // Returns the rows read (-1: no file).
+  int SetChannelMask(const char* file);
 
   ClassDef(StSimpleReaderMaker,1)                  //  Macro for CINT compatability
     

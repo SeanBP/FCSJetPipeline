@@ -199,7 +199,7 @@ fit, and the closure.
    below n_eff 250, out to 100 GeV) of E_corr / E_truth per truth-energy bin and
    radial band, with bootstrap errors and the Eq. 24
    expectation, and the map against the points it was fitted to
-   (`jes_closure.txt`, `.root`, `.png`). The table also gives the energy resolution
+   (`jes_closure_em_only.*` or `jes_closure_fulljet.*`: `.txt`, `.root`, `.png`, `.pdf`; the plots name the jet type). The table also gives the energy resolution
    before and after correction (`RES` rows): the half-width of the shortest interval
    holding 68% of the weight, over the central value.
 

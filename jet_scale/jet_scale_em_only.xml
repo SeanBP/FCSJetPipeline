@@ -45,6 +45,10 @@
         module load fastjet-3.3.4
         module load root-5.34.38
 
+        # ptHat-bin cross-section override (submit -X; JetXSecWeights.h), e.g. the
+        # PYTHIA 8 systematic sample's 0-5 bin at the nominal PYTHIA 6 sigma
+        if ( "{{XSEC_OVERRIDE}}" != "" ) setenv JES_XSEC_OVERRIDE "{{XSEC_OVERRIDE}}"
+
         # Flatten jet_scale/ and shared/ into the job's working dir.
         cp jet_scale/* .
         cp shared/* .
@@ -82,16 +86,19 @@
         find "${INDIR}" -maxdepth 1 -name "*.root" | sort > closure_files.list
 
         # One map + closure per variant of free parameters per position
-        # (2 = A, B per position, C, D face-wide: {{JSON_NAME}}, jes_closure.*;
-        # 3 = C also free, 4 = C and D also free: &lt;json&gt;_free3/4.json,
-        # jes_closure_free3/4.*), all from the same fine grid
+        # (2 = A, B per position, C, D face-wide: {{JSON_NAME}},
+        # jes_closure_&lt;em_only|fulljet&gt;.*; 3 = C also free, 4 = C and D also
+        # free: &lt;json&gt;_free3/4.json, jes_closure_&lt;type&gt;_free3/4.*), all from the
+        # same fine grid. Closure files are named by jet type (Sean 2026-11-24).
+        set JNAME = em_only
+        if ( "{{JET_TYPE}}" == "full" ) set JNAME = fulljet
         foreach FREE ({{FREE_LIST}})
             if ( "${FREE}" == "2" ) then
                 set JSON = {{JSON_NAME}}
-                set CBASE = jes_closure
+                set CBASE = jes_closure_${JNAME}
             else
                 set JSON = `basename {{JSON_NAME}} .json`_free${FREE}.json
-                set CBASE = jes_closure_free${FREE}
+                set CBASE = jes_closure_${JNAME}_free${FREE}
             endif
             echo "Running CalibrationMap_em_only (${FREE} free per position) -> ${JSON}..."
             ./CalibrationMap_em_only jet_calibration.root ${JSON} "{{MAP_SAMPLE}}" "{{MAP_K}}" "{{MAP_TUNE}}" "{{MAP_COMMIT}}" {{JET_TYPE}} ${FREE}
@@ -134,9 +141,8 @@
     <output fromScratch="{{JSON_NAME}}.chi2_smoothed.csv" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="{{JSON_NAME}}.uniformity.txt" toURL="file:{{OUTDIR}}/" />
     <output fromScratch="{{JSON_NAME}}.free_fits.csv" toURL="file:{{OUTDIR}}/" />
-    <output fromScratch="jes_closure.txt" toURL="file:{{OUTDIR}}/" />
-    <output fromScratch="jes_closure.root" toURL="file:{{OUTDIR}}/" />
-    <output fromScratch="jes_closure.png" toURL="file:{{OUTDIR}}/" />
+    <!-- closures of every variant: jes_closure_<em_only|fulljet>[_free3/4].{txt,root,png,pdf} -->
+    <output fromScratch="jes_closure_*" toURL="file:{{OUTDIR}}/" />
     <!-- the C / C,D-free variants (FREE_LIST 3, 4): maps, side files, closures -->
     <output fromScratch="*_free*" toURL="file:{{OUTDIR}}/" />
 

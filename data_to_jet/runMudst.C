@@ -100,6 +100,15 @@ void runMudst(char* file="st_fwd_23080044_raw_1000019.MuDst.root",
     // HCAL gain correction; a placeholder of 1.0 until per-tower corrections exist
     AnalysisCode -> SetHcalRetroactiveGainCorr("hcal_gain_corrections") ;
 
+    // Hot / dead channel mask (asymmetry/channel_qa, Sean 2026-11-24): with a
+    // channel_mask.txt in the working directory (submit_an_job.sh -M), masked
+    // hits are zeroed before reclustering and left out of the SimpleTree's hit
+    // list and trigger sums, for the runs of their period
+    if ( !gSystem->AccessPathName("channel_mask.txt") ) {
+      fcsMuToEvent -> SetChannelMask("channel_mask.txt") ;
+      AnalysisCode -> SetChannelMask("channel_mask.txt") ;
+    }
+
     TString foriternum(file);
     Ssiz_t last_ = foriternum.Last('_');
     TString filename = "SimpleTree_mudst_";

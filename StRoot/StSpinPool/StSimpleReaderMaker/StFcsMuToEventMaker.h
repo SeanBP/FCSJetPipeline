@@ -9,12 +9,22 @@
 
 #include "StMaker.h"
 
+class FcsChannelMask;
+
 class StFcsMuToEventMaker : public StMaker
 {
  public:
-  StFcsMuToEventMaker(const char* name = "FcsMuToEvent") : StMaker(name) {}
-  virtual ~StFcsMuToEventMaker() {}
+  StFcsMuToEventMaker(const char* name = "FcsMuToEvent");
+  virtual ~StFcsMuToEventMaker();
   Int_t Make();
+  // Hot / dead channel mask (FcsChannelMask.h): masked hits get zero energy
+  // and ADC sum before reclustering. Returns the rows read (-1: no file).
+  int SetChannelMask(const char* file);
+
+ private:
+  FcsChannelMask* mMask; //! (FcsChannelMask.h, kept out of the dictionary)
+
+ public:
 
   ClassDef(StFcsMuToEventMaker, 1)
 };

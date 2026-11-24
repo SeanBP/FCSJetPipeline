@@ -9,6 +9,12 @@
 // of jobs). Exact only for disjoint bins; ComputeXSecWeights() warns about
 // open-ended bins (ptcutmax = -1) that overlap others. Weights are normalised
 // to the largest.
+//
+// Env JES_XSEC_OVERRIDE="min:max:sigma_mb[,min:max:sigma_mb...]" replaces the
+// sigma of the named ptHat bins (max -1 = open-ended). Used for the PYTHIA 8
+// generator-systematic sample (Sean 2026-11-24): its ptHat 0-5 bin takes the
+// nominal PYTHIA 6 sigma, since PYTHIA 8 hard QCD down to ptHat 0 is set by
+// the pTHatMinDiverge regulator (~160 mb vs 31.5 mb).
 
 #include <TFile.h>
 #include <TTree.h>
@@ -21,6 +27,8 @@
 #include <algorithm>
 #include <utility>
 #include <cstring>
+#include <cstdlib>
+#include <sstream>
 
 // Decodes a raw Pythia 6 sigma_job: StarPythia6::Stats() reads the cross
 // section 4 bytes off, giving a denormal (~5e-315) whose low word is the true
@@ -155,9 +163,31 @@ inline bool ComputeXSecWeights(const std::vector<std::string> &root_files,
     std::map<PtHatKey, double> bin_weight;
     double w_max = 0.0;
 
-    for (std::map<PtHatKey, XSecBin>::const_iterator it = bins.begin(); it != bins.end(); ++it)
+    for (std::map<PtHatKey, XSecBin>::iterator it = bins.begin(); it != bins.end(); ++it)
     {
         double sigma_bin = it->second.sum_N_sigma / it->second.sum_N;
+        if (const char *ov = std::getenv("JES_XSEC_OVERRIDE"))
+        {
+            std::stringstream ss(ov);
+            std::string item;
+            while (std::getline(ss, item, ','))
+            {
+                float lo = 0, hi = 0;
+                double sg = 0;
+                if (std::sscanf(item.c_str(), "%f:%f:%lf", &lo, &hi, &sg) != 3 || !(sg > 0))
+                {
+                    std::cerr << "ERROR: bad JES_XSEC_OVERRIDE entry '" << item << "' (want min:max:sigma_mb)" << std::endl;
+                    return false;
+                }
+                if (std::fabs(lo - it->first.first) < 1e-3 && std::fabs(hi - it->first.second) < 1e-3)
+                {
+                    std::cout << "JES_XSEC_OVERRIDE: ptHat " << lo << "-" << hi << " sigma " << sigma_bin
+                              << " mb -> " << sg << " mb" << std::endl;
+                    sigma_bin = sg;
+                    it->second.sum_N_sigma = sg * it->second.sum_N;  // so the table below prints it
+                }
+            }
+        }
         double w = sigma_bin / it->second.sum_N;
 
         bin_weight[it->first] = w;

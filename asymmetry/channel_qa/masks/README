@@ -1,0 +1,2 @@
+Hot / dead channel mask files for submit_an_job.sh -M (copied here at submission;
+the A_N job uses the one named in its XML as channel_mask.txt). See ../README.md.

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdlib>
+#include <cstdio>
 #include <string>
 #include "fastjet/PseudoJet.hh"
 #include "fastjet/ClusterSequence.hh"
@@ -39,6 +40,8 @@ static const float mip_threshold = 0.1;
 // (kFmsEngMin, UnderlyingEventPlayground/fms_emjet_reference.txt). Also the
 // energy floor of the points counted as photons. Applied via
 // pass_point_energy_cut() (no upper cut on points; see there).
+// Env FCS_POINT_EMIN (GeV) overrides it for the point-threshold systematic
+// (Sean 2026-11-24: maps and A_N at 1.5 and 2 GeV); point_energy_threshold().
 static const float point_energy_min = 1.0f;
 
 // ------------------ Geometry cut (symmetric two-window detector) ------------------
@@ -175,9 +178,21 @@ inline double computeFeynmanX(double E, double eta, double sqrtS)
 // from its remaining points. Now such a jet keeps its energy and is handled as
 // a whole by the jet-level cut (pass_physical_jet_cut; AnHistograms keeps jets
 // above sqrt(s)/2 apart, AnAsymmetry -E adds them) (Sean 2026-11-06).
+inline float point_energy_threshold()
+{
+    static float v = -1.0f;
+    if (v < 0.0f)
+    {
+        const char *env = std::getenv("FCS_POINT_EMIN");
+        v = (env && *env) ? (float)std::atof(env) : point_energy_min;
+        if (v != point_energy_min) std::fprintf(stderr, "JetParameters: point energy threshold %.3f GeV (FCS_POINT_EMIN; default %.3f)\n", v, point_energy_min);
+    }
+    return v;
+}
+
 inline bool pass_point_energy_cut(float e)
 {
-    return e > point_energy_min;
+    return e > point_energy_threshold();
 }
 
 // Analysis-level cut on the corrected jet (after UE subtraction and energy

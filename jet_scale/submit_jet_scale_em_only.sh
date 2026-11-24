@@ -9,6 +9,7 @@
 #       files, i.e. built with submit_sim_to_jet.sh -E 1
 #   -o  output directory (created if missing)
 #   -n  output JSON lookup table filename, default JetEnergyScale_lookup_em_only.json
+#       (-t full: JetEnergyScale_lookup_fulljet.json)
 #   -s  1 = keep intermediate jet_calibration.root, 0 = discard, default 0
 #   -l  short label for the generated XML's filename, default "run"
 #   -k  1 = save stdout/stderr under <outdir>/log/, 0 = discard, default 0
@@ -18,7 +19,10 @@
 #   -F  free-parameter variants to build, each with its closure, from the same
 #       fine grid (quoted list, default "2"): 2 = A, B per position (C, D
 #       face-wide; the map), 3 = C also per position, 4 = C and D also per
-#       position (<json>_free3/4.json, jes_closure_free3/4.*); e.g. -F "2 3 4"
+#       position (<json>_free3/4.json, jes_closure_<type>_free3/4.*); e.g. -F "2 3 4"
+#   -X  ptHat-bin cross-section override for the weights (JES_XSEC_OVERRIDE,
+#       JetXSecWeights.h): "min:max:sigma_mb[,...]", e.g. "0:5:31.499" for the
+#       PYTHIA 8 systematic sample's lowest bin (nominal PYTHIA 6 sigma)
 #
 # Example:
 #   ./submit_jet_scale_em_only.sh -i /star/data01/pwg/seanp/pipeline_output/em_only_production \
@@ -29,14 +33,15 @@ set -e
 
 JETTREES_DIR=""
 OUTDIR=""
-JSON_NAME="JetEnergyScale_lookup_em_only.json"
+JSON_NAME=""   # default by jet type: JetEnergyScale_lookup_em_only.json / _fulljet.json
 SAVE_CALIBRATION_ROOT="0"
 LABEL="run"
 KEEPLOGS=0
 JET_TYPE="em"
 FREE_LIST="2"
+XSEC_OVERRIDE=""
 
-while getopts "i:o:n:s:l:k:t:F:h" opt; do
+while getopts "i:o:n:s:l:k:t:F:X:h" opt; do
   case $opt in
     i) JETTREES_DIR="$OPTARG" ;;
     o) OUTDIR="$OPTARG" ;;
@@ -46,8 +51,9 @@ while getopts "i:o:n:s:l:k:t:F:h" opt; do
     k) KEEPLOGS="$OPTARG" ;;
     t) JET_TYPE="$OPTARG" ;;
     F) FREE_LIST="$OPTARG" ;;
+    X) XSEC_OVERRIDE="$OPTARG" ;;
     h|*)
-      sed -n '2,22p' "$0"
+      sed -n '2,25p' "$0"
       exit 0
       ;;
   esac
@@ -96,6 +102,9 @@ MAP_TUNE="$(param generator) PyTune $(param tune_param)"
 MAP_COMMIT=$(git -C "${PIPELINE_ROOT}" rev-parse HEAD 2>/dev/null || echo unknown)
 git -C "${PIPELINE_ROOT}" diff --quiet HEAD -- jet_scale shared 2>/dev/null || MAP_COMMIT="${MAP_COMMIT}-dirty"
 
+if [ -z "$JSON_NAME" ]; then
+    if [ "$JET_TYPE" = "full" ]; then JSON_NAME="JetEnergyScale_lookup_fulljet.json"; else JSON_NAME="JetEnergyScale_lookup_em_only.json"; fi
+fi
 if [ "$JET_TYPE" != "em" ] && [ "$JET_TYPE" != "full" ]; then
     echo "Error: -t must be em or full (got '$JET_TYPE')"
     exit 1
@@ -115,6 +124,7 @@ sed -e "s#{{JETTREES_DIR}}#${JETTREES_DIR}#g" \
     -e "s#{{MAP_COMMIT}}#${MAP_COMMIT}#g" \
     -e "s#{{JET_TYPE}}#${JET_TYPE}#g" \
     -e "s#{{FREE_LIST}}#${FREE_LIST}#g" \
+    -e "s#{{XSEC_OVERRIDE}}#${XSEC_OVERRIDE}#g" \
     "${SCRIPT_DIR}/jet_scale_em_only.xml" > "${OUTXML}"
 
 echo "Generated ${OUTXML}"

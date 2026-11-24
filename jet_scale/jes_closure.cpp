@@ -74,6 +74,7 @@ struct Map
     double C, D, Emin, Emax;                    // face-wide C, D
     double xmin, xmax, ymin, ymax;
     int imin, imax, jmin, jmax;                 // the bins' index range
+    std::string jet_type, sample;               // "em" / "full", for the plot labels
 };
 
 static std::vector<double> JsonArray(const std::string &json, const std::string &key)
@@ -97,6 +98,15 @@ static double JsonNumber(const std::string &json, const std::string &key)
     return std::strtod(json.c_str() + pos + 1, nullptr);
 }
 
+static std::string JsonString(const std::string &json, const std::string &key)
+{
+    const size_t k = json.find("\"" + key + "\"");
+    if (k == std::string::npos) return "";
+    const size_t a = json.find('"', json.find(':', k));
+    const size_t b = a == std::string::npos ? a : json.find('"', a + 1);
+    return b == std::string::npos ? "" : json.substr(a + 1, b - a - 1);
+}
+
 static bool ReadMap(const std::string &file, Map &m)
 {
     std::ifstream in(file.c_str());
@@ -114,6 +124,8 @@ static bool ReadMap(const std::string &file, Map &m)
             return false;
         }
     }
+    m.jet_type = JsonString(json, "jet_type");
+    m.sample = JsonString(json, "sample");
     m.C = JsonNumber(json, "C");
     m.D = JsonNumber(json, "D");
     m.Emin = JsonNumber(json, "Emin");
@@ -387,6 +399,9 @@ int main(int argc, char **argv)
         leg->Draw();
         TLatex *t = new TLatex(); t->SetNDC(); t->SetTextSize(0.05); t->SetTextFont(62);
         t->DrawLatex(0.12, 0.935, reg_name[g]);
+        // jet type (and sample) of the map, so EM-only and full-jet closures can be told apart
+        t->SetTextSize(0.04); t->SetTextFont(42);
+        t->DrawLatex(0.42, 0.94, (std::string(m.jet_type == "full" ? "full (ECAL+HCAL) jets" : "EM-only jets") + (m.sample.empty() ? "" : ", " + m.sample)).c_str());
         keep.push_back(leg); keep.push_back(t);
         keep.push_back(l1); keep.push_back(l2); keep.push_back(l3);
     }
