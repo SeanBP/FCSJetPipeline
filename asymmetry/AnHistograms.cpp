@@ -132,6 +132,12 @@
 // F / (1 +- delta) (identical to ApplyCorrections_em_only --jes-shift=+1 / -1
 // and a nominal pass), same events and raw trigger values. AnAsymmetry -v reads
 // them; the systematic is max(|A_up - A|, |A_dn - A|) per bin, symmetric.
+// Point-threshold copies _vthr150 / _vthr200 (Sean 2026-11-24): a second call
+// on the job's jets rebuilt at FCS_POINT_EMIN = 1.5 / 2.0 GeV and calibrated
+// with that threshold's map, with --thr-copy=150 / 200: it opens the nominal
+// call's output file (UPDATE) and adds only that copy's histograms (photon
+// classes and pi0 candidates, filled from its default jets as the other copies
+// are), plus a TNamed thr_copy_<thr>. The nominal call leaves them out.
 // Trigger reference tallies (AnConfig.h "Trigger reference tallies"): with a
 // third argument, a list of the job's trigger reference files, every
 // reference event of those files fills h_trgref_* (no other cut), for
@@ -149,6 +155,8 @@
 #include <TH2D.h>
 #include <TH3D.h>
 #include <TNamed.h>
+#include <TList.h>
+#include <TSystem.h>
 
 #include <cmath>
 #include <cstdio>
@@ -350,24 +358,33 @@ int main(int argc, char **argv)
     // --jes-error=<map json>: the map's error vs energy for the _vjesup /
     // _vjesdn copies (an_job passes the JES map it applied)
     std::string jes_err_path;
+    // --thr-copy=150 / 200: fill only the _vthr150 / _vthr200 copy into an existing output file
+    int thr_v = -1;
     {
         int n = 1;
         for (int i = 1; i < argc; i++)
         {
             const std::string a = argv[i];
             if (a.compare(0, 12, "--jes-error=") == 0) jes_err_path = a.substr(12);
+            else if (a.compare(0, 11, "--thr-copy=") == 0)
+            {
+                const std::string t = a.substr(11);
+                if (t == "150") thr_v = kVarThr150;
+                else if (t == "200") thr_v = kVarThr200;
+                else { std::cerr << "ERROR: --thr-copy must be 150 or 200" << std::endl; return 1; }
+            }
             else argv[n++] = argv[i];
         }
         argc = n;
     }
     const JesError jes_err = jes_err_path.empty() ? JesError() : ReadJesError(jes_err_path);
     const bool have_jes_err = jes_err.ok();
-    if (!have_jes_err)
+    if (!have_jes_err && thr_v < 0)
         std::cerr << "Warning: no JES error (" << (jes_err_path.empty() ? "no --jes-error" : "no jes_error_E / jes_error_total arrays in " + jes_err_path)
                   << "): _vjesup / _vjesdn copies empty" << std::endl;
     if (argc < 3)
     {
-        std::cerr << "Usage: " << argv[0] << " <jet file list> <output.root> [trigger reference file list] [--jes-error=<JES map json>]" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <jet file list> <output.root> [trigger reference file list] [--jes-error=<JES map json>] [--thr-copy=150|200]" << std::endl;
         return 1;
     }
     TChain t("jetTree");
@@ -495,7 +512,9 @@ int main(int argc, char **argv)
     if (have_z) t.SetBranchAddress("reco_pi0_lead_z1", &z1);
     else std::cerr << "Warning: no reco_pi0_lead_z1 in the jet files; h_xFPz_* stay empty" << std::endl;
 
-    TFile out(argv[2], "RECREATE");
+    if (thr_v >= 0 && gSystem->AccessPathName(argv[2])) { std::cerr << "ERROR: --thr-copy adds to an existing output file; " << argv[2] << " not found" << std::endl; return 1; }
+    TFile out(argv[2], thr_v >= 0 ? "UPDATE" : "RECREATE");
+    if (out.IsZombie()) { std::cerr << "ERROR: cannot open " << argv[2] << std::endl; return 1; }
     // [sample][EM tag][e]: samples SampSuffix(), EM tags for JP levels
     // (Booked()); e 0 E <= sqrt(s)/2, 1 above it (_hiE)
     static TH1D *h[kNSamp][kNEmTags][2][kNTrgLevels][kNPhotonClasses][kNSides][kNSpinStates];
@@ -806,6 +825,13 @@ int main(int argc, char **argv)
         var_evt[kVarVtxMeas] = evt_nominal && (vz_source == 1 || vz_source == 2);
         var_evt[kVarBbcVeto] = !evt_nominal;
         var_evt[kVarJesUp] = var_evt[kVarJesDn] = evt_nominal && have_jes_err;
+        // point-threshold copies: filled only in their own call (--thr-copy), which fills nothing else
+        var_evt[kVarThr150] = var_evt[kVarThr200] = false;
+        if (thr_v >= 0)
+        {
+            for (int v = 0; v < kNVar; v++) var_evt[v] = false;
+            var_evt[thr_v] = evt_nominal;
+        }
         if (evt_nominal)
         {
             h_cut->Fill(kCollision, nj);
@@ -1183,6 +1209,38 @@ int main(int argc, char **argv)
 
     std::ostringstream rs;
     for (std::set<int>::const_iterator r = runs.begin(); r != runs.end(); ++r) rs << (r == runs.begin() ? "" : " ") << *r;
+    // only the histograms of this call's copies are written: the nominal call
+    // leaves out the _vthr copies (filled by their own calls), a --thr-copy call
+    // writes only its copy (and no metadata but thr_copy_<thr>)
+    {
+        std::vector<TObject *> drop;
+        TIter it(out.GetList());
+        while (TObject *o = it())
+        {
+            const TString nm = o->GetName();
+            bool keep;
+            if (thr_v >= 0) keep = nm.EndsWith(kVarSuffix[thr_v]);
+            else keep = !nm.EndsWith(kVarSuffix[kVarThr150]) && !nm.EndsWith(kVarSuffix[kVarThr200]);
+            if (!keep) drop.push_back(o);
+        }
+        // detached, not deleted (some are owned by QaSet / CollinsHistograms)
+        for (size_t i = 0; i < drop.size(); i++)
+        {
+            if (drop[i]->InheritsFrom(TH1::Class())) ((TH1 *)drop[i])->SetDirectory(0);
+            else out.GetList()->Remove(drop[i]);
+        }
+    }
+    if (thr_v >= 0)
+    {
+        const char *const thr_name = thr_v == kVarThr150 ? "150" : "200";
+        const char *env = std::getenv("FCS_POINT_EMIN");
+        TNamed(TString::Format("thr_copy_%s", thr_name).Data(), TString::Format("%s copy: %lld events, runs %s; jets made with FCS_POINT_EMIN=%s", kVarSuffix[thr_v], n, rs.str().c_str(), env ? env : "(unset in this call)").Data()).Write();
+        out.Write();
+        printf("AnHistograms --thr-copy=%s: %lld events, runs %s\n", thr_name, n, rs.str().c_str());
+        for (int c = 0; c < kNCuts; c++) printf("  %-16s %.0f jets\n", kCutName[c], h_cut->GetBinContent(c + 1));
+        out.Close();
+        return 0;
+    }
     TNamed("runs", rs.str().c_str()).Write();
     TNamed("spin_convention", kSpinConventionTag).Write();
     {
@@ -1193,7 +1251,7 @@ int main(int argc, char **argv)
         TNamed("pi0_scale", ps.str().c_str()).Write();
     }
     if (!ref_files.empty()) TNamed("trgref_files", TString::Format("%ld of %zu listed trigger reference files read", n_ref_files_read, ref_files.size()).Data()).Write();
-    TNamed("variations", "systematic-variation copies (AnConfig.h kVarSuffix): _vfid25 _vfid30 _vvz60 _vvtxmeas _vbbcveto _vjesup _vjesdn (JES: photon classes only); collision cut east BBC >= 1, TOF > 2").Write();
+    TNamed("variations", "systematic-variation copies (AnConfig.h kVarSuffix): _vfid25 _vfid30 _vvz60 _vvtxmeas _vbbcveto _vjesup _vjesdn (JES: photon classes only) _vthr150 _vthr200 (added by --thr-copy calls: see thr_copy_*); collision cut east BBC >= 1, TOF > 2").Write();
     if (have_jes_err)
     {
         std::ostringstream je;

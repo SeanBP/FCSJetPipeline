@@ -773,7 +773,7 @@ int main(int argc, char **argv)
                   << "  -Q <list>: (-r) also mask the runs flagged in this pi0-peak bad-run list (pi0_peak_runs.C <out>_bad_runs.txt)\n"
                   << "  -M <merged.root> <out.root> [rebin]: read one AnMerge output (sums, masked runs subtracted, P-weighted yields) instead of -r\n"
                   << "  -x <e0,e1,...>: variable x_F bin edges on the stored 0.025 grid (e.g. 0,0.1,0.15,0.175,0.2,0.25,0.35,0.5); replaces rebin\n"
-                  << "  -v <fid25|fid30|vz60|vtxmeas|bbcveto|jesup|jesdn>: a systematic-variation copy of the default yields (AnConfig.h kVarSuffix; with -I too, except jesup / jesdn)" << std::endl;
+                  << "  -v <fid25|fid30|vz60|vtxmeas|bbcveto|jesup|jesdn|thr150|thr200>: a systematic-variation copy of the default yields (AnConfig.h kVarSuffix; with -I too, except jesup / jesdn)" << std::endl;
         return 1;
     }
     const int rebin = argc > 5 ? std::atoi(argv[5]) : 2;

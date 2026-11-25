@@ -223,7 +223,10 @@ ECAL+HCAL version, with a log-quadratic model and Gaussian-fit modes;
 
 The standard JES map is tracked at
 `jet_calibration/JES_Lookups/JetEnergyScale_lookup_em_only.json` and is the
-default for `-c`. It is a copy of `jes_points/jesmap_pixring_v1`.
+default for `-c`. Since 2026-11-25 it is `jes_points/jesmap_full_v1` (10M events
+with vertex emulation, free 2) with its error arrays (statistical from subset
+maps, PYTHIA 8 Detroit generator systematic); provenance in
+`JES_Lookups/JetEnergyScale_lookup_em_only.provenance.txt`.
 
 Adds `reco_E_corr` and `reco_x_F_corr` to every file **in place** (asks for
 confirmation). The EM-only map is evaluated at the UE-subtracted energy,

@@ -17,6 +17,9 @@
 #                     (= the calibration rerun with the map shifted; photon
 #                     classes only: the pi0 candidates do not use the JES);
 #                     symmetric, the larger side: combine_sys.py --comp-max jes=<up>,<dn>
+#     thr150, thr200  point energy threshold 1.5 / 2.0 GeV (jets rebuilt, each
+#                     with its own JES map; photon classes and pi0); the larger
+#                     side: combine_sys.py --comp-max thr=<150>,<200>
 #   disjoint (a check, not a box):
 #     bbcveto         the events the collision cut removes vs the nominal
 #                     sample; also their share of the jets per row
@@ -25,11 +28,11 @@
 # and pi0). Outputs: <report>/sys_variations/sys_<var>_<sample>.txt,
 # _summary.txt, .png; combine_sys.py collects them. Needs yield files made
 # from 2026-11-17 on (AnAsymmetry stops otherwise).
-# Usage: sys_variations.sh <report dir> [AnAsymmetry input, default "-M masked.root"] [variations, default "fid25 fid30 vz60 vtxmeas bbcveto jesup jesdn"]
+# Usage: sys_variations.sh <report dir> [AnAsymmetry input, default "-M masked.root"] [variations, default "fid25 fid30 vz60 vtxmeas bbcveto jesup jesdn thr150 thr200"]
 set -e
 REP="$(cd "$1" && pwd)"
 ANIN="${2:--M masked.root}"
-VARS="${3:-fid25 fid30 vz60 vtxmeas bbcveto jesup jesdn}"
+VARS="${3:-fid25 fid30 vz60 vtxmeas bbcveto jesup jesdn thr150 thr200}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="${REP}/sys_variations"
 [ -x "${REP}/build/AnAsymmetry" ] || { sed -n '2,26p' "$0"; echo "no ${REP}/build/AnAsymmetry"; exit 1; }
@@ -65,9 +68,10 @@ cmp() {  # name, loose table, tight table, label, extra sys_slices options, plot
 }
 declare -A LABEL=([fid25]="fiducial 20 vs 25 cm" [fid30]="fiducial 20 vs 30 cm" [vz60]="|v_{z}| < 100 vs < 60 cm"
                   [vtxmeas]="all vertices vs measured only" [bbcveto]="collision cut: kept vs removed events"
-                  [jesup]="JES scale +delta(E)" [jesdn]="JES scale -delta(E)")
+                  [jesup]="JES scale +delta(E)" [jesdn]="JES scale -delta(E)"
+                  [thr150]="point threshold 1.0 vs 1.5 GeV" [thr200]="point threshold 1.0 vs 2.0 GeV")
 for v in $VARS; do
-    opt=""; [ "$v" = bbcveto ] && opt="--disjoint"; [[ "$v" == jes* ]] && opt="--shifted"
+    opt=""; [ "$v" = bbcveto ] && opt="--disjoint"; [[ "$v" == jes* || "$v" == thr* ]] && opt="--shifted"
     cmp "${v}_jets" "${OUT}/an_nominal.txt" "${OUT}/an_${v}.txt" "${LABEL[$v]}" "$opt" all all
     [[ "$v" == jes* ]] && continue
     for cls in iso noniso; do

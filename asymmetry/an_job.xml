@@ -30,13 +30,19 @@
                           MuDst of each job (ref_files.list; AnHistograms h_trgref_*)
       {{CALIB_NAME}}      EM-only point-jet JES lookup JSON, a file in
                           asymmetry/jes/ (submit_an_job.sh -c copies it there)
-      {{CHANNEL_QA}}      1 = also write occ_<file>.root per MuDst: per-channel hit
-                          counts and energies (channel_qa/channel_occupancy.cpp)
-                          for the hot / dead channel masks; 0 = off
+      {{CHANNEL_QA}}      1 = also write occ_<run>_<job>.root: per-channel hit
+                          counts and energies of the job's MuDsts, summed
+                          (channel_qa/channel_occupancy.cpp), for the hot / dead
+                          channel masks and per-run QA; 0 = off
       {{CHANNEL_MASK}}    hot / dead channel mask file in asymmetry/channel_qa/masks/
                           (copied as channel_mask.txt for runMudst.C); empty = none
       {{KEEP_JETS}}       keep the calibrated jet files of every N-th job,
                           merged per job (to <outdir>/jets/), 0 = none
+      {{THR_COPIES}}      point-threshold copies to make, "150 200" (default) or ""
+                          (submit -T): per SimpleTree the jets and UE again with
+                          FCS_POINT_EMIN = 1.5 / 2.0, calibrated with
+                          {{THR150_NAME}} / {{THR200_NAME}} (asymmetry/jes/), and
+                          AnHistograms (thr-copy option) into the same an_hists file
       {{OUTDIR}}          absolute output directory
       {{STDOUT_URL}}/{{STDERR_URL}}  per-job log destination (-k flag)
 
@@ -65,6 +71,8 @@
         cp asymmetry/{{PI0SCALE}} pi0_scale.txt
         cp asymmetry/collins/CollinsConfig.h asymmetry/collins/CollinsHistograms.h .
         cp asymmetry/jes/{{CALIB_NAME}} calib.json
+        cp asymmetry/jes/{{THR150_NAME}} calib_thr150.json
+        cp asymmetry/jes/{{THR200_NAME}} calib_thr200.json
         cp -r data_to_jet/hcal_gain_corrections .
 
         @ rline = ${JOBINDEX} + 1
@@ -102,8 +110,11 @@
 
         set xrdname = "root://xrdstar.rcf.bnl.gov:1095"
         set xrdnchar = `echo $xrdname | awk '{print length($0)}'`
-        rm -f simpletree_files.list ue_pairs.list jet_files.list ref_files.list
+        rm -f simpletree_files.list ue_pairs.list jet_files.list ref_files.list jet_files_thr*.list
         touch simpletree_files.list jet_files.list ref_files.list
+        foreach THR ( {{THR_COPIES}} )
+            touch jet_files_thr${THR}.list
+        end
         # Trigger reference file (Sean 2026-11-17): the job's first processed MuDst
         # also keeps the reference triggers' events (trg_nominal: EM refs JP/DiJP/
         # Had/HHT/HTOT/HcalTot, JP refs DY/J/psi/ELE2), which the EM/JP filter drops
@@ -193,7 +204,7 @@
             # Channel QA (submit -Q 1): per-channel hit counts and energies of this
             # SimpleTree for the hot / dead channel masks (channel_qa/)
             if ( {{CHANNEL_QA}} == 1 ) then
-                env LD_LIBRARY_PATH="${MOD_LD}" ./channel_occupancy ${STFILE} occ_${SUFFIX}.root &gt;&amp;! occ.log
+                env LD_LIBRARY_PATH="${MOD_LD}" ./channel_occupancy ${STFILE} occf_${SUFFIX}.root &gt;&amp;! occ.log
                 if ( $status != 0 ) tail -5 occ.log
             endif
             /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./RecoJets single_file.list "${FILT}" 1 1 &gt;&amp;! recojets.log
@@ -212,15 +223,47 @@
             /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./UnderlyingEvent ue_pairs.list &gt;&amp;! ue.log
             set UESTATUS = $status
             echo "ue ${STFILE} 0 ${INKB} `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
-            rm -f ${STFILE}
             if ( ${UESTATUS} != 0 ) then
                 echo "ERROR: UnderlyingEvent failed on ${STFILE}, skipping"
                 echo "jetfail ${LOCALFILE} ${NEVCAT} 0 0 0 0 0 0" >> ${TIMING}
                 tail -20 ue.log
-                rm -f jet_output_${SUFFIX}.root
+                rm -f ${STFILE} jet_output_${SUFFIX}.root
                 @ i++
                 continue
             endif
+            # point-threshold copies (Sean 2026-11-24): the same SimpleTree's jets
+            # and UE again at FCS_POINT_EMIN = 1.5 / 2.0 GeV (JetParameters.h
+            # point_energy_threshold(); points, jets, UE and pi0 candidates). A
+            # failure drops this file from that copy only (row thrfail).
+            foreach THR ( {{THR_COPIES}} )
+                set THRGEV = 1.5
+                if ( ${THR} == 200 ) set THRGEV = 2.0
+                rm -f jet_output.root
+                /usr/bin/time -f "%e %U %S %M" -o stage.time env FCS_POINT_EMIN=${THRGEV} LD_LIBRARY_PATH="${MOD_LD}" ./RecoJets single_file.list "${FILT}" 1 1 &gt;&amp;! recojets_thr.log
+                set TSTATUS = $status
+                echo "jets${THR} ${STFILE} 0 ${INKB} `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+                if ( ${TSTATUS} != 0 || ! -f jet_output.root ) then
+                    echo "ERROR: RecoJets (threshold ${THRGEV} GeV) failed on ${STFILE}"
+                    echo "thrfail${THR} ${LOCALFILE} ${NEVCAT} 0 0 0 0 0 0" >> ${TIMING}
+                    tail -5 recojets_thr.log
+                    rm -f jet_output.root
+                    continue
+                endif
+                mv jet_output.root jet_output_${SUFFIX}_thr${THR}.root
+                echo "jet_output_${SUFFIX}_thr${THR}.root ${STFILE}" &gt;! ue_pairs.list
+                /usr/bin/time -f "%e %U %S %M" -o stage.time env FCS_POINT_EMIN=${THRGEV} LD_LIBRARY_PATH="${MOD_LD}" ./UnderlyingEvent ue_pairs.list &gt;&amp;! ue_thr.log
+                set TSTATUS = $status
+                echo "ue${THR} ${STFILE} 0 ${INKB} `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+                if ( ${TSTATUS} != 0 ) then
+                    echo "ERROR: UnderlyingEvent (threshold ${THRGEV} GeV) failed on ${STFILE}"
+                    echo "thrfail${THR} ${LOCALFILE} ${NEVCAT} 0 0 0 0 0 0" >> ${TIMING}
+                    tail -5 ue_thr.log
+                    rm -f jet_output_${SUFFIX}_thr${THR}.root
+                    continue
+                endif
+                echo "jet_output_${SUFFIX}_thr${THR}.root" >> jet_files_thr${THR}.list
+            end
+            rm -f ${STFILE}
             echo "jet_output_${SUFFIX}.root" >> jet_files.list
             if ( "${FILT}" != "{{TRIGGER_FILTER}}" ) then
                 echo "jet_output_${SUFFIX}.root" >> ref_files.list
@@ -230,6 +273,18 @@
             echo "done ${LOCALFILE} ${NEVCAT} 0 0 0 0 0 0" >> ${TIMING}
             @ i++
         end
+
+        # channel QA: the per-MuDst counts merged into one occ_&lt;run&gt;_&lt;job&gt;.root
+        # (a job holds one run's files); ~250 kB per file otherwise
+        if ( {{CHANNEL_QA}} == 1 ) then
+            set nonomatch
+            set OCCF = ( occf_*.root )
+            if ( -e "$OCCF[1]" ) then
+                tcsh -c 'module purge; module load root-5.34.38; hadd -f occ_'${TAG}'.root occf_*.root' &gt;&amp;! hadd_occ.log
+                if ( $status != 0 ) tail -5 hadd_occ.log
+                rm -f occf_*.root
+            endif
+        endif
 
         set NPRODUCED = `wc -l &lt; jet_files.list`
         echo "Produced ${NPRODUCED}/${mycount} jet files (`wc -l &lt; simpletree_files.list` SimpleTrees)"
@@ -245,6 +300,36 @@
         # A_N yield histograms
         /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./AnHistograms jet_files.list an_hists_${TAG}.root ref_files.list --jes-error=calib.json
         echo "hists all ${NPRODUCED} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+
+        # point-threshold copies: calibrate with that threshold's map, then add
+        # the _vthr150 / _vthr200 histograms to an_hists (AnHistograms thr-copy option)
+        foreach THR ( {{THR_COPIES}} )
+            set NTHR = `wc -l &lt; jet_files_thr${THR}.list`
+            if ( ${NTHR} == 0 || ! -f an_hists_${TAG}.root ) then
+                echo "WARNING: no threshold-${THR} jet files (or no an_hists): _vthr${THR} copy empty"
+                continue
+            endif
+            /usr/bin/time -f "%e %U %S %M" -o stage.time env LD_LIBRARY_PATH="${MOD_LD}" ./ApplyCorrections_em_only jet_files_thr${THR}.list calib_thr${THR}.json &gt;&amp;! calib_thr.log
+            set TSTATUS = $status
+            echo "calib${THR} all ${NTHR} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+            if ( ${TSTATUS} != 0 ) then
+                echo "ERROR: ApplyCorrections (threshold ${THR}) failed: _vthr${THR} copy empty"
+                tail -5 calib_thr.log
+                continue
+            endif
+            set THRGEV = 1.5
+            if ( ${THR} == 200 ) set THRGEV = 2.0
+            /usr/bin/time -f "%e %U %S %M" -o stage.time env FCS_POINT_EMIN=${THRGEV} LD_LIBRARY_PATH="${MOD_LD}" ./AnHistograms jet_files_thr${THR}.list an_hists_${TAG}.root --thr-copy=${THR} &gt;&amp;! hists_thr.log
+            set TSTATUS = $status
+            echo "hists${THR} all ${NTHR} 0 `tail -1 stage.time` `du -sk . | cut -f1`" >> ${TIMING}
+            if ( ${TSTATUS} != 0 ) then
+                echo "ERROR: AnHistograms --thr-copy=${THR} failed"
+                tail -5 hists_thr.log
+            endif
+            foreach f ( `cat jet_files_thr${THR}.list` )
+                rm -f ${f}
+            end
+        end
         echo "output an_hists_${TAG}.root 0 `du -k an_hists_${TAG}.root | cut -f1` 0 0 0 0 0" >> ${TIMING}
         echo "jetfiles all 0 `cat jet_files.list | xargs du -ck | tail -1 | cut -f1` 0 0 0 0 0" >> ${TIMING}
 
@@ -268,7 +353,7 @@
         foreach f ( `cat jet_files.list` )
             rm -f ${f}
         end
-        rm -f my_lines.list my_nodes.list simpletree_files.list single_file.list ue_pairs.list jet_files.list stage.time modules_ld.txt
+        rm -f my_lines.list my_nodes.list simpletree_files.list single_file.list ue_pairs.list jet_files.list jet_files_thr*.list stage.time modules_ld.txt
         cat ${TIMING}
 
     </command>
@@ -300,6 +385,8 @@
             <File>file:./asymmetry/collins/CollinsConfig.h</File>
             <File>file:./asymmetry/collins/CollinsHistograms.h</File>
             <File>file:./asymmetry/jes/{{CALIB_NAME}}</File>
+            <File>file:./asymmetry/jes/{{THR150_NAME}}</File>
+            <File>file:./asymmetry/jes/{{THR200_NAME}}</File>
         </Package>
     </SandBox>
 

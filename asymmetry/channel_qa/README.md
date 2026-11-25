@@ -26,7 +26,12 @@ point-threshold one).
    coldE (mean E < 0.5×). First thresholds, to be tuned on the maps.
    `channel_mask.txt` (period first_run last_run det id x y flag ...),
    `channel_mask_summary.txt`, `channel_ratio_<det>_p<k>.png`.
-4. **Applying a mask**: `../submit_an_job.sh ... -M <mask file>`. `runMudst.C`
+4. **Applying a mask**: automatic (Sean 2026-11-25). `../submit_an_job.sh`
+   applies `channel_mask_v1.txt` (this folder) unless given `-M <other mask>`,
+   or `-M none` for no mask. The mask's `#P period first last` header lines list
+   every period, masked channels or not. The submit script warns about runs of
+   the list outside every period, since those run unmasked. A new mask version
+   replaces the default in `submit_an_job.sh`. `runMudst.C`
    loads `channel_mask.txt` into `StFcsMuToEventMaker` (masked hits get zero
    energy before reclustering, so they enter no cluster or point) and
    `StSimpleReaderMaker` (masked hits are left out of the hit list and the

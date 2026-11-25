@@ -141,6 +141,16 @@ Step 6 runs on the job outputs, not in the job.
   `AnAsymmetry -v jesup|jesdn`; `sys_variations.sh` compares them with
   `sys_slices.py --shifted`; `combine_sys.py --comp-max jes=<up>,<dn>`.
   submit_an_job.sh warns if the map has no error arrays.
+- **Point-threshold copies (Sean 2026-11-24):** `_vthr150` / `_vthr200`. Per
+  SimpleTree the job also runs RecoJets and UnderlyingEvent with
+  `FCS_POINT_EMIN` = 1.5 / 2.0 GeV (points, jets, UE and π⁰ candidates),
+  calibrates those jets with that threshold's map
+  (`jet_calibration/JES_Lookups/JetEnergyScale_lookup_em_only_pointthr150/200.json`,
+  the standard map plus the same-events threshold difference, `jes_map_combine.py`),
+  and `AnHistograms --thr-copy=150|200` adds the copies (photon classes and π⁰)
+  to the same `an_hists` file. On by default (`submit_an_job.sh -T none` turns
+  them off). `AnAsymmetry -v thr150|thr200`; `sys_variations.sh` compares them
+  with `sys_slices.py --shifted`; `combine_sys.py --comp-max thr=<150>,<200>`.
 - **Event-cut plots:** AnHistograms fills each event-level cut variable N-1
   (`qa_cut_vz`, `qa_cut_vz_source`, `qa_cut_bbc_e_ntiles`, `qa_cut_tof_mult`);
   `sivers/plot_event_cuts.C` draws them with the cut (solid) and its
@@ -308,6 +318,10 @@ Step 6 runs on the job outputs, not in the job.
   ```
   The default JES map is
   `jet_calibration/JES_Lookups/JetEnergyScale_lookup_em_only.json`.
+  The hot / dead channel mask `channel_qa/channel_mask_v1.txt` is applied by
+  default, per run period (`-M <file>` for another mask, `-M none` for none).
+  Masked hits are dropped before reclustering, from the hit list and from the
+  offline trigger sums. See `channel_qa/README.md`.
 - **`catalog_query.sh`**:
   - `counts <out>` writes per-run events, files and bytes. The P24ia st_fwd
     copy of 2026-10-20 is `catalog_runs_local.txt`.

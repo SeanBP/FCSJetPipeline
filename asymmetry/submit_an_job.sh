@@ -37,12 +37,21 @@
 #       job (hadd in the job's scratch; the tree has event_run, event_id per
 #       event): 1 = all, 0 = none (default). About 0.75 MB per MuDst with the
 #       JP events and trigger values
-#   -Q  1 = channel QA: also write <outdir>/occ/occ_<file>.root per MuDst, the
-#       per-channel hit counts and energies (channel_qa/channel_occupancy.cpp)
-#       for the hot / dead channel masks; 0 = off (default)
+#   -Q  1 = channel QA: also write <outdir>/occ/occ_<run>_<job>.root, the
+#       per-channel hit counts and energies of the job's MuDsts
+#       (channel_qa/channel_occupancy.cpp), for the hot / dead channel masks
+#       and per-run QA; 0 = off (default; use 1 for full passes, Sean 2026-11-24)
+#   -T  point-threshold copies (_vthr150 / _vthr200, Sean 2026-11-24): "on"
+#       (default) = jets, UE and calibration again at FCS_POINT_EMIN = 1.5 and
+#       2.0 GeV per SimpleTree, with the maps
+#       jet_calibration/JES_Lookups/JetEnergyScale_lookup_em_only_pointthr150/200.json,
+#       filled by AnHistograms --thr-copy into the same yield file; "none" = off
 #   -M  hot / dead channel mask (channel_qa/channel_mask.cpp's channel_mask.txt,
 #       or a filtered copy): masked hits are dropped before reclustering, from
-#       the hit list and from the trigger sums, per run period. Default none
+#       the hit list and from the trigger sums, per run period. Default
+#       channel_qa/channel_mask_v1.txt (Sean 2026-11-25: applied to all data
+#       automatically); "none" = no mask. Runs of the list outside every mask
+#       period are reported (they would run unmasked)
 #   -S  shuffle the job order with this seed (condor starts jobs roughly in
 #       order, so the jobs finished at any time are then a random spread over
 #       the runs, not the earliest runs; 0 = run order, default)
@@ -70,14 +79,15 @@ LABEL="an"
 KEEPLOGS=0
 KEEP_JETS=0
 CHANNEL_QA=0
-CHANNEL_MASK=""
+THR_OPT="on"
+CHANNEL_MASK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/channel_qa/channel_mask_v1.txt"
 DRYRUN=0
 SHUFFLE_SEED=0
 PI0_TABLE=""
 NODE_FAIL_LIMIT=3
 NO_NODEMAP=0
 
-while getopts "f:o:n:c:t:l:k:J:Q:M:S:s:L:R:KNh" opt; do
+while getopts "f:o:n:c:t:l:k:J:Q:M:T:S:s:L:R:KNh" opt; do
   case $opt in
     f) LISTFILE="$OPTARG" ;;
     o) OUTDIR="$OPTARG" ;;
@@ -89,6 +99,7 @@ while getopts "f:o:n:c:t:l:k:J:Q:M:S:s:L:R:KNh" opt; do
     J) KEEP_JETS="$OPTARG" ;;
     Q) CHANNEL_QA="$OPTARG" ;;
     M) CHANNEL_MASK="$OPTARG" ;;
+    T) THR_OPT="$OPTARG" ;;
     S) SHUFFLE_SEED="$OPTARG" ;;
     s) PI0_TABLE="$OPTARG" ;;
     L) NODE_FAIL_LIMIT="$OPTARG" ;;
@@ -130,13 +141,52 @@ mkdir -p "${OUTDIR}/hists" "${OUTDIR}/timing"
 [ "$CHANNEL_QA" = "0" ] || [ "$CHANNEL_QA" = "1" ] || { echo "Error: -Q must be 0 or 1"; exit 1; }
 [ "$CHANNEL_QA" = "1" ] && mkdir -p "${OUTDIR}/occ"
 MASK_NAME=""
+[ "$CHANNEL_MASK" = "none" ] && CHANNEL_MASK=""
 if [ -n "$CHANNEL_MASK" ]; then
     [ -f "$CHANNEL_MASK" ] || { echo "Error: channel mask $CHANNEL_MASK not found"; exit 1; }
     MASK_NAME="${LABEL}_$(basename "$CHANNEL_MASK")"
     cp -p "$CHANNEL_MASK" "${SCRIPT_DIR}/channel_qa/masks/${MASK_NAME}"
+    # runs of the list outside every period of the mask run unmasked: report them
+    # (periods from the mask's "#P period first last" lines, else its rows)
+    MASK_UNCOVERED=$(sed -nE 's#^.*_([0-9]{8})_(raw_)?[0-9]{7}\.MuDst\.root.*$#\1#p' "${LISTFILE}" | sort -u \
+        | awk 'NR == FNR { if ($1 == "#P") { a[++n] = $3; b[n] = $4 } else if ($0 !~ /^#/ && NF >= 3) { a[++n] = $2; b[n] = $3 }; next }
+               { for (i = 1; i <= n; i++) if (a[i] <= $1 && $1 <= b[i]) next; print }' "$CHANNEL_MASK" -)
+    if [ -n "$MASK_UNCOVERED" ]; then
+        echo "WARNING: $(echo "$MASK_UNCOVERED" | wc -l) run(s) of the list are outside every period of $(basename "$CHANNEL_MASK") and run unmasked:"
+        echo "$MASK_UNCOVERED" | head -20 | tr '\n' ' '; echo
+    fi
+    echo "Channel mask: $(basename "$CHANNEL_MASK") ($(grep -vc '^#' "$CHANNEL_MASK") channel-period rows)"
+else
+    echo "Channel mask: none (-M none)"
 fi
 CALIB_NAME=$(basename "$CALIB")
 cp -p "$CALIB" "${SCRIPT_DIR}/jes/${CALIB_NAME}"
+# point-threshold copies and their maps (same-events difference on the standard map)
+case "$THR_OPT" in
+    on)
+        THR_COPIES="150 200"
+        for t in 150 200; do
+            m="${PIPELINE_ROOT}/jet_calibration/JES_Lookups/JetEnergyScale_lookup_em_only_pointthr${t}.json"
+            [ -f "$m" ] || { echo "Error: threshold map $m not found"; exit 1; }
+            cp -p "$m" "${SCRIPT_DIR}/jes/"
+        done
+        THR150_NAME=JetEnergyScale_lookup_em_only_pointthr150.json
+        THR200_NAME=JetEnergyScale_lookup_em_only_pointthr200.json
+        # the threshold maps must be built on the nominal map's sample
+        # (jes_map_combine.py: "sample": "<nominal> + (<thr> - <ref>)")
+        NOM_SAMPLE=$(grep -o '"sample": *"[^"]*"' "$CALIB" | head -1 | sed 's/.*: *"//; s/"$//')
+        for t in 150 200; do
+            TS=$(grep -o '"sample": *"[^"]*"' "${SCRIPT_DIR}/jes/JetEnergyScale_lookup_em_only_pointthr${t}.json" | head -1 | sed 's/.*: *"//; s/"$//')
+            case "$TS" in
+                "${NOM_SAMPLE} + ("*) ;;
+                *) echo "WARNING: threshold map ${t} is built on \"${TS}\", not on the nominal map's sample \"${NOM_SAMPLE}\"" ;;
+            esac
+        done
+        echo "Point-threshold copies: _vthr150 / _vthr200 (${THR150_NAME}, ${THR200_NAME})"
+        ;;
+    none) THR_COPIES=""; THR150_NAME="${CALIB_NAME}"; THR200_NAME="${CALIB_NAME}"; echo "Point-threshold copies: none (-T none)" ;;
+    *) echo "Error: -T must be on or none"; exit 1 ;;
+esac
 # pi0 energy scale table (-s): copied into asymmetry/pi0_scale/ for the SandBox
 PI0SCALE="pi0_scale.txt"
 if [ -n "$PI0_TABLE" ]; then
@@ -203,6 +253,9 @@ sed -e "s#{{LISTFILE}}#${SORTEDLIST}#g" \
     -e "s/{{TRIGGER_FILTER}}/${TRIGGER_FILTER}/g" \
     -e "s/{{REF_TRIGGERS}}/${REF_TRIGGERS}/g" \
     -e "s/{{CALIB_NAME}}/${CALIB_NAME}/g" \
+    -e "s/{{THR_COPIES}}/${THR_COPIES}/g" \
+    -e "s/{{THR150_NAME}}/${THR150_NAME}/g" \
+    -e "s/{{THR200_NAME}}/${THR200_NAME}/g" \
     -e "s/{{KEEP_JETS}}/${KEEP_JETS}/g" \
     -e "s/{{CHANNEL_QA}}/${CHANNEL_QA}/g" \
     -e "s/{{CHANNEL_MASK}}/${MASK_NAME}/g" \
@@ -233,6 +286,7 @@ keep_logs=${KEEPLOGS}
 keep_jets_every=${KEEP_JETS}
 channel_qa=${CHANNEL_QA}
 channel_mask=${CHANNEL_MASK:-none}
+point_threshold_copies=${THR_COPIES:-none}${THR_COPIES:+ (maps ${THR150_NAME} ${THR200_NAME})}
 shuffle_seed=${SHUFFLE_SEED}
 pi0_scale_table=asymmetry/${PI0SCALE}${PI0_TABLE:+ (from ${PI0_TABLE})}
 node_fail_limit=${NODE_FAIL_LIMIT}

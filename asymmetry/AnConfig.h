@@ -132,7 +132,7 @@ static const SuppBadRun kSuppBadRuns[kNSuppBadRuns] = {
     {23053068, "hot: x>0/x<0 jets 110, <E> 126 GeV"},
     {23055022, "hot: <E> 128 GeV"},
     {23082017, "odd: 1 jet in 1180 events, <E> 77 GeV"},
-    {23083002, "odd: x>0/x<0 jets 5 (6 jets)"},
+    {23083002, "odd: x>0/x<0 jets 5 (6 jets); ten ECal-S bottom-row towers at ~60 GeV in 15-20% of events (channel QA, 2026-11-24)"},
     {23088022, "hot: 0.75 jets per event, <E> 180 GeV"},
     {23100051, "hot: x>0/x<0 jets 6.3, <E> 133 GeV"},
     {23106016, "hot: x>0/x<0 jets 13, <E> 57 GeV"},
@@ -421,10 +421,21 @@ inline bool PassCollisionCut(int bbc_e_ntiles, int tof_mult)
 //                      and across the pT / E cuts, so it is not nested:
 //                      sys_slices.py --shifted. Photon classes only: the pi0
 //                      candidates do not use the JES (no pi0 copies).
-static const int kNVar = 7;
-enum { kVarFid25, kVarFid30, kVarVz60, kVarVtxMeas, kVarBbcVeto, kVarJesUp, kVarJesDn };
-static const char *const kVarSuffix[kNVar] = {"_vfid25", "_vfid30", "_vvz60", "_vvtxmeas", "_vbbcveto", "_vjesup", "_vjesdn"};
+//   _vthr150 / _vthr200  point energy threshold 1.5 / 2.0 GeV (nominal 1.0;
+//                      Sean 2026-11-24): the job's jets rebuilt from the same
+//                      SimpleTree with FCS_POINT_EMIN = 1.5 / 2.0 (points,
+//                      jets, UE, pi0 candidates), calibrated with that
+//                      threshold's JES map (jesmap_pointthr_v1, same-events
+//                      difference on the standard map), and filled by a second
+//                      AnHistograms call (--thr-copy=150 / 200) into the same
+//                      output file. Same events, other jets: shifted, like the
+//                      JES copies; the systematic is the A_N difference, the
+//                      larger of the two sides.
+static const int kNVar = 9;
+enum { kVarFid25, kVarFid30, kVarVz60, kVarVtxMeas, kVarBbcVeto, kVarJesUp, kVarJesDn, kVarThr150, kVarThr200 };
+static const char *const kVarSuffix[kNVar] = {"_vfid25", "_vfid30", "_vvz60", "_vvtxmeas", "_vbbcveto", "_vjesup", "_vjesdn", "_vthr150", "_vthr200"};
 inline bool IsJesVar(int v) { return v == kVarJesUp || v == kVarJesDn; }
+inline bool IsThrVar(int v) { return v == kVarThr150 || v == kVarThr200; }
 inline bool VarHasPi0(int v) { return !IsJesVar(v); }
 static const char *const kVarEmTag[2] = {"_noemd", "_emd"};  // JP copies: EM below / at the default factor
 static const double kVarFidCm[2] = {25.0, 30.0};
